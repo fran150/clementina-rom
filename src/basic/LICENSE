@@ -1,0 +1,55 @@
+Upstream license for the Microsoft BASIC for 6502 source in this directory
+============================================================================
+
+This directory is Clementina's editable fork of https://github.com/mist64/msbasic
+(see CLEMENTINA.md for the recorded upstream commit).
+
+Upstream declares its license only as the words "2-clause BSD" in its README. It
+ships no standalone LICENSE file and no explicit copyright line, and GitHub
+detects no license for the repository. The text reproduced below is the
+canonical BSD 2-Clause License, vendored here so that the attribution condition
+is satisfied when this fork is redistributed.
+
+Attribution (per the upstream README "Credits" section):
+  - Main work by Michael Steil <mist64@mac.com>
+  - AIM-65 and SYM-1 by Martin Hoffmann-Vetter
+  - plus the additional contributors credited in README.md
+
+IMPORTANT — scope of this license
+---------------------------------
+The underlying 6502 Microsoft BASIC code is original Microsoft intellectual
+property; the source still embeds notices such as "COPYRIGHT 1977 BY MICROSOFT
+CO" (see init.s) and "Copyright Microsoft, Mattel 1980" (see kbd_extra.s).
+Michael Steil's BSD license applies to the reconstructed, integrated source
+tree and his contributions — it is NOT a grant of rights to Microsoft's
+original BASIC code, which has never been formally open-licensed by its owner.
+Clementina reuses this code under the same community-tolerated terms as the
+upstream project. This is acceptable in practice for a non-commercial,
+educational homebrew, but is not a clean license grant. See CLEMENTINA.md.
+
+-------------------------------------------------------------------------------
+
+BSD 2-Clause License
+
+Copyright (c) Michael Steil and contributors to mist64/msbasic
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
