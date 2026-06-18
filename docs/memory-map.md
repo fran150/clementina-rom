@@ -68,8 +68,9 @@ Defined in the `ZEROPAGE` segment of [`src/kernel/kernel.s`](../src/kernel/kerne
 | --- | --- | --- | --- |
 | `$F0` | `KPTR` | 2 | General 16-bit pointer. Used by `PRSTR` as the string source. Not touched by `cursor_to_idxa`, so it survives a `PRSTR → CHROUT` call chain. |
 | `$F2` | `KTMP` | 2 | Scratch. Holds the computed overlay offset `P = CURSOR_Y*40 + CURSOR_X`, then the 24-bit overlay address low/mid. |
-| `$F4` | `KCNT` | 2 | 16-bit loop counter for screen fills and the scroll copy. |
-| `$F6–$FB` | — | 6 | Reserved for the kernel. |
+| `$F4` | `KCNT` | 2 | 16-bit loop counter for screen fills. |
+| `$F6` | `KCHR` | 1 | Scratch copy of the byte passed to `CHROUT`, so the routine can preserve A/X/Y while still repositioning MIA indexes. |
+| `$F7–$FB` | — | 5 | Reserved for the kernel. |
 
 > Allocation rule: BASIC must not extend past `$EF`; the kernel must not use
 > below `$F0`. If BASIC needs more, shrink the kernel block, not the other way.
@@ -105,7 +106,7 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 | --- | --- | --- | --- |
 | `$0300` | `CURSOR_X` | 1 | Text cursor column, `0..39`. |
 | `$0301` | `CURSOR_Y` | 1 | Text cursor row, `0..24`. |
-| `$0302` | `TEXT_ATTR` | 1 | Reserved: overlay attribute / color for written cells. |
+| `$0302` | `TEXT_ATTR` | 1 | Overlay text attribute for new console cells. Bits `0-3` select the palette bank; the default is palette `0` white text over the blue backdrop. |
 | `$0303` | `LAST_KEY` | 1 | Debug: last byte returned by `CHRIN`. Watch this in the emulator's memory window to confirm input before attaching a video client. |
 | `$0304` | `KEY_COUNT` | 1 | Debug: running count of bytes read by `CHRIN`. |
 | `$0305` | `CINV` | 2 | Reserved: redirectable `CHRIN` vector (not yet used). |
@@ -146,18 +147,24 @@ freely. Anchored at the load base so `$0400` is also the reset entry.
 
 Internal routines (`CODE` segment) and read-only data (`RODATA`). These
 addresses are **not** ABI; reach them only through the jump table. The current
-image is ~600 bytes. Notable internal routines:
+image is ~1.3 KiB. Notable internal routines:
 
-- `video_init` — enable video output and the overlay layer, force a full
-  refresh. *(Exact VIDEO_MODE / LAYER_ENABLE bits are still to be confirmed in
-  the emulator.)*
+- `video_init` — load startup palettes, select MIA CHR bank `0` for the
+  overlay, mark bank `0` as 1bpp, set the blue backdrop, enable video output
+  and the overlay layer, then force a full refresh.
+- `video_load_palettes` — load palette banks `0-7`; palette `0` is the default
+  blue/white console palette and the others provide convenient text colors.
 - `cursor_to_idxa` — bind the overlay index `$B8` to window A and set its
   current address (via CFG) to the cell for `CURSOR_X/Y`.
-- `set_idxa_addr` / `set_idxb_addr` — write the current address of the index
-  selected in window A / window B through the CFG registers.
-- `newline` / `scroll_up` — row advance and hardware-assisted scroll: window B
-  reads the overlay one row down (general index 0), window A (`$B8`) writes from
-  the base, then the last row is blanked.
+- `cursor_attr_to_idxa` — bind the overlay attribute index `$B9` to window A
+  and set its current address to the current console cell.
+- `char_to_tile` — convert ASCII-ish kernel strings/input into the
+  C64-style screen codes used by the default PETSCII font bank.
+- `set_idxa_addr` / `set_idxa_limit` — write the current/limit address of the
+  index selected in window A through the CFG registers.
+- `newline` / `scroll_up` — row advance and DMA-assisted scroll: kernel-reserved
+  indexes `$F0-$F3` copy the overlay nametable and attributes up by one row,
+  then the last row is blanked through `$B8/$B9`.
 - `irq_handler` / `nmi_handler` — minimal; `irq_handler` read-clears
   `IRQ_STATUS_L` and returns.
 
@@ -246,26 +253,43 @@ MIA RAM is reached only through index descriptors. The kernel currently touches:
 
 | Index | Purpose | MIA RAM target |
 | --- | --- | --- |
-| `$B8` (`VIDX_OVERLAY_NT`) | Console **write cursor**: bound to window A; positioned per `CURSOR_X/Y` via CFG | overlay nametable cell |
-| `0` | Console **scroll source**: bound to window B only during `scroll_up` | overlay nametable + 40 |
+| `$90-$97` (`VIDX_PALETTE_0-7`) | Startup palette upload | palette banks `0-7` |
+| `$85` (`VIDX_BANK_SELECT`) | Select CHR bank `0` for bg/overlay/sprite consumers | render control `$28-$2C` |
+| `$86` (`VIDX_CHR_1BPP`) | Mark CHR bank `0` as 1bpp and use overlay plane `1` | render control `$2D-$2E` |
+| `$87` (`VIDX_BACKDROP_COLOR`) | Select palette `0`, color `0` as the blue backdrop | render control `$2F` |
 | `$81` (`VIDX_LAYER_ENABLE`) | Enable the overlay layer | render control `$21` |
+| `$B8` (`VIDX_OVERLAY_NT`) | Console **write cursor**: bound to window A; positioned per `CURSOR_X/Y` via CFG | overlay nametable cell |
+| `$B9` (`VIDX_OVERLAY_ATTR`) | Console **attribute cursor**: bound to window A after each tile write | overlay attribute cell |
+| `$F0` (`KIDX_SCROLL_NT_SRC`) | Kernel-reserved scroll DMA source | overlay nametable + 40, limit = overlay nametable end |
+| `$F1` (`KIDX_SCROLL_NT_DST`) | Kernel-reserved scroll DMA destination | overlay nametable base |
+| `$F2` (`KIDX_SCROLL_ATTR_SRC`) | Kernel-reserved scroll DMA source | overlay attributes + 40, limit = overlay attributes end |
+| `$F3` (`KIDX_SCROLL_ATTR_DST`) | Kernel-reserved scroll DMA destination | overlay attributes base |
+
+Index descriptors `$F0-$FF` are reserved for kernel/system use. User programs
+that call kernel services should not change them.
 
 ### Overlay text layer
 
 The console is the MIA overlay layer: a fixed **40×25** screen-space grid of
-tile indices in MIA RAM at `$10080` (1000 bytes), rendered by the remote video
-client. The kernel writes character codes directly as tile indices.
+tile indices in MIA RAM at `$10080` (1000 bytes), with matching attributes at
+`$10468` (1000 bytes), rendered by the remote video client. The kernel converts
+printable ASCII-ish bytes to the screen-code tile indices used by MIA's default
+PETSCII font bank before writing the nametable.
 
 CFG now configures whichever index a window has selected (firmware fix), so the
 console drives the overlay index `$B8` directly: it binds `$B8` to window A and
 sets its current address (via the window-A CFG fields) to the cursor cell before
-each write. `scroll_up` additionally binds general index `0` to window B as a
-read source. No index is permanently reserved — each routine reconfigures the
-window it uses.
+each write. Cold start also initializes fixed kernel scroll indexes `$F0-$F3`;
+`scroll_up` uses `CMD_COPY_INDEXES` with byte count `0` to copy each source
+range up to its source limit without moving the indexes.
 
-> Open item: confirm that writing an ASCII/PETSCII code as the tile index maps
-> to the expected glyph in the default overlay CHR bank/font, and the exact
-> `VIDEO_MODE`/`LAYER_ENABLE` bits needed to make the overlay visible.
+Cold start loads a blue/white default palette, sets the backdrop to palette `0`
+color `0`, sets `TEXT_ATTR = 0` so new text uses palette `0` color `1` (white),
+selects CHR bank `0` for the overlay, and sets bit `0` in `CHR_1BPP_MASK` so
+the default PETSCII charset is decoded as 1bpp instead of 3bpp. The overlay uses
+plane `1`, the lowercase/uppercase PETSCII set; lowercase ASCII `a-z` is
+converted to screen codes `1-26`, while uppercase, digits, punctuation, and
+space are written unchanged.
 
 ---
 

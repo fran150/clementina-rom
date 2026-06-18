@@ -53,20 +53,32 @@ INPUT_STATUS_SOURCE_USB_HOST = %10000000
 CFG_IDXA_ADDR_L    = $00
 CFG_IDXA_ADDR_M    = $01
 CFG_IDXA_ADDR_H    = $02
+CFG_IDXA_LIMIT_L   = $06
+CFG_IDXA_LIMIT_M   = $07
+CFG_IDXA_LIMIT_H   = $08
 CFG_IDXA_STP_L     = $09
 CFG_IDXA_STP_H     = $0A
 CFG_IDXA_FLAGS     = $0B
 CFG_IDXB_ADDR_L    = $10
 CFG_IDXB_ADDR_M    = $11
 CFG_IDXB_ADDR_H    = $12
+CFG_IDXB_LIMIT_L   = $16
+CFG_IDXB_LIMIT_M   = $17
+CFG_IDXB_LIMIT_H   = $18
 CFG_IDXB_STP_L     = $19
 CFG_IDXB_STP_H     = $1A
 CFG_IDXB_FLAGS     = $1B
 
-; General-purpose index the console borrows as the scroll source (bound to
-; window B only during scroll_up). Index $B8 (the overlay nametable) is the
-; primary console write index, bound to window A.
-SCROLL_SRC_IDX     = $00
+; STATUS_L bits
+MIA_STAT_CMD_RUNNING = %00000100
+MIA_STAT_DMA_RUNNING = %00001000
+
+; Kernel/system-reserved MIA index descriptors. User code must leave $F0-$FF
+; alone while using kernel services.
+KIDX_SCROLL_NT_SRC   = $F0
+KIDX_SCROLL_NT_DST   = $F1
+KIDX_SCROLL_ATTR_SRC = $F2
+KIDX_SCROLL_ATTR_DST = $F3
 
 ; Index descriptor flag bits
 IXF_R_STP          = %00000001 ; step after read
@@ -80,6 +92,7 @@ IXF_WRAP_IRQ       = %00010000 ; raise wrap IRQ
 ; ----------------------------------------------------------------------------
 CMD_IDX_RESET_A    = $00
 CMD_IDX_RESET_B    = $01
+CMD_COPY_INDEXES   = $10
 CMD_VIDEO_FULL_REFRESH = $42
 CMD_VIDEO_SET_MODE = $43
 
@@ -88,6 +101,11 @@ CMD_VIDEO_SET_MODE = $43
 ; ----------------------------------------------------------------------------
 VIDX_RENDER_CONTROL = $80      ; streams the 32-byte render control page ($20..)
 VIDX_LAYER_ENABLE   = $81      ; 1 byte: background/overlay/sprite enables
+VIDX_BANK_SELECT    = $85      ; 5 bytes: bg, bg alt, overlay, overlay alt, sprite
+VIDX_CHR_1BPP       = $86      ; 2 bytes: CHR_1BPP_MASK, CHR_1BPP_PLANES
+VIDX_BACKDROP_COLOR = $87      ; 1 byte: palette/color selector
+VIDX_PALETTE_0      = $90      ; first of 16 palette-bank indexes
+PALETTE_COUNT       = 8        ; kernel loads palette banks 0-7
 VIDX_OVERLAY_NT     = $B8      ; overlay nametable, 1000 bytes @ $10080
 VIDX_OVERLAY_ATTR   = $B9      ; overlay attributes, 1000 bytes @ $10468
 
@@ -96,13 +114,37 @@ OVNT_ADDR_L         = $80
 OVNT_ADDR_M         = $00
 OVNT_ADDR_H         = $01
 
+; Overlay attribute base, as a 24-bit MIA RAM address ($10468)
+OVATTR_ADDR_L       = $68
+OVATTR_ADDR_M       = $04
+OVATTR_ADDR_H       = $01
+
 ; LAYER_ENABLE bits (bit0 background, bit1 overlay, bit2 sprite)
 LAYER_BACKGROUND    = %00000001
 LAYER_OVERLAY       = %00000010
 LAYER_SPRITE        = %00000100
 
-; VIDEO_MODE: bit0 = video enable (verify exact bits against emulator/firmware)
+; VIDEO_MODE: bit0 = video enable.
 VIDEO_MODE_ENABLE   = %00000001
+
+; CHR bank 0 is preloaded by MIA with the PETSCII-compatible 1bpp font.
+VIDEO_CHR_BANK_DEFAULT = $00
+CHR_1BPP_BANK0_MASK = %00000001
+CHR_1BPP_PLANES_OVERLAY1 = %00010000
+
+; Overlay text attributes. Bits 0-3 select the palette bank; in 1bpp text
+; glyph pixels use color index 1 from that bank and color index 0 is transparent.
+ATTR_WHITE          = $00
+ATTR_RED            = $01
+ATTR_ORANGE         = $02
+ATTR_YELLOW         = $03
+ATTR_GREEN          = $04
+ATTR_CYAN           = $05
+ATTR_MAGENTA        = $06
+ATTR_BLUE_WHITE     = $07
+
+; BACKDROP_COLOR selector: bits 0-2 = color index, bits 3-6 = palette bank.
+BACKDROP_BLUE       = $00
 
 ; Text screen geometry (overlay is a fixed 40x25 screen-space grid)
 SCR_COLS            = 40
@@ -132,7 +174,7 @@ KERN_SAVE          = KERN_BASE + $21   ; save (stub for now)
 KVARS              = $0300
 CURSOR_X           = KVARS + $00   ; 0..SCR_COLS-1
 CURSOR_Y           = KVARS + $01   ; 0..SCR_ROWS-1
-TEXT_ATTR          = KVARS + $02   ; reserved: overlay attribute/color
+TEXT_ATTR          = KVARS + $02   ; overlay attribute/color for new cells
 LAST_KEY           = KVARS + $03   ; debug: last byte returned by CHRIN
 KEY_COUNT          = KVARS + $04   ; debug: count of bytes read by CHRIN
 CINV               = KVARS + $05   ; reserved: redirectable CHRIN vector (2)
