@@ -31,3 +31,7 @@
 .ifdef W65C816SXB
 .include "w65c816sxb_extra.s"
 .endif
+
+.ifdef CLEMENTINA
+.include "clementina_extra.s"
+.endif

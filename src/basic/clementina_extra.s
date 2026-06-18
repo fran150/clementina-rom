@@ -1,0 +1,26 @@
+; ============================================================================
+; clementina_extra.s - Clementina BASIC console glue (EXTRA segment)
+; ----------------------------------------------------------------------------
+; Thin thunks from BASIC's console contract into the Clementina kernel jump
+; table. In the combined image the kernel lives at $0400 and owns the console.
+; Keep these addresses in sync with src/kernel/kernel.inc / docs/memory-map.md.
+; ============================================================================
+
+.segment "EXTRA"
+.export MONRDKEY, MONRDKEY_NB, MONCOUT
+
+KERN_CHROUT    = $0406
+KERN_CHRIN     = $0409
+KERN_GETKEY_NB = $040C
+
+; A = character to print. Kernel CHROUT preserves A/X/Y.
+MONCOUT:
+        jmp KERN_CHROUT
+
+; Blocking read; returns the character in A.
+MONRDKEY:
+        jmp KERN_CHRIN
+
+; Non-blocking read; C=1 and A=char if available, else C=0.
+MONRDKEY_NB:
+        jmp KERN_GETKEY_NB

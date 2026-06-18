@@ -1,11 +1,68 @@
-.PHONY: help docs
+# ============================================================================
+# Clementina ROM - top-level build
+# ----------------------------------------------------------------------------
+# Builds the kernel image (kernel.bin) that MIA loads into base RAM at the
+# load base ($0400). WozMon and BASIC are integrated into this image in later
+# milestones; for now `kernel.bin` is the kernel alone (boots + console echo).
+# ============================================================================
+
+CA65    ?= ca65
+LD65    ?= ld65
+CPU     ?= 65C02
+
+KERNEL_DIR := src/kernel
+BUILD_DIR  := build
+
+KERNEL_SRC := $(KERNEL_DIR)/kernel.s
+KERNEL_CFG := $(KERNEL_DIR)/clementina.cfg
+KERNEL_BIN := $(BUILD_DIR)/kernel.bin
+
+# Destinations for the kernel image. Override on the command line if your
+# checkouts live elsewhere, e.g.  make install MIA_DIR=... EMU_DIR=...
+MIA_DIR ?= /Users/fran150/development/pico/clementina-mia
+EMU_DIR ?= /Users/fran150/development/go/clementina-6502
+EMU_KERNEL := $(EMU_DIR)/assets/computer/mia/kernel.bin
+MIA_KERNEL := $(MIA_DIR)/kernel.bin
+
+.PHONY: all kernel clean install install-emulator install-firmware help
+
+all: kernel
+
+kernel: $(KERNEL_BIN)
+
+$(KERNEL_BIN): $(KERNEL_SRC) $(KERNEL_DIR)/kernel.inc $(KERNEL_CFG) | $(BUILD_DIR)
+	$(CA65) --cpu $(CPU) -g -l $(BUILD_DIR)/kernel.lst -o $(BUILD_DIR)/kernel.o $(KERNEL_SRC)
+	$(LD65) -C $(KERNEL_CFG) -m $(BUILD_DIR)/kernel.map -o $@ $(BUILD_DIR)/kernel.o
+	@echo "Built $@ ($$(wc -c < $@) bytes), loads at \$$0400"
+
+$(BUILD_DIR):
+	@mkdir -p $(BUILD_DIR)
+
+# Copy the freshly built image into the emulator's embedded asset so the next
+# `go build`/`go run` of the emulator picks it up.
+install-emulator: $(KERNEL_BIN)
+	cp $(KERNEL_BIN) $(EMU_KERNEL)
+	@echo "Copied kernel.bin -> $(EMU_KERNEL)"
+	@echo "NOTE: emulator must have miaKernelTargetAddress = 0x0400 (registers.go)"
+
+# Copy the image into the firmware tree (CMake turns it into kernel_data.c).
+install-firmware: $(KERNEL_BIN)
+	cp $(KERNEL_BIN) $(MIA_KERNEL)
+	@echo "Copied kernel.bin -> $(MIA_KERNEL)"
+	@echo "NOTE: firmware must have kernel_target_address = 0x0400 (mia.c)"
+
+install: install-emulator
+
+clean:
+	rm -rf $(BUILD_DIR)
 
 help:
 	@echo "Clementina ROM"
 	@echo
-	@echo "This repository is scaffolded but has no build target yet."
-	@echo "Read docs/index.md for the current architecture and implementation plan."
-
-docs:
-	@echo "Docs are plain Markdown under docs/."
-
+	@echo "  make            Build the kernel image (build/kernel.bin)"
+	@echo "  make install    Copy kernel.bin into the emulator asset"
+	@echo "  make install-firmware  Copy kernel.bin into the MIA firmware tree"
+	@echo "  make clean      Remove build artifacts"
+	@echo
+	@echo "Booting at \$$0400 needs kernel_target_address = 0x0400 in both the"
+	@echo "MIA firmware (mia.c) and the emulator (registers.go). See docs/memory-map.md."

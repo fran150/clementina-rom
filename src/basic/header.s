@@ -19,6 +19,11 @@
         jmp COLD_START
 .endif
 
+.ifdef CLEMENTINA
+; Entered from the kernel; the console is already initialized.
+        jmp COLD_START
+.endif
+
 .ifdef KBD
         jmp     LE68C
         .byte   $00,$13,$56

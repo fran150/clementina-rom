@@ -29,4 +29,7 @@
 .ifdef W65C816SXB
 .include "w65c816sxb_iscntc.s"
 .endif
+.ifdef CLEMENTINA
+.include "clementina_iscntc.s"
+.endif
 ;!!! runs into "STOP"
