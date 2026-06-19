@@ -32,7 +32,7 @@ OKPRT:
 .else
  .ifndef AIM65
 QT_OK:
-  .ifdef CONFIG_CBM_ALL
+  .if .def(CONFIG_CBM_ALL) || .def(CLEMENTINA)
 		.byte   CR,LF,"READY.",CR,LF
   .else
     .ifdef APPLE

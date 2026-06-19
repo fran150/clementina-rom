@@ -36,9 +36,9 @@ WIDTH            := 40
 WIDTH2           := 14
 
 ; memory layout
-; PROVISIONAL: start of BASIC's program/variable workspace. In the combined
-; image this becomes "just above the linked code". The RAM ceiling is $8000
-; (Extended RAM bank window), so memory sizing must not pass it.
+; BASIC program/variable workspace starts safely above the combined
+; kernel+BASIC image. The RAM ceiling is $8000, where the banked Extended RAM
+; window begins.
 RAMSTART2        := $3000
 
 ; storage: route the LOAD/SAVE tokens to the kernel jump table (stubs today).

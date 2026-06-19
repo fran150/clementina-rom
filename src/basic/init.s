@@ -203,7 +203,7 @@ L4098:
   .endif
         ldx     #TEMPST
         stx     TEMPPT
-.ifndef CONFIG_CBM_ALL
+.if !(.def(CONFIG_CBM_ALL) || .def(CLEMENTINA))
         lda     #<QT_MEMORY_SIZE
         ldy     #>QT_MEMORY_SIZE
         jsr     STROUT
@@ -253,6 +253,12 @@ L40D7:
 ; optimized version of the CBM1 code
         bmi     L40FA
 .endif
+.ifdef CLEMENTINA
+; Clementina: base RAM ends at $8000; above that is the Extended RAM window.
+        lda     LINNUM+1
+        cmp     #$80
+        beq     L40FA
+.endif
 .if .def(AIM65)
 ; AIM65: hard RAM top limit is $A000
         lda     LINNUM+1
@@ -298,7 +304,7 @@ L40FA:
         sty     FRETOP+1
 .endif
 L4106:
-.ifndef CONFIG_CBM_ALL
+.if !(.def(CONFIG_CBM_ALL) || .def(CLEMENTINA))
   .ifdef APPLE
         lda     #$FF
         jmp     L2829

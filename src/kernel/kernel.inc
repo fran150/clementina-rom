@@ -127,10 +127,14 @@ LAYER_SPRITE        = %00000100
 ; VIDEO_MODE: bit0 = video enable.
 VIDEO_MODE_ENABLE   = %00000001
 
-; CHR bank 0 is preloaded by MIA with the PETSCII-compatible 1bpp font.
-VIDEO_CHR_BANK_DEFAULT = $00
-CHR_1BPP_BANK0_MASK = %00000001
-CHR_1BPP_PLANES_OVERLAY1 = %00010000
+; MIA split-loads the selected font: ASCII text -> CHR bank 0 plane 0 (primary
+; overlay bank), graphics/line set -> CHR bank 1 plane 0 (alternate overlay
+; bank). The overlay renders plane 0; per-cell CHR_ALT selects the text bank (0)
+; or the graphics bank (1). Tile code == ASCII codepoint in the text bank.
+VIDEO_CHR_BANK_DEFAULT   = $00         ; text / primary bank (also bg and sprite)
+VIDEO_CHR_BANK_GRAPHICS  = $01         ; alternate overlay bank: graphics / line set
+CHR_1BPP_BANKS_TEXT_GFX  = %00000011   ; CHR banks 0 and 1 decoded as 1bpp
+CHR_1BPP_PLANES_OVERLAY0 = %00000000   ; overlay 1bpp plane selector = plane 0
 
 ; Overlay text attributes. Bits 0-3 select the palette bank; in 1bpp text
 ; glyph pixels use color index 1 from that bank and color index 0 is transparent.
@@ -179,3 +183,9 @@ LAST_KEY           = KVARS + $03   ; debug: last byte returned by CHRIN
 KEY_COUNT          = KVARS + $04   ; debug: count of bytes read by CHRIN
 CINV               = KVARS + $05   ; reserved: redirectable CHRIN vector (2)
 COUTV              = KVARS + $07   ; reserved: redirectable CHROUT vector (2)
+CURSOR_VISIBLE     = KVARS + $09   ; nonzero when cursor glyph is drawn
+CURSOR_SAVE_CHR    = KVARS + $0A   ; character under visible cursor
+CURSOR_SAVE_ATTR   = KVARS + $0B   ; attribute under visible cursor
+
+; Cursor glyph printed into the overlay while waiting for input.
+CURSOR_TILE        = '_'

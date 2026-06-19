@@ -60,6 +60,12 @@ INLINAIM:
     .endif
         cmp     #$0D
         beq     L2453
+    .ifdef CLEMENTINA
+        cmp     #$08            ; Backspace -> delete previous char
+        beq     CLEM_DELETE
+        cmp     #$7F            ; Delete (DEL) -> delete previous char
+        beq     CLEM_DELETE
+    .endif
     .ifndef CONFIG_NO_LINE_EDITING
         cmp     #$20
       .ifdef AIM65
@@ -77,6 +83,7 @@ INLINAIM:
         cmp     #$7D
       .endif
         bcs     INLIN2
+      .ifndef CLEMENTINA
         cmp     #$40 ; @
       .ifdef AIM65
         beq     LB35F
@@ -89,6 +96,7 @@ INLINAIM:
       .endif
         beq     L2420
       .endif
+      .endif ; CLEMENTINA: @ and _ are ordinary printable characters
 L2443:
       .ifdef MICROTAN
         cpx     #$4F
@@ -98,6 +106,9 @@ L2443:
         bcs     L244C
     .endif
         sta     INPUTBUFFER,x
+    .ifdef CLEMENTINA
+        jsr     OUTDO
+    .endif
         inx
     .if .def(OSI) || .def(AIM65)
         .byte   $2C
@@ -113,6 +124,20 @@ L244E:
     .endif
 L2453:
         jmp     L29B9
+
+  .ifdef CLEMENTINA
+; Delete the previous character: drop it from the input buffer and erase it on
+; screen by sending a BS ($08) through CHROUT (which steps the cursor back and
+; blanks the cell). Does nothing at the start of the line.
+CLEM_DELETE:
+        cpx     #$00
+        beq     CLEM_DELETE_DONE
+        dex
+        lda     #$08
+        jsr     OUTDO
+CLEM_DELETE_DONE:
+        jmp     INLIN2
+  .endif
   .endif
 .endif
 

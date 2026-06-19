@@ -7,11 +7,14 @@
 ; ============================================================================
 
 .segment "EXTRA"
-.export MONRDKEY, MONRDKEY_NB, MONCOUT
+.export BASIC_COLD_START, MONRDKEY, MONRDKEY_NB, MONCOUT
 
 KERN_CHROUT    = $0406
 KERN_CHRIN     = $0409
 KERN_GETKEY_NB = $040C
+
+BASIC_COLD_START:
+        jmp COLD_START
 
 ; A = character to print. Kernel CHROUT preserves A/X/Y.
 MONCOUT:

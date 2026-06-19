@@ -5,8 +5,8 @@
 ; MIA-backed RESET vector. Provides the console (overlay text + input FIFO),
 ; a stable jump-table ABI, and (later) storage and BASIC/WozMon hand-off.
 ;
-; Milestone 1: boot, enable the overlay text layer, clear the screen, print a
-; banner, then run a polled CHRIN -> CHROUT echo loop.
+; Cold start enables the overlay text layer, clears the screen, prints the
+; banner, then enters BASIC through the fixed kernel jump table.
 ;
 ; Console addressing: the overlay nametable is a fixed 40x25 grid in MIA RAM at
 ; $10080, reached through the preconfigured video index $B8. Because CFG now
@@ -19,10 +19,12 @@
 
 .include "kernel.inc"
 
+.import BASIC_COLD_START
+
 ; ----------------------------------------------------------------------------
 ; Kernel zero page ($00F0-, see clementina.cfg)
 ; ----------------------------------------------------------------------------
-.segment "ZEROPAGE"
+.segment "KZEROPAGE": zeropage
 KPTR:   .res 2          ; general 16-bit pointer (PRSTR source, etc.)
 KTMP:   .res 2          ; scratch: computed overlay offset / address bytes
 KCNT:   .res 2          ; 16-bit loop counter (fills / copies)
@@ -84,23 +86,23 @@ coldstart:
         sta TEXT_ATTR
         stz LAST_KEY
         stz KEY_COUNT
+        stz CURSOR_VISIBLE
+        stz CURSOR_SAVE_CHR
+        stz CURSOR_SAVE_ATTR
 
         ; Initializes video and clear screen
         jsr video_init
         jsr clrscr
-
         jsr print_banner
 
         cli             ; enable interrupts
+        jmp BASIC_COLD_START
 
 ; ----------------------------------------------------------------------------
-; warmstart - milestone-1 echo loop (will become the monitor/BASIC launcher)
+; warmstart - re-enter BASIC
 ; ----------------------------------------------------------------------------
 warmstart:
-echo_loop:
-        jsr chrin               ; blocking read (also records debug state)
-        jsr chrout              ; echo
-        bra echo_loop
+        jmp BASIC_COLD_START
 
 ; ----------------------------------------------------------------------------
 ; video_load_palettes - load vibrant RGB565 palette banks 0-7.
@@ -144,23 +146,27 @@ video_load_palettes:
 video_init:
         jsr video_load_palettes
 
-        ; Use MIA's default PETSCII-compatible 1bpp font in CHR bank 0 for all
-        ; tile consumers. The overlay plane selector uses plane 1, the
-        ; lowercase/uppercase charset.
+        ; MIA split-loads the default font: ASCII text into CHR bank 0 plane 0
+        ; (overlay primary bank) and the graphics/line set into CHR bank 1 plane 0
+        ; (overlay alternate bank). The overlay renders plane 0, so tile code N is
+        ; the glyph for ASCII codepoint N and console output needs no screen-code
+        ; translation. Per-cell CHR_ALT selects text (bank 0) vs graphics (bank 1).
         lda #VIDX_BANK_SELECT
         sta IDXA_SELECT
         lda #VIDEO_CHR_BANK_DEFAULT
         sta IDXA_PORT           ; background bank
         sta IDXA_PORT           ; background alt bank
-        sta IDXA_PORT           ; overlay bank
-        sta IDXA_PORT           ; overlay alt bank
+        sta IDXA_PORT           ; overlay bank (text, primary)
+        lda #VIDEO_CHR_BANK_GRAPHICS
+        sta IDXA_PORT           ; overlay alt bank (graphics)
+        lda #VIDEO_CHR_BANK_DEFAULT
         sta IDXA_PORT           ; sprite bank
 
         lda #VIDX_CHR_1BPP
         sta IDXA_SELECT
-        lda #CHR_1BPP_BANK0_MASK
+        lda #CHR_1BPP_BANKS_TEXT_GFX
         sta IDXA_PORT
-        lda #CHR_1BPP_PLANES_OVERLAY1
+        lda #CHR_1BPP_PLANES_OVERLAY0
         sta IDXA_PORT
 
         jsr init_scroll_indexes
@@ -286,30 +292,34 @@ clrscr:
 
         stz CURSOR_X
         stz CURSOR_Y
+        stz CURSOR_VISIBLE
         rts
 
 ; ----------------------------------------------------------------------------
 ; chrout - write the character in A to the console at the cursor
-; Handles CR ($0D = newline), LF ($0A = ignored), BS ($08), printable bytes.
-; Preserves A/X/Y.
+; Handles CR ($0D = newline), LF ($0A = ignored), BS ($08), FF ($0C = clear),
+; printable bytes. Preserves A/X/Y.
 ; ----------------------------------------------------------------------------
 chrout:
         sta KCHR
         pha
         phx
         phy
+        jsr cursor_hide
         cmp #$0D
         beq @cr
         cmp #$0A
         beq @done               ; ignore LF; CR does the newline
         cmp #$08
         beq @bs
+        cmp #$0C
+        beq @ff                 ; form feed: clear screen
 
         ; Printable: aim the overlay indexes at the cursor cell and write the
-        ; tile code plus its palette attribute.
+        ; tile code plus its palette attribute. The font is ASCII-ordered, so
+        ; the tile code is the ASCII byte itself (no screen-code translation).
         jsr cursor_to_idxa
         lda KCHR
-        jsr char_to_tile
         sta IDXA_PORT
         jsr cursor_attr_to_idxa
         lda TEXT_ATTR
@@ -327,6 +337,10 @@ chrout:
         jsr newline
         bra @done
 
+@ff:
+        jsr clrscr              ; clear screen and home the cursor
+        bra @done
+
 @bs:
         lda CURSOR_X
         beq @done               ; keep it simple: don't back past column 0
@@ -339,6 +353,7 @@ chrout:
         sta IDXA_PORT
 
 @done:
+        jsr cursor_show
         ply
         plx
         pla
@@ -479,6 +494,60 @@ cursor_offset_to_ktmp:
         rts
 
 ; ----------------------------------------------------------------------------
+; cursor_show / cursor_hide - draw and restore a software text cursor.
+; The cursor is stored directly in the overlay cell, so these routines save the
+; underlying tile and attribute before drawing and restore them before output.
+; ----------------------------------------------------------------------------
+cursor_show:
+        pha
+        phx
+        phy
+        lda CURSOR_VISIBLE
+        bne @done
+
+        jsr cursor_to_idxa
+        lda IDXA_PORT
+        sta CURSOR_SAVE_CHR
+
+        jsr cursor_attr_to_idxa
+        lda IDXA_PORT
+        sta CURSOR_SAVE_ATTR
+        lda TEXT_ATTR
+        sta IDXA_PORT
+
+        jsr cursor_to_idxa
+        lda #CURSOR_TILE
+        sta IDXA_PORT
+        lda #$01
+        sta CURSOR_VISIBLE
+@done:
+        ply
+        plx
+        pla
+        rts
+
+cursor_hide:
+        pha
+        phx
+        phy
+        lda CURSOR_VISIBLE
+        beq @done
+
+        jsr cursor_to_idxa
+        lda CURSOR_SAVE_CHR
+        sta IDXA_PORT
+
+        jsr cursor_attr_to_idxa
+        lda CURSOR_SAVE_ATTR
+        sta IDXA_PORT
+        stz CURSOR_VISIBLE
+@done:
+        ply
+        plx
+        pla
+        rts
+
+; ----------------------------------------------------------------------------
 ; set_idxa_addr / set_idxa_limit - set the current/limit address of the index
 ; selected in window A. In: A = addr low, X = addr mid, Y = addr high.
 ; The matching index must already be bound to the window.
@@ -517,8 +586,13 @@ set_idxa_limit:
 ; window before the video client is attached.
 ; ----------------------------------------------------------------------------
 chrin:
+        jsr cursor_show
+@wait:
         jsr getkey_nb
-        bcc chrin               ; nothing yet, keep polling
+        bcc @wait               ; nothing yet, keep polling
+        sta KCHR
+        jsr cursor_hide
+        lda KCHR
         sta LAST_KEY
         inc KEY_COUNT
         rts
@@ -582,22 +656,6 @@ prstr:
         jsr chrout
         iny
         bne @loop               ; strings under 256 bytes
-@done:
-        rts
-
-; ----------------------------------------------------------------------------
-; char_to_tile - convert ASCII-ish text to the C64-style screen codes in MIA's
-; lowercase/uppercase font plane. Uppercase, digits, punctuation, and spaces are
-; already usable as-is; lowercase a-z live at screen codes 1-26.
-; ----------------------------------------------------------------------------
-char_to_tile:
-        cmp #'a'
-        bcc @done
-        cmp #'z'+1
-        bcs @done
-        sec
-        sbc #$60
-        rts
 @done:
         rts
 
@@ -670,5 +728,4 @@ banner:
         .byte $0D
         .byte "**** CLEMENTINA V1.0 BASIC V2 ****", $0D
         .byte "(C) 2026 PACHISOFT, 1977 MICROSOFT", $0D
-        .byte $0D
-        .byte "READY.", $0D, $00
+        .byte $0D, $00

@@ -111,7 +111,10 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 | `$0304` | `KEY_COUNT` | 1 | Debug: running count of bytes read by `CHRIN`. |
 | `$0305` | `CINV` | 2 | Reserved: redirectable `CHRIN` vector (not yet used). |
 | `$0307` | `COUTV` | 2 | Reserved: redirectable `CHROUT` vector (not yet used). |
-| `$0309–$03FF` | — | | Free for future kernel state. |
+| `$0309` | `CURSOR_VISIBLE` | 1 | Nonzero when the software cursor glyph is currently drawn into the overlay. |
+| `$030A` | `CURSOR_SAVE_CHR` | 1 | Saved tile under the visible cursor. |
+| `$030B` | `CURSOR_SAVE_ATTR` | 1 | Saved attribute under the visible cursor. |
+| `$030C–$03FF` | — | | Free for future kernel state. |
 
 ---
 
@@ -123,8 +126,8 @@ freely. Anchored at the load base so `$0400` is also the reset entry.
 
 | Addr | Symbol | In | Out | Description |
 | --- | --- | --- | --- | --- |
-| `$0400` | `KERN_COLDSTART` | — | — | Reset entry. MIA points RESET here. Sets up the machine, console, prints the banner, runs the milestone-1 echo loop. |
-| `$0403` | `KERN_WARMSTART` | — | — | Re-enter the system (today: the echo loop; later: the monitor/BASIC launcher). |
+| `$0400` | `KERN_COLDSTART` | — | — | Reset entry. MIA points RESET here. Sets up the machine, console, prints the banner, then enters BASIC. |
+| `$0403` | `KERN_WARMSTART` | — | — | Re-enter BASIC. |
 | `$0406` | `KERN_CHROUT` | `A`=char | A/X/Y preserved | Write one character to the console at the cursor. Handles CR (`$0D`, newline), LF (`$0A`, ignored), BS (`$08`), printable bytes. |
 | `$0409` | `KERN_CHRIN` | — | `A`=char | Blocking read of one text byte from the MIA FIFO. Updates `LAST_KEY`/`KEY_COUNT`. |
 | `$040C` | `KERN_GETKEY_NB` | — | `C`=1 & `A`=char, or `C`=0 | Non-blocking read. |
@@ -147,7 +150,7 @@ freely. Anchored at the load base so `$0400` is also the reset entry.
 
 Internal routines (`CODE` segment) and read-only data (`RODATA`). These
 addresses are **not** ABI; reach them only through the jump table. The current
-image is ~1.3 KiB. Notable internal routines:
+combined kernel+BASIC image is ~9.2 KiB. Notable internal routines:
 
 - `video_init` — load startup palettes, select MIA CHR bank `0` for the
   overlay, mark bank `0` as 1bpp, set the blue backdrop, enable video output
@@ -158,6 +161,8 @@ image is ~1.3 KiB. Notable internal routines:
   current address (via CFG) to the cell for `CURSOR_X/Y`.
 - `cursor_attr_to_idxa` — bind the overlay attribute index `$B9` to window A
   and set its current address to the current console cell.
+- `cursor_show` / `cursor_hide` — draw a software cursor at the current console
+  cell while preserving the tile and attribute underneath it.
 - `char_to_tile` — convert ASCII-ish kernel strings/input into the
   C64-style screen codes used by the default PETSCII font bank.
 - `set_idxa_addr` / `set_idxa_limit` — write the current/limit address of the
@@ -173,11 +178,10 @@ image is ~1.3 KiB. Notable internal routines:
 ## 8. BASIC free workspace (`end-of-image … $7FFF`)
 
 At runtime BASIC's program text, variables, arrays, and strings live between
-`TXTTAB` and `MEMSIZ`. With the image packed low, this is one contiguous block
-from just above the kernel/BASIC code to `$7FFF` — and its size is what BASIC
-prints as **"bytes free"**. The ceiling is `$8000` (the start of banked
-Extended RAM), so BASIC's memory sizing must stop there rather than walking
-into the bank window.
+`TXTTAB` and `MEMSIZ`. Clementina currently sets `RAMSTART2 = $3000`, safely
+above the combined kernel+BASIC image, and caps `MEMSIZ` at `$8000` (the start
+of the banked Extended RAM window). The resulting span is what BASIC prints as
+**"bytes free"**.
 
 ---
 

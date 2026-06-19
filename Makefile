@@ -1,9 +1,9 @@
 # ============================================================================
 # Clementina ROM - top-level build
 # ----------------------------------------------------------------------------
-# Builds the kernel image (kernel.bin) that MIA loads into base RAM at the
-# load base ($0400). WozMon and BASIC are integrated into this image in later
-# milestones; for now `kernel.bin` is the kernel alone (boots + console echo).
+# Builds the kernel+BASIC image (kernel.bin) that MIA loads into base RAM at the
+# load base ($0400). The kernel owns reset/video/console; MS BASIC owns the
+# foreground after cold start.
 # ============================================================================
 
 CA65    ?= ca65
@@ -11,11 +11,13 @@ LD65    ?= ld65
 CPU     ?= 65C02
 
 KERNEL_DIR := src/kernel
+BASIC_DIR  := src/basic
 BUILD_DIR  := build
 
 KERNEL_SRC := $(KERNEL_DIR)/kernel.s
 KERNEL_CFG := $(KERNEL_DIR)/clementina.cfg
 KERNEL_BIN := $(BUILD_DIR)/kernel.bin
+BASIC_SRC  := $(BASIC_DIR)/msbasic.s
 
 # Destinations for the kernel image. Override on the command line if your
 # checkouts live elsewhere, e.g.  make install MIA_DIR=... EMU_DIR=...
@@ -30,9 +32,10 @@ all: kernel
 
 kernel: $(KERNEL_BIN)
 
-$(KERNEL_BIN): $(KERNEL_SRC) $(KERNEL_DIR)/kernel.inc $(KERNEL_CFG) | $(BUILD_DIR)
+$(KERNEL_BIN): $(KERNEL_SRC) $(KERNEL_DIR)/kernel.inc $(KERNEL_CFG) $(BASIC_DIR)/*.s | $(BUILD_DIR)
 	$(CA65) --cpu $(CPU) -g -l $(BUILD_DIR)/kernel.lst -o $(BUILD_DIR)/kernel.o $(KERNEL_SRC)
-	$(LD65) -C $(KERNEL_CFG) -m $(BUILD_DIR)/kernel.map -o $@ $(BUILD_DIR)/kernel.o
+	$(CA65) --cpu $(CPU) -D clementina -g -l $(BUILD_DIR)/basic.lst -o $(BUILD_DIR)/basic.o $(BASIC_SRC)
+	$(LD65) -C $(KERNEL_CFG) -m $(BUILD_DIR)/kernel.map -Ln $(BUILD_DIR)/kernel.lbl -o $@ $(BUILD_DIR)/kernel.o $(BUILD_DIR)/basic.o
 	@echo "Built $@ ($$(wc -c < $@) bytes), loads at \$$0400"
 
 $(BUILD_DIR):
@@ -59,7 +62,7 @@ clean:
 help:
 	@echo "Clementina ROM"
 	@echo
-	@echo "  make            Build the kernel image (build/kernel.bin)"
+	@echo "  make            Build the kernel+BASIC image (build/kernel.bin)"
 	@echo "  make install    Copy kernel.bin into the emulator asset"
 	@echo "  make install-firmware  Copy kernel.bin into the MIA firmware tree"
 	@echo "  make clean      Remove build artifacts"
