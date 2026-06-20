@@ -32,7 +32,7 @@ all: kernel
 
 kernel: $(KERNEL_BIN)
 
-$(KERNEL_BIN): $(KERNEL_SRC) $(KERNEL_DIR)/kernel.inc $(KERNEL_CFG) $(BASIC_DIR)/*.s | $(BUILD_DIR)
+$(KERNEL_BIN): $(KERNEL_DIR)/*.s $(KERNEL_DIR)/kernel.inc $(KERNEL_CFG) $(BASIC_DIR)/*.s | $(BUILD_DIR)
 	$(CA65) --cpu $(CPU) -g -l $(BUILD_DIR)/kernel.lst -o $(BUILD_DIR)/kernel.o $(KERNEL_SRC)
 	$(CA65) --cpu $(CPU) -D clementina -g -l $(BUILD_DIR)/basic.lst -o $(BUILD_DIR)/basic.o $(BASIC_SRC)
 	$(LD65) -C $(KERNEL_CFG) -m $(BUILD_DIR)/kernel.map -Ln $(BUILD_DIR)/kernel.lbl -o $@ $(BUILD_DIR)/kernel.o $(BUILD_DIR)/basic.o
