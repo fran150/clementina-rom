@@ -106,9 +106,8 @@ L2443:
         bcs     L244C
     .endif
         sta     INPUTBUFFER,x
-    .ifdef CLEMENTINA
-        jsr     OUTDO
-    .endif
+    ; CLEMENTINA: no echo here - the kernel screen editor (MONRDLINE) already drew
+    ; the line as it was typed and GETLN returns those displayed characters.
         inx
     .if .def(OSI) || .def(AIM65)
         .byte   $2C
@@ -148,6 +147,8 @@ GETLN:
         jsr     CHRIN
         ldy     CURDVC
         bne     L2465
+    .elseif .def(CLEMENTINA)
+        jsr     MONRDLINE       ; kernel screen editor: doles the edited line
     .else
         jsr     MONRDKEY
     .endif

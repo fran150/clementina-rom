@@ -7,11 +7,12 @@
 ; ============================================================================
 
 .segment "EXTRA"
-.export BASIC_COLD_START, MONRDKEY, MONRDKEY_NB, MONCOUT
+.export BASIC_COLD_START, MONRDKEY, MONRDKEY_NB, MONCOUT, MONRDLINE
 
 KERN_CHROUT    = $0406
 KERN_CHRIN     = $0409
 KERN_GETKEY_NB = $040C
+KERN_EDITKEY   = $0424
 
 BASIC_COLD_START:
         jmp COLD_START
@@ -27,3 +28,9 @@ MONRDKEY:
 ; Non-blocking read; C=1 and A=char if available, else C=0.
 MONRDKEY_NB:
         jmp KERN_GETKEY_NB
+
+; Line-input reader: returns the next character of the screen-edited logical
+; line (printable bytes then a terminating CR). BASIC's GETLN uses this so line
+; editing runs in the kernel; GET keeps using the raw single-char MONRDKEY.
+MONRDLINE:
+        jmp KERN_EDITKEY

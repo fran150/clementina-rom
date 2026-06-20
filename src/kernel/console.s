@@ -63,12 +63,26 @@ clrscr:
         stz CURSOR_X
         stz CURSOR_Y
         stz CURSOR_VISIBLE
+
+        ; Each cleared row is its own (blank) logical line.
+        ldx #SCR_ROWS-1
+        lda #LINK_START
+@link_init:
+        sta LINE_LINK,x
+        dex
+        bpl @link_init
         rts
 
 ; ----------------------------------------------------------------------------
 ; chrout - write the character in A to the console at the cursor
 ; Handles CR ($0D = newline), LF ($0A = ignored), BS ($08), FF ($0C = clear),
-; printable bytes. Preserves A/X/Y.
+; the cursor moves (CRSR up/down/left/right) and HOME, and printable bytes.
+; Cursor moves only reposition CURSOR_X/Y; they clamp at the screen edges
+; (no scroll on move) and wrap left/right between rows. Preserves A/X/Y.
+;
+; The control handlers sit right after the dispatch so each cmp/beq reaches
+; them with a short branch; cross-routine exits use jmp because the routine is
+; longer than a single relative branch can span.
 ; ----------------------------------------------------------------------------
 chrout:
         sta KCHR
@@ -76,18 +90,113 @@ chrout:
         phx
         phy
         jsr cursor_hide
-        cmp #$0D
-        beq @cr
-        cmp #$0A
-        beq @done               ; ignore LF; CR does the newline
-        cmp #$08
-        beq @bs
-        cmp #$0C
-        beq @ff                 ; form feed: clear screen
+        cmp #CHR_CR
+        bne :+
+        jmp @cr
+:       cmp #CHR_LF
+        bne :+
+        jmp @done               ; ignore LF; CR does the newline
+:       cmp #CHR_BS
+        bne :+
+        jmp @bs
+:       cmp #CHR_FF
+        bne :+
+        jmp @ff
+:       cmp #CHR_CRSR_RIGHT
+        bne :+
+        jmp @crsr_right
+:       cmp #CHR_CRSR_LEFT
+        bne :+
+        jmp @crsr_left
+:       cmp #CHR_CRSR_UP
+        bne :+
+        jmp @crsr_up
+:       cmp #CHR_CRSR_DOWN
+        bne :+
+        jmp @crsr_down
+:       cmp #CHR_HOME
+        bne :+
+        jmp @home
+:       jmp @printable          ; not a control code: draw the glyph
 
-        ; Printable: aim the overlay indexes at the cursor cell and write the
-        ; tile code plus its palette attribute. The font is ASCII-ordered, so
-        ; the tile code is the ASCII byte itself (no screen-code translation).
+@cr:
+        stz CURSOR_X
+        jsr newline
+        ldx CURSOR_Y            ; CR begins a fresh logical line
+        lda #LINK_START
+        sta LINE_LINK,x
+        jmp @done
+
+@ff:
+        jsr clrscr              ; clear screen and home the cursor
+        jmp @done
+
+@bs:
+        lda CURSOR_X
+        beq @bs_done            ; keep it simple: don't back past column 0
+        dec CURSOR_X
+        jsr cursor_to_idxa
+        lda #' '
+        sta IDXA_PORT           ; erase the character under the cursor
+        jsr cursor_attr_to_idxa
+        lda TEXT_ATTR
+        sta IDXA_PORT
+@bs_done:
+        jmp @done
+
+@home:
+        stz CURSOR_X
+        stz CURSOR_Y
+        jmp @done
+
+@crsr_up:
+        lda CURSOR_Y
+        beq @crsr_up_done       ; already at the top row
+        dec CURSOR_Y
+@crsr_up_done:
+        jmp @done
+
+@crsr_down:
+        lda CURSOR_Y
+        cmp #SCR_ROWS-1
+        bcs @crsr_down_done     ; already at the bottom row (no scroll on move)
+        inc CURSOR_Y
+@crsr_down_done:
+        jmp @done
+
+@crsr_left:
+        lda CURSOR_X
+        bne @crsr_left_step
+        lda CURSOR_Y
+        beq @crsr_left_done     ; top-left corner: stay put
+        dec CURSOR_Y            ; wrap to the end of the previous row
+        lda #SCR_COLS-1
+        sta CURSOR_X
+        bra @crsr_left_done
+@crsr_left_step:
+        dec CURSOR_X
+@crsr_left_done:
+        jmp @done
+
+@crsr_right:
+        lda CURSOR_X
+        cmp #SCR_COLS-1
+        bcc @crsr_right_step
+        lda CURSOR_Y
+        cmp #SCR_ROWS-1
+        bcs @crsr_right_done    ; bottom-right corner: stay put (no scroll on move)
+        inc CURSOR_Y            ; wrap to the start of the next row
+        stz CURSOR_X
+        bra @crsr_right_done
+@crsr_right_step:
+        inc CURSOR_X
+@crsr_right_done:
+        jmp @done
+
+@printable:
+        ; Aim the overlay indexes at the cursor cell and write the tile code plus
+        ; its palette attribute. The font is ASCII-ordered, so the tile code is
+        ; the ASCII byte itself (no screen-code translation).
         jsr cursor_to_idxa
         lda KCHR
         sta IDXA_PORT
@@ -100,27 +209,8 @@ chrout:
         bcc @done
         stz CURSOR_X            ; wrap to next line
         jsr newline
-        bra @done
-
-@cr:
-        stz CURSOR_X
-        jsr newline
-        bra @done
-
-@ff:
-        jsr clrscr              ; clear screen and home the cursor
-        bra @done
-
-@bs:
-        lda CURSOR_X
-        beq @done               ; keep it simple: don't back past column 0
-        dec CURSOR_X
-        jsr cursor_to_idxa
-        lda #' '
-        sta IDXA_PORT           ; erase the character under the cursor
-        jsr cursor_attr_to_idxa
-        lda TEXT_ATTR
-        sta IDXA_PORT
+        ldx CURSOR_Y            ; the wrapped row continues the logical line
+        stz LINE_LINK,x
 
 @done:
         jsr cursor_show
@@ -184,6 +274,19 @@ scroll_up:
         sta IDXA_PORT
         dex
         bne @attr_blank
+
+        ; Scroll the logical-line link table up with the rows. The new bottom row
+        ; starts as its own logical line; a caller that scrolled because of a wrap
+        ; re-marks it as a continuation afterward.
+        ldx #$00
+@link_scroll:
+        lda LINE_LINK+1,x
+        sta LINE_LINK,x
+        inx
+        cpx #SCR_ROWS-1
+        bne @link_scroll
+        lda #LINK_START
+        sta LINE_LINK + (SCR_ROWS-1)
         rts
 
 dma_copy_indexes:

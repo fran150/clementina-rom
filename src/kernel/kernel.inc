@@ -155,6 +155,24 @@ SCR_COLS            = 40
 SCR_ROWS            = 25
 
 ; ----------------------------------------------------------------------------
+; Console control codes. CHROUT acts on these instead of drawing a glyph.
+; Cursor moves and HOME use PETSCII values so MIA's keyboard decode table
+; (usage -> FIFO byte) and the console agree on one set; CR/LF/BS/FF reuse
+; their ASCII codes. Keep in sync with inputDecodeKeyUsage in the MIA firmware.
+; ----------------------------------------------------------------------------
+CHR_BS              = $08      ; backspace: cursor left one cell and erase
+CHR_LF              = $0A      ; line feed: ignored (CR does the newline)
+CHR_FF              = $0C      ; form feed: clear screen and home
+CHR_CR              = $0D      ; carriage return: newline
+CHR_CRSR_DOWN       = $11      ; cursor down one row
+CHR_HOME            = $13      ; cursor to top-left
+CHR_CRSR_RIGHT      = $1D      ; cursor right one cell
+CHR_CRSR_UP         = $91      ; cursor up one row
+CHR_CRSR_LEFT       = $9D      ; cursor left one cell
+CHR_DEL_FWD         = $7F      ; editor: delete the char at the cursor (close gap)
+CHR_INSERT          = $94      ; editor: open a gap at the cursor (insert space)
+
+; ----------------------------------------------------------------------------
 ; Kernel jump table - the stable ABI. Anchored at the load base ($0400).
 ; Callers JSR these; internal routine addresses may move freely.
 ; ----------------------------------------------------------------------------
@@ -171,6 +189,7 @@ KERN_PRBYTE        = KERN_BASE + $18   ; A -> two hex digits via CHROUT
 KERN_PRSTR         = KERN_BASE + $1B   ; print $00-terminated string at (KPTR)
 KERN_LOAD          = KERN_BASE + $1E   ; load (stub for now)
 KERN_SAVE          = KERN_BASE + $21   ; save (stub for now)
+KERN_EDITKEY       = KERN_BASE + $24   ; screen editor: next char of edited line
 
 ; ----------------------------------------------------------------------------
 ; Kernel variable page ($0300-$03FF). See docs/memory-map.md.
@@ -186,6 +205,30 @@ COUTV              = KVARS + $07   ; reserved: redirectable CHROUT vector (2)
 CURSOR_VISIBLE     = KVARS + $09   ; nonzero when cursor glyph is drawn
 CURSOR_SAVE_CHR    = KVARS + $0A   ; character under visible cursor
 CURSOR_SAVE_ATTR   = KVARS + $0B   ; attribute under visible cursor
+
+; Logical-line link table: one byte per screen row (SCR_ROWS bytes). Bit 7 set
+; means the row STARTS a logical line; clear means it continues the row above
+; (created by line wrap). The screen editor walks this table to harvest the whole
+; logical line under the cursor on RETURN. Maintained by clrscr / CHROUT / scroll.
+LINE_LINK          = KVARS + $0C   ; .. KVARS + $0C + SCR_ROWS-1  ($030C-$0324)
+
+LINK_START         = $80           ; LINE_LINK value for a logical-line start
+
+; Screen-editor state. The editor edits overlay cells directly (the screen is the
+; buffer) and on RETURN harvests the logical line under the cursor into EDIT_BUF,
+; which KERN_EDITKEY then doles to BASIC's line input one byte at a time.
+EDIT_BUF_SIZE      = 80                        ; EDIT_BUF capacity (two full 40-column rows)
+EDIT_BUF           = KVARS + $0C + SCR_ROWS    ; harvested line ($0325, EDIT_BUF_SIZE bytes)
+EDIT_LEN           = EDIT_BUF + EDIT_BUF_SIZE  ; harvested length after trailing-space trim
+EDIT_IDX           = EDIT_LEN + 1              ; dole-out read index
+EDIT_STATE         = EDIT_LEN + 2             ; 0 = idle (run editor), nonzero = doling a line
+EDIT_START_X       = EDIT_LEN + 3             ; cursor col where the current input began
+EDIT_START_Y       = EDIT_LEN + 4             ; cursor row where the current input began
+EDIT_RS            = EDIT_LEN + 5             ; harvest scratch: logical-line start row
+EDIT_RE            = EDIT_LEN + 6             ; harvest scratch: logical-line end row
+EDIT_CP            = EDIT_LEN + 7             ; insert/delete scratch: cursor pos within line
+EDIT_LL            = EDIT_LEN + 8             ; insert/delete scratch: logical-line cell count
+; Last used kernel variable byte is EDIT_LL ($037D); $037E-$03FF free.
 
 ; Cursor glyph printed into the overlay while waiting for input.
 CURSOR_TILE        = '_'

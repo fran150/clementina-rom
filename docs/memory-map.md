@@ -114,11 +114,22 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 | `$0309` | `CURSOR_VISIBLE` | 1 | Nonzero when the software cursor glyph is currently drawn into the overlay. |
 | `$030A` | `CURSOR_SAVE_CHR` | 1 | Saved tile under the visible cursor. |
 | `$030B` | `CURSOR_SAVE_ATTR` | 1 | Saved attribute under the visible cursor. |
-| `$030C–$03FF` | — | | Free for future kernel state. |
+| `$030C–$0324` | `LINE_LINK` | 25 | Logical-line link table, one byte per screen row. Bit 7 set = row starts a logical line; clear = it continues the row above (line wrap). The screen editor harvests the whole logical line under the cursor on RETURN. Maintained by `clrscr`/`CHROUT`/`scroll_up`. |
+| `$0325–$0374` | `EDIT_BUF` | 80 | Screen editor: the harvested logical line, doled to BASIC line input by `KERN_EDITKEY`. |
+| `$0375` | `EDIT_LEN` | 1 | Harvested length (trailing spaces trimmed). |
+| `$0376` | `EDIT_IDX` | 1 | Dole-out read index into `EDIT_BUF`. |
+| `$0377` | `EDIT_STATE` | 1 | `0` = editor idle; nonzero = doling a harvested line. |
+| `$0378` | `EDIT_START_X` | 1 | Cursor column where the current input began (past any prompt). |
+| `$0379` | `EDIT_START_Y` | 1 | Cursor row where the current input began. |
+| `$037A` | `EDIT_RS` | 1 | Harvest / shift scratch: logical-line start row. |
+| `$037B` | `EDIT_RE` | 1 | Harvest / shift scratch: logical-line end row. |
+| `$037C` | `EDIT_CP` | 1 | Insert/delete scratch: cursor position within the logical line. |
+| `$037D` | `EDIT_LL` | 1 | Insert/delete scratch: logical-line cell count (capped at two rows). |
+| `$037E–$03FF` | — | | Free for future kernel state. |
 
 ---
 
-## 6. Kernel jump table (`$0400–$0423`)
+## 6. Kernel jump table (`$0400–$0426`)
 
 The **stable ABI**. Each entry is a 3-byte `JMP`. Callers (BASIC, WozMon, user
 programs) bind to these fixed addresses; the routines behind them may move
@@ -128,8 +139,8 @@ freely. Anchored at the load base so `$0400` is also the reset entry.
 | --- | --- | --- | --- | --- |
 | `$0400` | `KERN_COLDSTART` | — | — | Reset entry. MIA points RESET here. Sets up the machine, console, prints the banner, then enters BASIC. |
 | `$0403` | `KERN_WARMSTART` | — | — | Re-enter BASIC. |
-| `$0406` | `KERN_CHROUT` | `A`=char | A/X/Y preserved | Write one character to the console at the cursor. Handles CR (`$0D`, newline), LF (`$0A`, ignored), BS (`$08`), printable bytes. |
-| `$0409` | `KERN_CHRIN` | — | `A`=char | Blocking read of one text byte from the MIA FIFO. Updates `LAST_KEY`/`KEY_COUNT`. |
+| `$0406` | `KERN_CHROUT` | `A`=char | A/X/Y preserved | Write one character to the console at the cursor. Handles CR (`$0D`, newline), LF (`$0A`, ignored), BS (`$08`), FF (`$0C`, clear), the cursor moves (`$11`/`$91`/`$1D`/`$9D`) and HOME (`$13`), printable bytes. |
+| `$0409` | `KERN_CHRIN` | — | `A`=char | Blocking read of one raw text byte from the MIA FIFO (single key; used by BASIC `GET`). Updates `LAST_KEY`/`KEY_COUNT`. |
 | `$040C` | `KERN_GETKEY_NB` | — | `C`=1 & `A`=char, or `C`=0 | Non-blocking read. |
 | `$040F` | `KERN_STOP` | — | `Z`=1 if break | ISCNTC / Ctrl-C check. **Placeholder** today (never reports a break); real handling lands with BASIC. |
 | `$0412` | `KERN_CLRSCR` | — | — | Clear the overlay (fill with spaces) and home the cursor. |
@@ -138,6 +149,7 @@ freely. Anchored at the load base so `$0400` is also the reset entry.
 | `$041B` | `KERN_PRSTR` | `KPTR`→str | — | Print the `$00`-terminated string at `KPTR` (max 255 bytes). |
 | `$041E` | `KERN_LOAD` | — | — | Storage load. **Stub** (`RTS`) until the FAT layer lands. |
 | `$0421` | `KERN_SAVE` | — | — | Storage save. **Stub** (`RTS`). |
+| `$0424` | `KERN_EDITKEY` | — | `A`=char | Full-screen line editor. Runs the interactive editor (cursor moves, overtype, gap-closing backspace `$08` / delete `$7F`, insert `$94`) on the overlay, harvests the logical line under the cursor on RETURN, and returns it one byte at a time ending in CR. BASIC's `GETLN` uses this for line input; `GET` stays on `KERN_CHRIN`. |
 
 > When you add a kernel call, append a new `JMP` to the table in
 > `src/kernel/kernel.s`, add the `KERN_*` equate in `kernel.inc`, bump the
@@ -146,7 +158,7 @@ freely. Anchored at the load base so `$0400` is also the reset entry.
 
 ---
 
-## 7. Kernel code and data (`$0424–…`)
+## 7. Kernel code and data (`$0427–…`)
 
 Internal routines (`CODE` segment) and read-only data (`RODATA`). These
 addresses are **not** ABI; reach them only through the jump table. The current

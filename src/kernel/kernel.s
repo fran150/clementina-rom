@@ -48,9 +48,10 @@ KCHR:   .res 1          ; character being printed by CHROUT
         jmp prstr               ; KERN_PRSTR
         jmp load                ; KERN_LOAD
         jmp save                ; KERN_SAVE
+        jmp editkey             ; KERN_EDITKEY
 
 ; Compile-time guard: confirm the table lines up with the published ABI.
-.assert (* = KERN_BASE + $24), error, "kernel jump table size/layout mismatch"
+.assert (* = KERN_BASE + $27), error, "kernel jump table size/layout mismatch"
 
 ; ============================================================================
 ; Code
@@ -89,6 +90,7 @@ coldstart:
         stz CURSOR_VISIBLE
         stz CURSOR_SAVE_CHR
         stz CURSOR_SAVE_ATTR
+        stz EDIT_STATE          ; screen editor starts idle
 
         ; Initializes video and clear screen
         jsr video_init
@@ -115,5 +117,6 @@ warmstart:
 .include "video.s"
 .include "console.s"
 .include "input.s"
+.include "editor.s"
 .include "print.s"
 .include "interrupts.s"
