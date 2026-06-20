@@ -420,6 +420,15 @@ cursor_hide:
         pla
         rts
 
+cursor_toggle:
+        pha
+        lda CURSOR_VISIBLE
+        bne :+
+        pla
+        jmp cursor_show
+:       pla
+        jmp cursor_hide
+
 ; ----------------------------------------------------------------------------
 ; set_idxa_addr / set_idxa_limit - set the current/limit address of the index
 ; selected in window A. In: A = addr low, X = addr mid, Y = addr high.

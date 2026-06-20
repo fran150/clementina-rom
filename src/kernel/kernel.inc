@@ -43,6 +43,33 @@ INPUT_STATUS_SOURCE_WIFI     = %01000000
 INPUT_STATUS_SOURCE_USB_HOST = %10000000
 
 ; ----------------------------------------------------------------------------
+; 65C22 VIA in I/O slot 0 ($C000-$C3FF). Registers mirror every 16 bytes.
+; Port A drives the external RAM bank select; Timer 1 provides the kernel tick.
+; ----------------------------------------------------------------------------
+VIA_BASE            = $C000
+VIA_ORB             = VIA_BASE + $00
+VIA_ORA             = VIA_BASE + $01
+VIA_DDRB            = VIA_BASE + $02
+VIA_DDRA            = VIA_BASE + $03
+VIA_T1CL            = VIA_BASE + $04
+VIA_T1CH            = VIA_BASE + $05
+VIA_T1LL            = VIA_BASE + $06
+VIA_T1LH            = VIA_BASE + $07
+VIA_ACR             = VIA_BASE + $0B
+VIA_IFR             = VIA_BASE + $0D
+VIA_IER             = VIA_BASE + $0E
+
+VIA_DDRA_BANK_BITS  = %00011111 ; PA0-PA4 select one of 32 extended RAM banks
+VIA_ACR_T1_FREE_RUN = %01000000 ; Timer 1 free-runs, PB7 output disabled
+VIA_IFR_T1          = %01000000
+VIA_IER_SET         = %10000000
+
+; At 1 MHz PHI2, 62500 cycles gives a 62.5 ms tick; eight ticks gives a
+; classic half-second cursor blink. If PHI2 changes, the blink follows it.
+VIA_T1_RELOAD       = 62500
+CURSOR_BLINK_TICKS  = 8
+
+; ----------------------------------------------------------------------------
 ; MIA configuration field ids (CFG_SELECT values).
 ; Ids $00-$0F configure the index currently selected in window A; $10-$1F the
 ; index selected in window B. Bind an index with IDXA_SELECT/IDXB_SELECT first,
@@ -228,7 +255,9 @@ EDIT_RS            = EDIT_LEN + 5             ; harvest scratch: logical-line st
 EDIT_RE            = EDIT_LEN + 6             ; harvest scratch: logical-line end row
 EDIT_CP            = EDIT_LEN + 7             ; insert/delete scratch: cursor pos within line
 EDIT_LL            = EDIT_LEN + 8             ; insert/delete scratch: logical-line cell count
-; Last used kernel variable byte is EDIT_LL ($037D); $037E-$03FF free.
+CURSOR_BLINK_ACTIVE = KVARS + $7E  ; nonzero when Timer 1 may toggle the cursor
+CURSOR_BLINK_COUNT  = KVARS + $7F  ; ticks until the next cursor toggle
+; Last used kernel variable byte is CURSOR_BLINK_COUNT ($037F); $0380-$03FF free.
 
 ; Cursor glyph printed into the overlay while waiting for input.
 CURSOR_TILE        = '_'

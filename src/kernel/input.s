@@ -14,11 +14,19 @@
 ; ----------------------------------------------------------------------------
 chrin:
         jsr cursor_show
+        lda #CURSOR_BLINK_TICKS
+        sta CURSOR_BLINK_COUNT
+        lda #$01
+        sta CURSOR_BLINK_ACTIVE
 @wait:
         jsr getkey_nb
         bcc @wait               ; nothing yet, keep polling
         sta KCHR
+        php
+        sei
+        stz CURSOR_BLINK_ACTIVE
         jsr cursor_hide
+        plp
         lda KCHR
         sta LAST_KEY
         inc KEY_COUNT

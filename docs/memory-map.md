@@ -125,7 +125,9 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 | `$037B` | `EDIT_RE` | 1 | Harvest / shift scratch: logical-line end row. |
 | `$037C` | `EDIT_CP` | 1 | Insert/delete scratch: cursor position within the logical line. |
 | `$037D` | `EDIT_LL` | 1 | Insert/delete scratch: logical-line cell count (capped at two rows). |
-| `$037E–$03FF` | — | | Free for future kernel state. |
+| `$037E` | `CURSOR_BLINK_ACTIVE` | 1 | Nonzero while `CHRIN` is polling and the Timer 1 IRQ handler may toggle the software cursor. |
+| `$037F` | `CURSOR_BLINK_COUNT` | 1 | VIA Timer 1 ticks remaining before the next cursor toggle. |
+| `$0380–$03FF` | — | | Free for future kernel state. |
 
 ---
 
@@ -173,8 +175,9 @@ combined kernel+BASIC image is ~9.2 KiB. Notable internal routines:
   current address (via CFG) to the cell for `CURSOR_X/Y`.
 - `cursor_attr_to_idxa` — bind the overlay attribute index `$B9` to window A
   and set its current address to the current console cell.
-- `cursor_show` / `cursor_hide` — draw a software cursor at the current console
-  cell while preserving the tile and attribute underneath it.
+- `cursor_show` / `cursor_hide` / `cursor_toggle` — draw, restore, or flip the
+  software cursor at the current console cell while preserving the tile and
+  attribute underneath it.
 - `char_to_tile` — convert ASCII-ish kernel strings/input into the
   C64-style screen codes used by the default PETSCII font bank.
 - `set_idxa_addr` / `set_idxa_limit` — write the current/limit address of the
@@ -182,8 +185,11 @@ combined kernel+BASIC image is ~9.2 KiB. Notable internal routines:
 - `newline` / `scroll_up` — row advance and DMA-assisted scroll: kernel-reserved
   indexes `$F0-$F3` copy the overlay nametable and attributes up by one row,
   then the last row is blanked through `$B8/$B9`.
-- `irq_handler` / `nmi_handler` — minimal; `irq_handler` read-clears
-  `IRQ_STATUS_L` and returns.
+- `via_init` — initialize the 65C22 VIA: Port A selects external RAM bank 0,
+  and Timer 1 free-runs as the kernel cursor blink tick.
+- `irq_handler` / `nmi_handler` — `irq_handler` read-clears MIA `IRQ_STATUS_L`,
+  dispatches VIA Timer 1 ticks, and toggles the cursor only while `CHRIN` is
+  polling for input.
 
 ---
 
@@ -211,8 +217,12 @@ Eight 1 KiB device slots decoded from this 8 KiB region.
 
 | Range | Slot | Device |
 | --- | --- | --- |
-| `$C000–$C3FF` | 0 | **65C22 VIA**. Port A drives Extended RAM banking; Port B is free. Registers repeat every 16 bytes within the slot. |
+| `$C000–$C3FF` | 0 | **65C22 VIA**. Port A drives Extended RAM banking; Port B is free. Registers repeat every 16 bytes within the slot. Timer 1 is configured by the kernel as a free-running IRQ source for cursor blink. |
 | `$C400–$DFFF` | 1–7 | Free I/O slots. |
+
+> Hardware note: the W65C22S IRQB pin is a totem-pole output, not an
+> open-drain output. Sharing `IRQB` with MIA needs external isolation or a MIA
+> idle state that releases the line, not a strong high output.
 
 ---
 

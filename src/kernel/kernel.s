@@ -91,6 +91,10 @@ coldstart:
         stz CURSOR_SAVE_CHR
         stz CURSOR_SAVE_ATTR
         stz EDIT_STATE          ; screen editor starts idle
+        stz CURSOR_BLINK_ACTIVE
+        stz CURSOR_BLINK_COUNT
+
+        jsr via_init
 
         ; Initializes video and clear screen
         jsr video_init
