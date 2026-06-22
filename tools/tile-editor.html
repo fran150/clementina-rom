@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clementina Tile / Bank Editor</title>
+<style>
+  :root {
+    --bg: #14110d; --panel: #1e1a14; --panel2: #262017; --line: #3a3022;
+    --ink: #ffb000; --text: #d8cfae; --text-dim: #8a8268; --sel: #36c9d6; --grid: #2c2418;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font-family: "SF Mono","JetBrains Mono",Menlo,Consolas,monospace; font-size: 13px; }
+  header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 8px 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 14px; margin: 0; color: var(--ink); letter-spacing: .5px; font-weight: 600; }
+  header h1 small { color: var(--text-dim); font-weight: 400; }
+  .spacer { flex: 1; }
+  .sep { width: 1px; height: 22px; background: var(--line); }
+  button, select, label.btn { font-family: inherit; font-size: 12px; background: var(--panel2);
+    color: var(--text); border: 1px solid var(--line); border-radius: 4px; padding: 5px 9px; cursor: pointer; }
+  button:hover, label.btn:hover { background: #322a1d; border-color: #4d4129; }
+  button:active { transform: translateY(1px); }
+  button:disabled { opacity: .4; cursor: default; }
+  button.on { background: var(--ink); color: #1a1206; border-color: var(--ink); font-weight: 700; }
+  select { padding: 4px 6px; }
+  input[type=file] { display: none; }
+  label.lbl { color: var(--text-dim); display: inline-flex; align-items: center; gap: 5px; }
+
+  main { display: flex; gap: 16px; padding: 14px; align-items: flex-start; flex-wrap: wrap; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px; }
+  .panel h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-dim);
+    margin: 0 0 10px; font-weight: 600; }
+
+  #ovWrap { max-height: 80vh; overflow: auto; }
+  #overview { image-rendering: pixelated; display: block; cursor: pointer; background: #000; }
+
+  .editorCol { display: flex; flex-direction: column; gap: 14px; }
+  .row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  #editor { image-rendering: pixelated; cursor: crosshair; touch-action: none; background: #000; border-radius: 4px; }
+  .toolbtns { display: grid; grid-template-columns: repeat(4, auto); gap: 6px; margin-top: 10px; }
+  .toolbtns button { padding: 5px 0; }
+
+  .previews { display: flex; gap: 16px; align-items: flex-end; }
+  .preview { text-align: center; }
+  .preview canvas { image-rendering: pixelated; background: #000; border: 1px solid var(--line); display: block; }
+  .preview span { color: var(--text-dim); font-size: 10px; display: block; margin-top: 4px; }
+
+  #palGrid { display: flex; flex-direction: column; gap: 3px; max-height: 320px; overflow: auto; padding-right: 4px; }
+  .palBankRow { display: flex; align-items: center; gap: 3px; padding: 2px 3px; border: 1px solid transparent; border-radius: 4px; }
+  .palBankRow.active { border-color: var(--sel); background: #0e1517; }
+  .palBankName { width: 28px; color: var(--text-dim); font-size: 10px; }
+  .sw { width: 22px; height: 22px; border-radius: 3px; border: 2px solid var(--line); cursor: pointer; position: relative; }
+  .sw.sel { border-color: var(--sel); box-shadow: 0 0 0 1px var(--sel); }
+  .palrow { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  input[type=color] { width: 40px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: none; }
+  input[type=text] { font-family: inherit; font-size: 12px; background: #000; color: var(--text);
+    border: 1px solid var(--line); border-radius: 4px; padding: 5px 7px; width: 120px; }
+  input[type=text]:focus { outline: none; border-color: var(--ink); }
+
+  .planes { display: flex; gap: 10px; }
+  .planes canvas { image-rendering: pixelated; background: #000; border: 1px solid var(--line); }
+
+  .info { line-height: 1.7; }
+  .info b { color: var(--ink); }
+  .info .bytes { color: var(--text-dim); }
+  .hint { color: var(--text-dim); font-size: 11px; line-height: 1.6; }
+
+  footer { position: sticky; bottom: 0; background: var(--panel); border-top: 1px solid var(--line);
+    padding: 6px 14px; color: var(--text-dim); font-size: 11px; display: flex; gap: 18px; }
+  footer .dirty { color: var(--ink); }
+
+  .overlay { position: fixed; inset: 0; background: #000a; display: none; align-items: center; justify-content: center; z-index: 50; }
+  .overlay.show { display: flex; }
+  .modal { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 20px; width: 460px; }
+  .modal h3 { margin: 0 0 14px; color: var(--ink); font-size: 14px; }
+  .modal .field { display: flex; justify-content: space-between; align-items: center; margin: 9px 0; }
+  .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+  .modal .note { color: var(--text-dim); font-size: 11px; line-height: 1.6; margin-top: 6px; }
+
+  .dropdown { position: relative; display: inline-block; }
+  .dropdown-menu { display: none; position: absolute; top: 100%; left: 0; background: var(--panel2);
+    border: 1px solid var(--line); border-radius: 4px; z-index: 20; min-width: 200px; }
+  .dropdown.open .dropdown-menu { display: block; }
+  .dropdown-menu button { display: block; width: 100%; text-align: left; border: 0; border-radius: 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Clementina Tile Editor <small>· 8×8 · 8 CHR banks · 1/3 bpp · .mtb</small></h1>
+  <label class="lbl">Name <input type="text" id="nameInput" value="tiles" title="Base filename for Save / Export"></label>
+  <button id="newBtn">New</button>
+  <label class="btn" for="openInput">Open .mtb…</label>
+  <input type="file" id="openInput" accept=".mtb,application/octet-stream">
+  <button id="saveBtn">Save .mtb</button>
+  <div class="dropdown" id="exportDd">
+    <button id="exportBtn">Export ▾</button>
+    <div class="dropdown-menu">
+      <button data-exp="chr">CHR — current bank (.bin)</button>
+      <button data-exp="chrall">CHR — all 8 banks (49152 B)</button>
+      <button data-exp="pal">Palette (.bin, 256 B)</button>
+    </div>
+  </div>
+  <label class="btn" for="importInput">Import raw…</label>
+  <input type="file" id="importInput" accept=".bin,.rom,application/octet-stream">
+  <div class="sep"></div>
+  <span class="lbl">Bank</span><select id="bankSel"></select>
+  <span class="lbl">Mode</span>
+  <button id="mode1" title="1 bpp (monochrome; bank holds 3 plane tables)">1bpp</button>
+  <button id="mode3" title="3 bpp (8 colors)">3bpp</button>
+  <label class="lbl" id="planeWrap">Plane
+    <select id="planeSel"><option>0</option><option>1</option><option>2</option></select>
+  </label>
+  <div class="spacer"></div>
+  <label class="lbl"><input type="checkbox" id="transChk"> idx0 transparent</label>
+  <button id="undoBtn">↶</button><button id="redoBtn">↷</button>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>CHR banks <span id="ovInfo" style="color:var(--text-dim)"></span></h2>
+    <div id="ovWrap"><canvas id="overview"></canvas></div>
+    <div class="hint" style="margin-top:8px">Click any tile in any bank to edit · Arrow keys move within the grid</div>
+  </section>
+
+  <section class="panel editorCol">
+    <div class="row">
+      <div>
+        <h2>Editor</h2>
+        <canvas id="editor" width="320" height="320"></canvas>
+        <div class="toolbtns">
+          <button data-op="clear">Clear</button><button data-op="invert">Invert</button>
+          <button data-op="fliph">Flip ↔</button><button data-op="flipv">Flip ↕</button>
+          <button data-op="left">Shift ←</button><button data-op="right">Shift →</button>
+          <button data-op="up">Shift ↑</button><button data-op="down">Shift ↓</button>
+          <button data-op="copy">Copy</button><button data-op="paste">Paste</button>
+        </div>
+        <div class="hint" style="margin-top:8px">Left-drag = paint ink · right-drag = erase (idx 0)</div>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:16px">
+        <div>
+          <h2>Palettes — <span id="palBankLbl" style="color:var(--ink)"></span></h2>
+          <div id="palGrid"></div>
+          <div class="palrow">
+            <label class="lbl">Edit color <input type="color" id="colorInput"></label>
+            <span class="hint" id="colorHex"></span>
+          </div>
+          <div class="hint">Click a swatch → sets the <b style="color:var(--sel)">active palette</b> + paint ink.
+            The active palette colors the tiles. Keys <b>0–7</b> pick the ink.</div>
+        </div>
+        <div>
+          <h2>Regular size</h2>
+          <div class="previews">
+            <div class="preview"><canvas id="p1" width="8"  height="8"></canvas><span>1×</span></div>
+            <div class="preview"><canvas id="p2" width="16" height="16"></canvas><span>2×</span></div>
+            <div class="preview"><canvas id="p4" width="32" height="32"></canvas><span>4×</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="row">
+      <div>
+        <h2>Bitplanes (this tile)</h2>
+        <div class="planes">
+          <div class="preview"><canvas id="pl0" width="48" height="48"></canvas><span>plane 0</span></div>
+          <div class="preview"><canvas id="pl1" width="48" height="48"></canvas><span>plane 1</span></div>
+          <div class="preview"><canvas id="pl2" width="48" height="48"></canvas><span>plane 2</span></div>
+        </div>
+      </div>
+      <div><h2>Tile</h2><div class="info" id="tileInfo"></div></div>
+    </div>
+  </section>
+</main>
+
+<footer><span id="status">Ready.</span><span id="dirty"></span></footer>
+
+<div class="overlay" id="importModal">
+  <div class="modal">
+    <h3>Import raw .bin → project</h3>
+    <div class="field"><label class="lbl">Bit depth</label>
+      <select id="impBpp"><option value="1">1bpp (one mono plane)</option><option value="3">3bpp (full 3-plane bank)</option></select></div>
+    <div class="field" id="impPlaneField"><label class="lbl">Target plane (1bpp)</label>
+      <select id="impPlane"><option>0</option><option>1</option><option>2</option></select></div>
+    <div class="field"><label class="lbl">Start bank id</label><select id="impBank"></select></div>
+    <div class="field"><label class="lbl"><input type="checkbox" id="impSpread"> Spread blocks into consecutive banks</label></div>
+    <div class="field" id="impBlockField"><label class="lbl">Block in file</label><input type="number" id="impBlock" value="0" min="0" style="width:70px"></div>
+    <div class="note" id="impNote"></div>
+    <div class="actions"><button id="impCancel">Cancel</button><button id="impOk" class="on">Import</button></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+// ===== MIA CHR/palette format =====
+// 8 CHR banks; each bank = 3 planes * 2048 B; plane = 256 tiles * 8 rows.
+// 3bpp index = p0|p1<<1|p2<<2. 1bpp (per-bank, CHR_1BPP_MASK): each plane is an
+// independent mono table; CHR_1BPP_PLANES picks the plane per layer. Bit 0 = leftmost.
+// Palette: 16 banks * 8 colors, little-endian RGB565.
+const GW = 8, GH = 8, TILES = 256, PLANE = TILES * GH, BANK = 3 * PLANE; // 2048, 6144
+const NBANKS = 8, CHR_TOTAL = NBANKS * BANK;                            // 49152
+const PAL_BANKS = 16, PAL_COLORS = 8;
+const CHECKER = 'repeating-conic-gradient(#222 0 25%, #444 0 50%) 50%/10px 10px';
+
+// ===== element refs =====
+const $ = id => document.getElementById(id);
+const overview = $('overview'), ovCtx = overview.getContext('2d');
+const editor = $('editor'), edCtx = editor.getContext('2d');
+const p1 = $('p1'), p2 = $('p2'), p4 = $('p4');
+const pl0 = $('pl0'), pl1 = $('pl1'), pl2 = $('pl2');
+const palGrid = $('palGrid'), colorInput = $('colorInput'), colorHex = $('colorHex'), palBankLbl = $('palBankLbl');
+const transChk = $('transChk'), undoBtn = $('undoBtn'), redoBtn = $('redoBtn'), nameInput = $('nameInput');
+const planeWrap = $('planeWrap'), planeSel = $('planeSel'), bankSel = $('bankSel');
+const mode1 = $('mode1'), mode3 = $('mode3'), ovWrap = $('ovWrap'), ovInfo = $('ovInfo');
+const tileInfo = $('tileInfo'), statusEl = $('status'), dirtyEl = $('dirty');
+const exportDd = $('exportDd'), importModal = $('importModal');
+const impBpp = $('impBpp'), impPlane = $('impPlane'), impBank = $('impBank');
+const impBlock = $('impBlock'), impBlockField = $('impBlockField'), impPlaneField = $('impPlaneField');
+const impSpread = $('impSpread'), impNote = $('impNote');
+
+// ===== state =====
+let chr = new Uint8Array(CHR_TOTAL);          // 8 banks
+let bankBpp = new Uint8Array(NBANKS);         // per-bank 1 | 3
+let bankPlane = new Uint8Array(NBANKS);       // per-bank view/edit plane (1bpp)
+let pal = new Uint16Array(PAL_BANKS * PAL_COLORS);
+let curBank = 0, selTile = 0, activePal = 0, currentInk = 1;
+let dirty = false, clipboard = null, pendingImport = null, colorBefore = 0;
+
+// ===== RGB565 helpers =====
+const to565 = (r, g, b) => ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+function css565(v) { const r = (v>>11)&31, g = (v>>5)&63, b = v&31;
+  return `rgb(${Math.round(r*255/31)},${Math.round(g*255/63)},${Math.round(b*255/31)})`; }
+const hex565 = v => '0x' + v.toString(16).toUpperCase().padStart(4, '0');
+function css565ToInput(v) { const r = Math.round(((v>>11)&31)*255/31), g = Math.round(((v>>5)&63)*255/63), b = Math.round((v&31)*255/31);
+  return '#' + [r,g,b].map(x => x.toString(16).padStart(2,'0')).join(''); }
+function inputTo565(h) { return to565(parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)); }
+const DEFAULT_COLORS = [[0,0,0],[255,255,255],[170,68,68],[136,238,238],[170,85,170],[85,170,85],[68,68,170],[238,238,136]];
+function loadDefaultPalettes() {
+  for (let b = 0; b < PAL_BANKS; b++) for (let i = 0; i < PAL_COLORS; i++) pal[b*PAL_COLORS+i] = to565(...DEFAULT_COLORS[i]);
+}
+
+// ===== pixel access (bit 0 = leftmost) =====
+const planeBit = (b, p, t, x, y) => (chr[b*BANK + p*PLANE + t*GH + y] >> x) & 1;
+function setPlaneBit(b, p, t, x, y, v) { const i = b*BANK + p*PLANE + t*GH + y; if (v) chr[i] |= (1<<x); else chr[i] &= ~(1<<x); }
+function pixelIndex(b, t, x, y) {
+  if (bankBpp[b] === 1) return planeBit(b, bankPlane[b], t, x, y);
+  return planeBit(b,0,t,x,y) | (planeBit(b,1,t,x,y)<<1) | (planeBit(b,2,t,x,y)<<2);
+}
+function setPixelIndex(b, t, x, y, idx) {
+  if (bankBpp[b] === 1) { setPlaneBit(b, bankPlane[b], t, x, y, idx > 0 ? 1 : 0); return; }
+  setPlaneBit(b,0,t,x,y, idx&1); setPlaneBit(b,1,t,x,y,(idx>>1)&1); setPlaneBit(b,2,t,x,y,(idx>>2)&1);
+}
+function getTile(b, t) { const o = new Uint8Array(24);
+  for (let p = 0; p < 3; p++) for (let y = 0; y < GH; y++) o[p*GH+y] = chr[b*BANK + p*PLANE + t*GH + y]; return o; }
+function setTile(b, t, a) { for (let p = 0; p < 3; p++) for (let y = 0; y < GH; y++) chr[b*BANK + p*PLANE + t*GH + y] = a[p*GH+y]; }
+
+// ===== history =====
+let undoStack = [], redoStack = [];
+function pushHistory(undo, redo, where) { undoStack.push({undo, redo, where}); redoStack.length = 0;
+  if (undoStack.length > 600) undoStack.shift(); markDirty(); refreshUndo(); }
+function applyEntry(e) { if (e.where) { curBank = e.where.b; selTile = e.where.t; } redrawAll(); markDirty(); refreshUndo(); }
+function doUndo() { const e = undoStack.pop(); if (!e) return; e.undo(); redoStack.push(e); applyEntry(e); }
+function doRedo() { const e = redoStack.pop(); if (!e) return; e.redo(); undoStack.push(e); applyEntry(e); }
+function refreshUndo() { undoBtn.disabled = !undoStack.length; redoBtn.disabled = !redoStack.length; }
+
+// ===== rendering =====
+const indexCss = idx => css565(pal[activePal*PAL_COLORS + idx]);
+function paintCell(ctx, px, py, size, idx) {
+  if (transChk.checked && idx === 0) {
+    const h = size/2; ctx.fillStyle = '#111'; ctx.fillRect(px,py,size,size);
+    ctx.fillStyle = '#333'; ctx.fillRect(px,py,h,h); ctx.fillRect(px+h,py+h,h,h);
+  } else { ctx.fillStyle = indexCss(idx); ctx.fillRect(px,py,size,size); }
+}
+const OV_COLS = 16, OV_SCALE = 2, OV_GAP = 3, OV_CELL = GW*OV_SCALE + OV_GAP, OV_ROWS = 16, OV_HDR = 18, OV_BANKGAP = 12;
+let bankY = new Array(NBANKS);  // y of each bank's tile grid top
+function layoutOverview() {
+  overview.width = OV_COLS*OV_CELL + 1;
+  let y = 0;
+  for (let b = 0; b < NBANKS; b++) { y += OV_HDR; bankY[b] = y; y += OV_ROWS*OV_CELL + OV_BANKGAP; }
+  overview.height = y;
+}
+function tileXY(b, t) { return [ (t%OV_COLS)*OV_CELL + 1, bankY[b] + ((t/OV_COLS)|0)*OV_CELL + 1 ]; }
+function drawOvTile(b, t) { const [ox,oy] = tileXY(b,t);
+  for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) paintCell(ovCtx, ox+x*OV_SCALE, oy+y*OV_SCALE, OV_SCALE, pixelIndex(b,t,x,y)); }
+function drawOverview() {
+  ovCtx.fillStyle = '#0a0806'; ovCtx.fillRect(0,0,overview.width,overview.height);
+  ovCtx.font = '11px monospace'; ovCtx.textBaseline = 'top';
+  for (let b = 0; b < NBANKS; b++) {
+    ovCtx.fillStyle = b === curBank ? getCss('--sel') : getCss('--text-dim');
+    ovCtx.fillText(`Bank ${b}  ·  ${bankBpp[b]===1 ? `1bpp · plane ${bankPlane[b]}` : '3bpp'}`, 2, bankY[b]-OV_HDR+3);
+    for (let t = 0; t < TILES; t++) drawOvTile(b, t);
+  }
+  // selection highlight
+  const [sx,sy] = tileXY(curBank, selTile);
+  ovCtx.strokeStyle = getCss('--sel'); ovCtx.lineWidth = 1.5;
+  ovCtx.strokeRect(sx-1+0.5, sy-1+0.5, OV_CELL, OV_CELL);
+}
+const ED_PX = 40;
+function drawEditor() {
+  for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) paintCell(edCtx, x*ED_PX, y*ED_PX, ED_PX, pixelIndex(curBank,selTile,x,y));
+  edCtx.strokeStyle = getCss('--grid'); edCtx.lineWidth = 1;
+  for (let i = 0; i <= GW; i++) {
+    edCtx.beginPath(); edCtx.moveTo(i*ED_PX+.5,0); edCtx.lineTo(i*ED_PX+.5,editor.height); edCtx.stroke();
+    edCtx.beginPath(); edCtx.moveTo(0,i*ED_PX+.5); edCtx.lineTo(editor.width,i*ED_PX+.5); edCtx.stroke();
+  }
+}
+function drawScaled(cv) { const c = cv.getContext('2d'), s = cv.width/GW;
+  for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) paintCell(c, x*s, y*s, s, pixelIndex(curBank,selTile,x,y)); }
+function drawPreviews() { drawScaled(p1); drawScaled(p2); drawScaled(p4); }
+function drawPlane(cv, plane) { const c = cv.getContext('2d'), s = cv.width/GW;
+  c.fillStyle = '#000'; c.fillRect(0,0,cv.width,cv.height); c.fillStyle = getCss('--ink');
+  for (let y = 0; y < GH; y++) for (let x = 0; x < GW; x++) if (planeBit(curBank,plane,selTile,x,y)) c.fillRect(x*s,y*s,s,s); }
+function drawPlanes() { drawPlane(pl0,0); drawPlane(pl1,1); drawPlane(pl2,2); }
+
+// ===== palette panel =====
+function buildPalette() {
+  palGrid.innerHTML = '';
+  for (let b = 0; b < PAL_BANKS; b++) {
+    const row = document.createElement('div'); row.className = 'palBankRow'; row.dataset.bank = b;
+    const name = document.createElement('span'); name.className = 'palBankName'; name.textContent = 'B' + b; row.appendChild(name);
+    for (let i = 0; i < PAL_COLORS; i++) {
+      const sw = document.createElement('div'); sw.className = 'sw'; sw.dataset.bank = b; sw.dataset.idx = i;
+      sw.title = `bank ${b} · index ${i}`; sw.addEventListener('click', () => selectSwatch(b, i)); row.appendChild(sw);
+    }
+    palGrid.appendChild(row);
+  }
+}
+function drawPalette() {
+  palGrid.querySelectorAll('.sw').forEach(sw => {
+    const b = +sw.dataset.bank, i = +sw.dataset.idx;
+    sw.style.background = (transChk.checked && i === 0) ? CHECKER : css565(pal[b*PAL_COLORS+i]);
+    sw.classList.toggle('sel', b === activePal && i === currentInk);
+  });
+  palGrid.querySelectorAll('.palBankRow').forEach(r => r.classList.toggle('active', +r.dataset.bank === activePal));
+  palBankLbl.textContent = `active bank ${activePal} · ink ${currentInk}`;
+  const v = pal[activePal*PAL_COLORS + currentInk];
+  colorInput.value = css565ToInput(v); colorHex.textContent = hex565(v);
+}
+function selectSwatch(b, i) { activePal = b; currentInk = i; colorBefore = pal[b*PAL_COLORS+i]; redrawAll(); }
+function pickInk(i) { selectSwatch(activePal, i); }
+
+// ===== info =====
+function drawInfo() {
+  const t = getTile(curBank, selTile);
+  const hex = p => Array.from(t.slice(p*GH, p*GH+GH)).map(b => b.toString(16).toUpperCase().padStart(2,'0')).join(' ');
+  tileInfo.innerHTML =
+    `Bank <b>${curBank}</b> · tile <b>${selTile}</b> (0x${selTile.toString(16).toUpperCase().padStart(2,'0')}) · `
+    + `<b>${bankBpp[curBank]}bpp</b>${bankBpp[curBank]===1?` · plane ${bankPlane[curBank]}`:''}<br>`
+    + `<span class="bytes">p0: ${hex(0)}<br>p1: ${hex(1)}<br>p2: ${hex(2)}</span>`;
+}
+
+// ===== transforms =====
+function transform(op) {
+  const before = getTile(curBank, selTile), b = curBank, t = selTile, max = bankBpp[b]===1 ? 1 : 7;
+  const px = []; for (let y=0;y<GH;y++){ px[y]=[]; for (let x=0;x<GW;x++) px[y][x]=pixelIndex(b,t,x,y); }
+  const out = px.map(r => r.slice());
+  switch (op) {
+    case 'clear':  for (let y=0;y<GH;y++) for (let x=0;x<GW;x++) out[y][x]=0; break;
+    case 'invert': for (let y=0;y<GH;y++) for (let x=0;x<GW;x++) out[y][x]=max-px[y][x]; break;
+    case 'fliph':  for (let y=0;y<GH;y++) for (let x=0;x<GW;x++) out[y][x]=px[y][GW-1-x]; break;
+    case 'flipv':  for (let y=0;y<GH;y++) for (let x=0;x<GW;x++) out[y][x]=px[GH-1-y][x]; break;
+    case 'left':   for (let y=0;y<GH;y++) for (let x=0;x<GW;x++) out[y][x]=px[y][(x+1)%GW]; break;
+    case 'right':  for (let y=0;y<GH;y++) for (let x=0;x<GW;x++) out[y][x]=px[y][(x+GW-1)%GW]; break;
+    case 'up':     for (let y=0;y<GH;y++) for (let x=0;x<GW;x++) out[y][x]=px[(y+1)%GH][x]; break;
+    case 'down':   for (let y=0;y<GH;y++) for (let x=0;x<GW;x++) out[y][x]=px[(y+GH-1)%GH][x]; break;
+    case 'copy':   clipboard = before.slice(); setStatus('Copied tile'); return;
+    case 'paste':  if (!clipboard) { setStatus('Clipboard empty'); return; }
+                   { const cp = clipboard.slice(); setTile(b, t, cp);
+                     pushHistory(() => setTile(b,t,before), () => setTile(b,t,cp), {b,t}); paintRedraw(); } return;
+  }
+  for (let y=0;y<GH;y++) for (let x=0;x<GW;x++) setPixelIndex(b,t,x,y,out[y][x]);
+  const after = getTile(b, t);
+  pushHistory(() => setTile(b,t,before), () => setTile(b,t,after), {b,t}); paintRedraw();
+}
+
+// ===== orchestration =====
+function paintRedraw() { drawEditor(); drawPreviews(); drawPlanes(); drawInfo(); drawOvTile(curBank, selTile); }
+function redrawAll() { layoutOverview(); drawOverview(); drawEditor(); drawPreviews(); drawPlanes(); drawInfo(); drawPalette(); syncControls(); }
+let ovPending = false;
+function scheduleOverview() { if (ovPending) return; ovPending = true; requestAnimationFrame(() => { ovPending = false; drawOverview(); }); }
+function selectTile(b, t, scroll) {
+  curBank = Math.max(0, Math.min(NBANKS-1, b)); selTile = Math.max(0, Math.min(TILES-1, t));
+  drawOverview(); drawEditor(); drawPreviews(); drawPlanes(); drawInfo(); syncControls();
+  if (scroll) { const top = bankY[curBank] + ((selTile/OV_COLS)|0)*OV_CELL, bot = top + OV_CELL;
+    if (top - OV_HDR < ovWrap.scrollTop) ovWrap.scrollTop = top - OV_HDR - 4;
+    else if (bot > ovWrap.scrollTop + ovWrap.clientHeight) ovWrap.scrollTop = bot - ovWrap.clientHeight + 4; }
+}
+function setMode(m) { bankBpp[curBank] = m; markDirty(); redrawAll(); }
+function syncControls() {
+  mode1.classList.toggle('on', bankBpp[curBank]===1); mode3.classList.toggle('on', bankBpp[curBank]===3);
+  planeWrap.style.display = bankBpp[curBank]===1 ? '' : 'none';
+  planeSel.value = bankPlane[curBank]; bankSel.value = curBank;
+  ovInfo.textContent = `· 8 banks · editing bank ${curBank} · ${bankBpp[curBank]===1?`1bpp plane ${bankPlane[curBank]}`:'3bpp'}`;
+}
+
+// ===== file ops =====
+const MAGIC1 = [0x4D,0x54,0x42,0x31]; // "MTB1" (legacy single bank)
+const MAGIC2 = [0x4D,0x54,0x42,0x32]; // "MTB2" (8 banks)
+function newProject() {
+  chr = new Uint8Array(CHR_TOTAL); bankBpp.fill(1); bankPlane.fill(0); loadDefaultPalettes();
+  curBank = 0; selTile = 0; activePal = 0; currentInk = 1; colorBefore = pal[1];
+  nameInput.value = 'tiles';
+  undoStack = []; redoStack = []; refreshUndo(); dirty = false; setDirtyLabel();
+  redrawAll(); setStatus('New project — 8 blank banks, all 1bpp. Pick a bank, set its mode, paint.');
+}
+function saveMtb() {
+  const total = 32 + CHR_TOTAL + PAL_BANKS*PAL_COLORS*2;
+  const buf = new Uint8Array(total), dv = new DataView(buf.buffer);
+  buf.set(MAGIC2, 0); buf[4] = 2; buf[5] = NBANKS; buf[6] = 1; // flags bit0 = palette present
+  for (let b = 0; b < NBANKS; b++) { buf[8+b] = bankBpp[b]; buf[16+b] = bankPlane[b]; }
+  buf.set(chr, 32);
+  let o = 32 + CHR_TOTAL;
+  for (let i = 0; i < pal.length; i++) { dv.setUint16(o, pal[i], true); o += 2; }
+  download(buf, fileName('.mtb')); dirty = false; setDirtyLabel(); setStatus(`Saved ${fileName('.mtb')} (${total} B, 8 banks)`);
+}
+function openMtb(buf, name) {
+  const u = new Uint8Array(buf), dv = new DataView(buf);
+  if (MAGIC2.every((m,i) => u[i] === m)) {                 // v2: 8 banks
+    const count = Math.min(NBANKS, u[5] || NBANKS), hasPal = (u[6] & 1) !== 0;
+    bankBpp.fill(1); bankPlane.fill(0);
+    for (let b = 0; b < count; b++) { bankBpp[b] = u[8+b]===3?3:1; bankPlane[b] = u[16+b]<3?u[16+b]:0; }
+    chr = new Uint8Array(CHR_TOTAL); chr.set(u.subarray(32, 32 + Math.min(count*BANK, u.length-32)), 0);
+    loadDefaultPalettes();
+    let o = 32 + count*BANK;
+    if (hasPal) for (let i = 0; i < pal.length && o+1 < u.length; i++) { pal[i] = dv.getUint16(o, true); o += 2; }
+  } else if (MAGIC1.every((m,i) => u[i] === m)) {          // v1: single bank -> bank 0
+    chr = new Uint8Array(CHR_TOTAL); bankBpp.fill(1); bankPlane.fill(0);
+    const bpp = u[5]===3?3:1, tc = Math.min(TILES, dv.getUint16(10, true) || TILES);
+    bankBpp[0] = bpp; bankPlane[0] = (bpp===1 && u[7]<3) ? u[7] : 0;
+    let o = 16;
+    for (const p of (bpp===3 ? [0,1,2] : [bankPlane[0]])) { chr.set(u.subarray(o, o + tc*GH), p*PLANE); o += tc*GH; }
+    loadDefaultPalettes();
+    if ((u[13] & 1)) for (let i = 0; i < pal.length && o+1 < u.length; i++) { pal[i] = dv.getUint16(o, true); o += 2; }
+  } else { alert('Not an MTB file.'); return; }
+  curBank = 0; selTile = 0; currentInk = 1; activePal = 0; colorBefore = pal[1];
+  if (name) setNameFromFile(name);
+  undoStack = []; redoStack = []; refreshUndo(); dirty = false; setDirtyLabel(); redrawAll(); setStatus('Opened .mtb');
+}
+function exportCHR() {
+  const base = curBank*BANK;
+  const out = bankBpp[curBank]===3 ? chr.slice(base, base+BANK)
+            : chr.slice(base + bankPlane[curBank]*PLANE, base + bankPlane[curBank]*PLANE + PLANE);
+  const sfx = bankBpp[curBank]===3 ? `.bank${curBank}.chr.bin` : `.bank${curBank}.plane${bankPlane[curBank]}.bin`;
+  download(out, fileName(sfx)); setStatus(`Exported ${fileName(sfx)} (${out.length} B).`);
+}
+function exportCHRall() { download(chr.slice(0, CHR_TOTAL), fileName('.chr-all.bin')); setStatus('Exported all 8 CHR banks (49152 B).'); }
+function exportPal() {
+  const out = new Uint8Array(PAL_BANKS*PAL_COLORS*2), dv = new DataView(out.buffer);
+  for (let i = 0; i < pal.length; i++) dv.setUint16(i*2, pal[i], true);
+  download(out, fileName('.palette.bin')); setStatus('Exported palette (256 B, 16 banks × 8 RGB565).');
+}
+function openImportModal(buf, name) { pendingImport = buf; if (name) setNameFromFile(name);
+  impBank.value = curBank; impBlock.value = 0; updateImportNote(); importModal.classList.add('show'); }
+function updateImportNote() {
+  if (!pendingImport) return;
+  const size = pendingImport.byteLength, b = +impBpp.value, blockBytes = b===3 ? BANK : PLANE;
+  const blocks = Math.max(1, Math.ceil(size/blockBytes));
+  impPlaneField.style.display = b===3 ? 'none' : '';
+  impBlockField.style.display = impSpread.checked ? 'none' : '';
+  impNote.innerHTML = `File <b>${size} B</b> · as ${b}bpp → block size ${blockBytes} B · ${blocks} block(s)`
+    + (impSpread.checked ? `, loaded into banks ${+impBank.value}…${Math.min(7,+impBank.value+blocks-1)}.` : ` (pick 0–${blocks-1}).`);
+}
+function applyImport() {
+  const u = new Uint8Array(pendingImport), b = +impBpp.value, blockBytes = b===3 ? BANK : PLANE;
+  const start = +impBank.value, plane = +impPlane.value;
+  chr = new Uint8Array(CHR_TOTAL); bankBpp.fill(1); bankPlane.fill(0);
+  const loadBlock = (destBank, off) => {
+    if (b === 3) { chr.set(u.subarray(off, off + Math.min(BANK, u.length-off)), destBank*BANK); bankBpp[destBank] = 3; }
+    else { const n = Math.min(PLANE, u.length-off); chr.set(u.subarray(off, off+n), destBank*BANK + plane*PLANE);
+           bankBpp[destBank] = 1; bankPlane[destBank] = plane; }
+  };
+  if (impSpread.checked) {
+    let bk = start;
+    for (let off = 0; off < u.length && bk < NBANKS; off += blockBytes) loadBlock(bk++, off);
+  } else {
+    const off = Math.max(0, +impBlock.value|0) * blockBytes;
+    if (off >= u.length) { alert('Block out of range.'); return; }
+    loadBlock(start, off);
+  }
+  loadDefaultPalettes(); curBank = start; selTile = 0; currentInk = 1; activePal = 0; colorBefore = pal[1];
+  undoStack = []; redoStack = []; refreshUndo(); importModal.classList.remove('show'); pendingImport = null;
+  markDirty(); redrawAll(); setStatus(`Imported raw as ${b}bpp starting at bank ${start}.`);
+}
+
+// ===== helpers =====
+function getCss(v) { return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+function setStatus(s) { statusEl.textContent = s; }
+function markDirty() { dirty = true; setDirtyLabel(); }
+function setDirtyLabel() { dirtyEl.className = dirty ? 'dirty' : ''; dirtyEl.textContent = dirty ? '● unsaved changes' : ''; }
+function download(bytes, name) { const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([bytes], {type:'application/octet-stream'})); a.download = name; a.click(); URL.revokeObjectURL(a.href); }
+function readFile(file, cb) { const r = new FileReader(); r.onload = () => cb(r.result); r.readAsArrayBuffer(file); }
+function baseName() { return (nameInput.value.trim() || 'tiles').replace(/[^\w.\-]+/g, '_'); }
+function fileName(suffix) { return baseName() + suffix; }
+function setNameFromFile(name) { nameInput.value = (name || '').replace(/\.[^/.]+$/, '') || 'tiles'; }
+
+// ===== editor painting =====
+let painting = false, paintVal = 1, strokeBefore = null;
+function edXY(e) { const r = editor.getBoundingClientRect();
+  return [Math.floor((e.clientX-r.left)/(r.width/GW)), Math.floor((e.clientY-r.top)/(r.height/GH))]; }
+
+// ===== wiring =====
+for (let i = 0; i < NBANKS; i++) { bankSel.add(new Option(`${i}`, i)); impBank.add(new Option(`${i}`, i)); }
+
+overview.addEventListener('click', e => {
+  const r = overview.getBoundingClientRect(), x = e.clientX-r.left, y = e.clientY-r.top;
+  const col = Math.floor(x/OV_CELL); if (col < 0 || col >= OV_COLS) return;
+  for (let b = 0; b < NBANKS; b++) {
+    const top = bankY[b], h = OV_ROWS*OV_CELL;
+    if (y >= top && y < top + h) { const row = Math.floor((y-top)/OV_CELL); selectTile(b, row*OV_COLS+col, false); return; }
+  }
+});
+editor.addEventListener('pointerdown', e => {
+  e.preventDefault(); const [x,y] = edXY(e); if (x<0||x>=GW||y<0||y>=GH) return;
+  editor.setPointerCapture(e.pointerId); painting = true; strokeBefore = getTile(curBank, selTile);
+  paintVal = (e.button === 2) ? 0 : currentInk; setPixelIndex(curBank,selTile,x,y,paintVal); paintRedraw();
+});
+editor.addEventListener('pointermove', e => {
+  if (!painting) return; const [x,y] = edXY(e); if (x<0||x>=GW||y<0||y>=GH) return;
+  const iv = bankBpp[curBank]===1 ? (paintVal>0?1:0) : paintVal;
+  if (pixelIndex(curBank,selTile,x,y) !== iv) { setPixelIndex(curBank,selTile,x,y,paintVal); paintRedraw(); }
+});
+function endStroke() {
+  if (!painting) return; painting = false;
+  const before = strokeBefore, after = getTile(curBank, selTile), b = curBank, t = selTile;
+  if (before.every((v,i) => v === after[i])) return;
+  pushHistory(() => setTile(b,t,before), () => setTile(b,t,after), {b,t});
+}
+editor.addEventListener('pointerup', endStroke);
+editor.addEventListener('pointercancel', endStroke);
+editor.addEventListener('contextmenu', e => e.preventDefault());
+
+colorInput.addEventListener('input', () => {            // live preview, no history
+  pal[activePal*PAL_COLORS + currentInk] = inputTo565(colorInput.value);
+  drawEditor(); drawPreviews(); drawPlanes(); drawPalette(); scheduleOverview();
+});
+colorInput.addEventListener('change', () => {           // commit -> one history step
+  const idx = activePal*PAL_COLORS + currentInk, before = colorBefore, after = pal[idx];
+  if (before !== after) pushHistory(() => { pal[idx] = before; }, () => { pal[idx] = after; });
+  colorBefore = after;
+});
+
+$('newBtn').onclick = () => { if (!dirty || confirm('Discard unsaved changes?')) newProject(); };
+$('saveBtn').onclick = saveMtb;
+$('openInput').onchange = e => { const f = e.target.files[0]; if (f) readFile(f, buf => openMtb(buf, f.name)); e.target.value=''; };
+$('importInput').onchange = e => { const f = e.target.files[0]; if (f) readFile(f, buf => openImportModal(buf, f.name)); e.target.value=''; };
+$('exportBtn').onclick = () => exportDd.classList.toggle('open');
+document.querySelectorAll('[data-exp]').forEach(btn => btn.onclick = () => {
+  exportDd.classList.remove('open');
+  ({ chr: exportCHR, chrall: exportCHRall, pal: exportPal })[btn.dataset.exp]();
+});
+document.addEventListener('click', e => { if (!exportDd.contains(e.target)) exportDd.classList.remove('open'); });
+undoBtn.onclick = doUndo; redoBtn.onclick = doRedo;
+mode1.onclick = () => setMode(1); mode3.onclick = () => setMode(3);
+planeSel.onchange = () => { bankPlane[curBank] = +planeSel.value; markDirty(); redrawAll(); };
+bankSel.onchange = () => { selectTile(+bankSel.value, selTile, true); };
+transChk.onchange = redrawAll;
+impBpp.onchange = updateImportNote; impBlock.oninput = updateImportNote; impSpread.onchange = updateImportNote; impBank.onchange = updateImportNote;
+$('impCancel').onclick = () => { importModal.classList.remove('show'); pendingImport = null; };
+$('impOk').onclick = applyImport;
+document.querySelectorAll('.toolbtns button').forEach(b => b.addEventListener('click', () => transform(b.dataset.op)));
+
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key.toLowerCase()==='z') { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
+  if (mod && e.key.toLowerCase()==='y') { e.preventDefault(); doRedo(); return; }
+  if (mod && e.key.toLowerCase()==='s') { e.preventDefault(); saveMtb(); return; }
+  if (mod && e.key.toLowerCase()==='c') { transform('copy'); return; }
+  if (mod && e.key.toLowerCase()==='v') { transform('paste'); return; }
+  if (e.key >= '0' && e.key <= '7') { pickInk(+e.key); return; }
+  switch (e.key) {
+    case 'ArrowLeft':  selectTile(curBank, selTile-1, true); e.preventDefault(); break;
+    case 'ArrowRight': selectTile(curBank, selTile+1, true); e.preventDefault(); break;
+    case 'ArrowUp':    selectTile(curBank, selTile-OV_COLS, true); e.preventDefault(); break;
+    case 'ArrowDown':  selectTile(curBank, selTile+OV_COLS, true); e.preventDefault(); break;
+  }
+});
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', e => { e.preventDefault(); const f = e.dataTransfer.files[0];
+  if (f) readFile(f, b => f.name.endsWith('.mtb') ? openMtb(b, f.name) : openImportModal(b, f.name)); });
+window.addEventListener('beforeunload', e => { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+// ===== boot =====
+buildPalette();
+newProject();
+</script>
+</body>
+</html>
