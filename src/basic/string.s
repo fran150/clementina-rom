@@ -128,7 +128,11 @@ L32B6:
         beq     LD399
         cmp     #$01
 .endif
+.ifdef STYLED_STRINGS
+        bne     L32_PROGRAM_LITERAL
+.else
         bne     PUTNEW
+.endif
 LD399:
         tya
         jsr     STRINI
@@ -158,10 +162,18 @@ LD399:
 @acopy:
         dey
         lda     (INDEX),y           ; EDIT_ATTR_BUF[offset + y]
+        tax
+        lda     (STRNG1),y          ; matching harvested character/tile
+        jsr     mark_raw_tile_attr
         sta     (FRESPC),y          ; attribute half byte y of the new string
         tya
         bne     @acopy
 @noattr:
+.endif
+.ifdef STYLED_STRINGS
+        jmp     PUTNEW
+L32_PROGRAM_LITERAL:
+        jsr     styled_program_literal_to_heap
 .endif
 
 ; ----------------------------------------------------------------------------
@@ -198,6 +210,165 @@ PUTEMP:
         inx
         stx     TEMPPT
         rts
+
+.ifdef STYLED_STRINGS
+; ----------------------------------------------------------------------------
+; styled_program_literal_to_heap
+;
+; Program-text literals normally leave FAC pointing directly into stored BASIC
+; text. Phase 6 sidecars give those literals an attribute run, so when STRLT2 is
+; evaluating a stored program line we find the matching sidecar record and
+; promote the literal into an ordinary heap string (chars followed by attrs).
+;
+; In:  STRNG1 = literal content pointer, STRNG2 = parser resume pointer,
+;      FAC = literal length and FAC+1/2 = STRNG1.
+; Out: If a sidecar record matches, FAC points to a new heap string whose attr
+;      half came from the sidecar. If not, FAC remains the original literal
+;      descriptor. STRNG2 is always restored for POINT.
+; ----------------------------------------------------------------------------
+styled_program_literal_to_heap:
+        lda     TXTTAB+1
+        bne     @scan
+        rts
+@scan:
+        lda     STRNG2+1
+        pha
+        lda     STRNG2
+        pha
+        lda     TXTTAB
+        sta     LOWTR
+        lda     TXTTAB+1
+        sta     LOWTR+1
+@line:
+        ldy     #$01
+        lda     (LOWTR),y
+        jeq     @not_found
+        sta     DEST+1
+        dey
+        lda     (LOWTR),y
+        sta     DEST
+        lda     STRNG1+1
+        cmp     DEST+1
+        bcc     @maybe_line
+        bne     @advance
+        lda     STRNG1
+        cmp     DEST
+        bcc     @maybe_line
+@advance:
+        lda     DEST
+        sta     LOWTR
+        lda     DEST+1
+        sta     LOWTR+1
+        jmp     @line
+@maybe_line:
+        lda     LOWTR
+        clc
+        adc     #$04
+        sta     INDEX
+        lda     LOWTR+1
+        adc     #$00
+        sta     INDEX+1
+        lda     STRNG1+1
+        cmp     INDEX+1
+        jcc     @not_found
+        bne     @line_found
+        lda     STRNG1
+        cmp     INDEX
+        jcc     @not_found
+@line_found:
+        lda     STRNG1
+        sec
+        sbc     INDEX
+        sta     EOLPNTR          ; literal_offset within tokenized text
+        ldy     #$04
+@find_end:
+        iny
+        lda     (LOWTR),y
+        bne     @find_end
+        iny                     ; Y = sidecar offset within the stored line
+        tya
+        clc
+        adc     LOWTR
+        sta     DEST
+        lda     LOWTR+1
+        adc     #$00
+        sta     DEST+1
+        ldy     #$00
+        lda     (DEST),y
+        cmp     #STYLE_SIDE_MAGIC0
+        bne     @not_found
+        iny
+        lda     (DEST),y
+        cmp     #STYLE_SIDE_MAGIC1
+        bne     @not_found
+        ldy     #$03
+        lda     (DEST),y
+        sta     TEMP1
+        beq     @not_found
+        iny
+@record:
+        sty     TEMP2
+        lda     (DEST),y
+        cmp     EOLPNTR
+        bne     @skip_record
+        iny
+        lda     (DEST),y
+        cmp     FAC
+        beq     @copy_literal
+@skip_record:
+        ldy     TEMP2
+        iny
+        lda     (DEST),y
+        clc
+        adc     TEMP2
+        clc
+        adc     #$02
+        tay
+        dec     TEMP1
+        bne     @record
+        beq     @not_found
+@copy_literal:
+        iny                     ; first attribute byte in the matched record
+        tya
+        clc
+        adc     DEST
+        tax
+        lda     DEST+1
+        adc     #$00
+        pha
+        txa
+        pha
+        lda     FAC
+        jsr     STRINI
+        ldx     STRNG1
+        ldy     STRNG1+1
+        lda     FAC
+        jsr     MOVSTR
+        pla
+        sta     INDEX
+        pla
+        sta     INDEX+1
+        ldy     FAC
+        beq     @restore
+@attr_loop:
+        dey
+        lda     (INDEX),y
+        sta     (FRESPC),y
+        tya
+        bne     @attr_loop
+@restore:
+        pla
+        sta     STRNG2
+        pla
+        sta     STRNG2+1
+        rts
+@not_found:
+        pla
+        sta     STRNG2
+        pla
+        sta     STRNG2+1
+        rts
+.endif
 
 ; ----------------------------------------------------------------------------
 ; MAKE SPACE FOR STRING AT BOTTOM OF STRING SPACE
@@ -245,7 +416,7 @@ L3306:
 L3311:
         ldx     #ERR_MEMFULL
         lda     DATAFLG
-        bmi     JERR
+        jmi     JERR
         jsr     GARBAG
         lda     #$80
         sta     DATAFLG
@@ -1045,4 +1216,3 @@ POINT:
         stx     TXTPTR
         sty     TXTPTR+1
         rts
-

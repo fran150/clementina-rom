@@ -278,7 +278,7 @@ STRPRT:
         ; its attribute half) survive, so STRPRT_STYLED classifies the data ptr
         ; against this pre-free bound (DEST) rather than the now-raised FRETOP -
         ; otherwise a styled temp (e.g. PRINT A$+B$ or PRINT LEFT$(A$,3)) would
-        ; misclassify as a literal and print at DEFAULT_ATTR. FRETOP is valid
+        ; misclassify as a literal and print at BASIC_DEFAULT_ATTR. FRETOP is valid
         ; this early (set to MEMSIZ at init) where STREND is not. See §5.
         lda     FRETOP
         sta     DEST

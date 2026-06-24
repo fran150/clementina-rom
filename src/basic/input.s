@@ -388,6 +388,23 @@ FINDATA:
         iny
         tax
         bne     L2B7C
+.ifdef STYLED_STRINGS
+        dey
+        jsr     ADDON           ; TXTPTR -> current line's $00 terminator
+        jsr     SKIP_TXTPTR_SIDECAR
+        ldy     #$02            ; TXTPTR is one byte before the next line
+        ldx     #ERR_NODATA
+        lda     (TXTPTR),y
+        beq     GERR
+        iny
+        lda     (TXTPTR),y
+        sta     Z8C
+        iny
+        lda     (TXTPTR),y
+        iny
+        sta     Z8C+1
+        jmp     L2B7C
+.else
         ldx     #ERR_NODATA
         iny
         lda     (TXTPTR),y
@@ -399,6 +416,7 @@ FINDATA:
         lda     (TXTPTR),y
         iny
         sta     Z8C+1
+.endif
 L2B7C:
         lda     (TXTPTR),y
         tax

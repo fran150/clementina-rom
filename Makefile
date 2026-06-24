@@ -18,6 +18,9 @@ KERNEL_SRC := $(KERNEL_DIR)/kernel.s
 KERNEL_CFG := $(KERNEL_DIR)/clementina.cfg
 KERNEL_BIN := $(BUILD_DIR)/kernel.bin
 BASIC_SRC  := $(BASIC_DIR)/msbasic.s
+# MIA loads the image at $0400 and BASIC RAM starts at RAMSTART2=$3400
+# (src/basic/defines_clementina.s), so the binary must fit below $3400.
+MAX_KERNEL_BYTES := 12288
 
 # Destinations for the kernel image. Override on the command line if your
 # checkouts live elsewhere, e.g.  make install MIA_DIR=... EMU_DIR=...
@@ -36,6 +39,10 @@ $(KERNEL_BIN): $(KERNEL_DIR)/*.s $(KERNEL_DIR)/kernel.inc $(KERNEL_CFG) $(BASIC_
 	$(CA65) --cpu $(CPU) -g -l $(BUILD_DIR)/kernel.lst -o $(BUILD_DIR)/kernel.o $(KERNEL_SRC)
 	$(CA65) --cpu $(CPU) -D clementina -g -l $(BUILD_DIR)/basic.lst -o $(BUILD_DIR)/basic.o $(BASIC_SRC)
 	$(LD65) -C $(KERNEL_CFG) -m $(BUILD_DIR)/kernel.map -Ln $(BUILD_DIR)/kernel.lbl -o $@ $(BUILD_DIR)/kernel.o $(BUILD_DIR)/basic.o
+	@if [ $$(wc -c < $@) -gt $(MAX_KERNEL_BYTES) ]; then \
+		echo "ERROR: $@ overlaps BASIC RAMSTART2=\$$3400 ($$(wc -c < $@) > $(MAX_KERNEL_BYTES) bytes)"; \
+		exit 1; \
+	fi
 	@echo "Built $@ ($$(wc -c < $@) bytes), loads at \$$0400"
 
 $(BUILD_DIR):

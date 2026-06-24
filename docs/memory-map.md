@@ -118,7 +118,7 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 | `$0325–$0374` | `EDIT_BUF` | 80 | Screen editor: the harvested logical line, doled to BASIC line input by `KERN_EDITKEY`. |
 | `$0375` | `EDIT_LEN` | 1 | Harvested length (trailing spaces trimmed). |
 | `$0376` | `EDIT_IDX` | 1 | Dole-out read index into `EDIT_BUF`. |
-| `$0377` | `EDIT_STATE` | 1 | `0` = editor idle; nonzero = doling a harvested line. |
+| `$0377` | `EDIT_STATE` | 1 | `0` = editor idle; nonzero = doling a harvested line. BASIC's line input uses this to distinguish the synthetic final CR from a raw `$0D` glyph tile in `EDIT_BUF`. |
 | `$0378` | `EDIT_START_X` | 1 | Cursor column where the current input began (past any prompt). |
 | `$0379` | `EDIT_START_Y` | 1 | Cursor row where the current input began. |
 | `$037A` | `EDIT_RS` | 1 | Harvest / shift scratch: logical-line start row. |
@@ -127,7 +127,14 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 | `$037D` | `EDIT_LL` | 1 | Insert/delete scratch: logical-line cell count (capped at two rows). |
 | `$037E` | `CURSOR_BLINK_ACTIVE` | 1 | Nonzero while `CHRIN` is polling and the Timer 1 IRQ handler may toggle the software cursor. |
 | `$037F` | `CURSOR_BLINK_COUNT` | 1 | VIA Timer 1 ticks remaining before the next cursor toggle. |
-| `$0380–$03FF` | — | | Free for future kernel state. |
+| `$0380–$03CF` | `EDIT_ATTR_BUF` | 80 | Screen editor: harvested per-cell attributes, parallel to `EDIT_BUF`. BASIC copies these into styled heap strings for direct/input-buffer literals. |
+| `$03D0` | `EDIT_MODE` | 1 | Phase 5 glyph mode (`0..2`), used by the editor to map typed `$20-$7E` to alternate tile ranges. |
+| `$03D1` | `EDIT_PAINT` | 1 | Nonzero while Paint mode is active. |
+| `$03D2` | `EDIT_CMD_PENDING` | 1 | Nonzero between `ESC` and its command key. |
+| `$03D3–$03FC` | `STYLE_SIDE_BUF` | 42 | BASIC tokenizer scratch for Phase 6 styled program-literal sidecars. Captures compact literal attribute records before appending them to the stored program line. `$03D3–$03D4` are also reused as a transient LIST line-pointer save. |
+| `$03FD` | `BASIC_DEFAULT_ATTR` | 1 | BASIC default output attribute set by `COLOR`, `FLIPX`, `FLIPY`, and `ALT`. |
+| `$03FE` | `BASIC_STYLE_MASK` | 1 | BASIC style override mask set by `STYLE n`, stored in overlay-attribute bit form (`$0F`, `$10`, `$20`, `$80`). |
+| `$03FF` | `STYLE_BASE_LEN` | 1 | BASIC tokenizer scratch: tokenized line length before any style sidecar is appended. |
 
 ---
 
@@ -151,7 +158,7 @@ freely. Anchored at the load base so `$0400` is also the reset entry.
 | `$041B` | `KERN_PRSTR` | `KPTR`→str | — | Print the `$00`-terminated string at `KPTR` (max 255 bytes). |
 | `$041E` | `KERN_LOAD` | — | — | Storage load. **Stub** (`RTS`) until the FAT layer lands. |
 | `$0421` | `KERN_SAVE` | — | — | Storage save. **Stub** (`RTS`). |
-| `$0424` | `KERN_EDITKEY` | — | `A`=char | Full-screen line editor. Runs the interactive editor (cursor moves, overtype, gap-closing backspace `$08` / delete `$7F`, insert `$94`) on the overlay, harvests the logical line under the cursor on RETURN, and returns it one byte at a time ending in CR. BASIC's `GETLN` uses this for line input; `GET` stays on `KERN_CHRIN`. |
+| `$0424` | `KERN_EDITKEY` | — | `A`=char | Full-screen line editor. Runs the interactive editor (cursor moves, overtype, gap-closing backspace `$08` / delete `$7F`, insert `$94`) on the overlay, harvests the logical line under the cursor on RETURN, and returns it one byte at a time followed by a synthetic final CR. BASIC's `GETLN` uses this for line input and treats bytes returned while `EDIT_STATE` is nonzero as raw source data; `GET` stays on `KERN_CHRIN`. |
 
 > When you add a kernel call, append a new `JMP` to the table in
 > `src/kernel/kernel.s`, add the `KERN_*` equate in `kernel.inc`, bump the
@@ -164,13 +171,12 @@ freely. Anchored at the load base so `$0400` is also the reset entry.
 
 Internal routines (`CODE` segment) and read-only data (`RODATA`). These
 addresses are **not** ABI; reach them only through the jump table. The current
-combined kernel+BASIC image is ~9.2 KiB. Notable internal routines:
+combined kernel+BASIC image is ~11.4 KiB. Notable internal routines:
 
-- `video_init` — load startup palettes, select MIA CHR bank `0` for the
-  overlay, mark bank `0` as 1bpp, set the blue backdrop, enable video output
-  and the overlay layer, then force a full refresh.
-- `video_load_palettes` — load palette banks `0-7`; palette `0` is the default
-  blue/white console palette and the others provide convenient text colors.
+- `video_init` — select MIA CHR bank `0` for the overlay, mark bank `0` as 1bpp,
+  set the blue backdrop, enable video output and the overlay layer, then force a
+  full refresh. Startup palette RGB data is seeded by MIA firmware/emulator video
+  initialization, not by the kernel.
 - `cursor_to_idxa` — bind the overlay index `$B8` to window A and set its
   current address (via CFG) to the cell for `CURSOR_X/Y`.
 - `cursor_attr_to_idxa` — bind the overlay attribute index `$B9` to window A
@@ -196,10 +202,11 @@ combined kernel+BASIC image is ~9.2 KiB. Notable internal routines:
 ## 8. BASIC free workspace (`end-of-image … $7FFF`)
 
 At runtime BASIC's program text, variables, arrays, and strings live between
-`TXTTAB` and `MEMSIZ`. Clementina currently sets `RAMSTART2 = $3000`, safely
+`TXTTAB` and `MEMSIZ`. Clementina currently sets `RAMSTART2 = $3400`, safely
 above the combined kernel+BASIC image, and caps `MEMSIZ` at `$8000` (the start
-of the banked Extended RAM window). The resulting span is what BASIC prints as
-**"bytes free"**.
+of the banked Extended RAM window). `make` fails if `build/kernel.bin` grows past
+the `$3400` boundary, because BASIC's cold-start RAM probe writes from
+`RAMSTART2` upward. The resulting span is what BASIC prints as **"bytes free"**.
 
 ---
 

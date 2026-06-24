@@ -120,6 +120,10 @@ NUMBERED_LINE:
         jsr     LINGET
         jsr     PARSE_INPUT_LINE
         sty     EOLPNTR
+.ifdef STYLED_STRINGS
+        sty     STYLE_BASE_LEN  ; base stored-line length before any sidecar
+        jsr     style_side_extend_eolpntr
+.endif
 .ifdef KBD
         jsr     FNDLIN2
         lda     JMPADRS+1
@@ -254,7 +258,11 @@ L23D6:
         ldy     STREND+1
         sta     VARTAB
         sty     VARTAB+1
+.ifdef STYLED_STRINGS
+        ldy     STYLE_BASE_LEN
+.else
         ldy     EOLPNTR
+.endif
         dey
 ; ---COPY LINE INTO PROGRAM-------
 L23E6:
@@ -262,6 +270,9 @@ L23E6:
         sta     (LOWTR),y
         dey
         bpl     L23E6
+.ifdef STYLED_STRINGS
+        jsr     style_side_copy_to_program
+.endif
 
 ; ----------------------------------------------------------------------------
 ; CLEAR ALL VARIABLES
@@ -293,6 +304,9 @@ L2405:
         lda     (INDEX),y
         bne     L2405
         iny
+.ifdef STYLED_STRINGS
+        jsr     style_skip_sidecar_at_index_y
+.endif
         tya
         adc     INDEX
         tax
@@ -317,12 +331,360 @@ RET3:
 		rts
 .endif
 
+.ifdef STYLED_STRINGS
+; ----------------------------------------------------------------------------
+; Program-line style sidecars
+;
+; While tokenizing a numbered line, quoted literal contents are copied from the
+; screen-edited input buffer to the tokenized output. At that moment X is still
+; the original input address (so EDIT_ATTR_BUF + (X-INPUTBUFFER) is the visible
+; style), and Y is the tokenized output position. We capture compact records in
+; STYLE_SIDE_BUF and append them after the stored line's $00 terminator:
+;
+;   magic0, magic1, total_len, record_count,
+;   literal_offset, literal_len, attr0..attrN-1, ...
+;
+; literal_offset is relative to INPUTBUFFER, i.e. the first tokenized-text byte
+; after the four-byte line header. total_len includes the four-byte sidecar
+; header. If the scratch buffer overflows, the line is stored unstyled.
+; ----------------------------------------------------------------------------
+style_side_init:
+        lda     #STYLE_SIDE_MAGIC0
+        sta     STYLE_SIDE_BUF
+        lda     #STYLE_SIDE_MAGIC1
+        sta     STYLE_SIDE_BUF+1
+        lda     #$04
+        sta     STYLE_SIDE_BUF+2
+        lda     #$00
+        sta     STYLE_SIDE_BUF+3
+        sta     STRNG1          ; current record offset in STYLE_SIDE_BUF
+        sta     STRNG1+1        ; 0=inactive, 1=active, $80=disabled
+        rts
+
+style_side_disable:
+        lda     #$00
+        sta     STYLE_SIDE_BUF+2
+        sta     STRNG1
+        lda     #$80
+        sta     STRNG1+1
+        rts
+
+style_side_begin_literal:
+        lda     STRNG1+1
+        bmi     @ret
+        lda     STYLE_SIDE_BUF+2
+        beq     @ret
+        cmp     #(STYLE_SIDE_BUF_SIZE-1)
+        bcs     @disable
+        sta     STRNG1
+        txa
+        pha
+        tya
+        pha
+        tya                     ; first content byte will be output at Y+1
+        sec
+        sbc     #$04            ; tokenized-text offset of first content byte
+        ldy     STYLE_SIDE_BUF+2
+        sta     STYLE_SIDE_BUF,y
+        iny
+        lda     #$00
+        sta     STYLE_SIDE_BUF,y
+        iny
+        sty     STYLE_SIDE_BUF+2
+        lda     #$01
+        sta     STRNG1+1
+        pla
+        tay
+        pla
+        tax
+        rts
+@disable:
+        jsr     style_side_disable
+@ret:
+        rts
+
+style_side_append_attr:
+        lda     STRNG1+1
+        cmp     #$01
+        bne     @ret
+        lda     STYLE_SIDE_BUF+2
+        cmp     #STYLE_SIDE_BUF_SIZE
+        bcs     @disable
+        txa
+        pha
+        tya
+        pha
+        ldy     STYLE_SIDE_BUF+2
+        txa
+        sec
+        sbc     #<INPUTBUFFER
+        tax
+        lda     INPUTBUFFER,x
+        pha
+        lda     EDIT_ATTR_BUF,x
+        tax
+        pla
+        jsr     mark_raw_tile_attr
+        sta     STYLE_SIDE_BUF,y
+        inc     STYLE_SIDE_BUF+2
+        ldy     STRNG1
+        iny
+        lda     STYLE_SIDE_BUF,y
+        clc
+        adc     #$01
+        sta     STYLE_SIDE_BUF,y
+        pla
+        tay
+        pla
+        tax
+        rts
+@disable:
+        jsr     style_side_disable
+@ret:
+        rts
+
+style_side_end_literal:
+        lda     STRNG1+1
+        cmp     #$01
+        bne     @ret
+        txa
+        pha
+        tya
+        pha
+        ldy     STRNG1
+        iny
+        lda     STYLE_SIDE_BUF,y
+        beq     @empty
+        inc     STYLE_SIDE_BUF+3
+        jmp     @clear
+@empty:
+        lda     STRNG1
+        sta     STYLE_SIDE_BUF+2
+@clear:
+        lda     #$00
+        sta     STRNG1+1
+        pla
+        tay
+        pla
+        tax
+@ret:
+        rts
+
+style_side_extend_eolpntr:
+        jsr     style_side_end_literal
+        lda     STYLE_SIDE_BUF+2
+        beq     @ret
+        lda     STYLE_SIDE_BUF+3
+        beq     @ret
+        lda     EOLPNTR
+        clc
+        adc     STYLE_SIDE_BUF+2
+        bcs     @memerr
+        sta     EOLPNTR
+@ret:
+        rts
+@memerr:
+        jmp     MEMERR
+
+style_side_copy_to_program:
+        lda     STYLE_SIDE_BUF+2
+        beq     @ret
+        lda     STYLE_SIDE_BUF+3
+        beq     @ret
+        lda     LOWTR
+        clc
+        adc     STYLE_BASE_LEN
+        sta     DEST
+        lda     LOWTR+1
+        adc     #$00
+        sta     DEST+1
+        ldx     STYLE_SIDE_BUF+2
+        ldy     #$00
+@loop:
+        lda     STYLE_SIDE_BUF,y
+        sta     (DEST),y
+        iny
+        dex
+        bne     @loop
+@ret:
+        rts
+
+style_skip_sidecar_at_index_y:
+        sty     STRNG2
+        lda     (INDEX),y
+        cmp     #STYLE_SIDE_MAGIC0
+        bne     @no
+        iny
+        lda     (INDEX),y
+        cmp     #STYLE_SIDE_MAGIC1
+        bne     @restore
+        iny
+        lda     (INDEX),y
+        clc
+        adc     STRNG2
+        tay
+        clc
+        rts
+@restore:
+        ldy     STRNG2
+@no:
+        clc
+        rts
+
+SKIP_TXTPTR_SIDECAR:
+        ldy     #$01
+        lda     (TXTPTR),y
+        cmp     #STYLE_SIDE_MAGIC0
+        bne     @ret
+        iny
+        lda     (TXTPTR),y
+        cmp     #STYLE_SIDE_MAGIC1
+        bne     @ret
+        iny
+        lda     (TXTPTR),y
+        clc
+        adc     TXTPTR
+        sta     TXTPTR
+        bcc     @ret
+        inc     TXTPTR+1
+@ret:
+        rts
+
+mark_raw_tile_attr:
+        cmp     #$20
+        bcc     @raw
+        cmp     #$7F
+        bcs     @raw
+        txa
+        rts
+@raw:
+        txa
+        ora     #STRING_RAW_TILE
+        rts
+
+list_style_init:
+        lda     #$00
+        sta     DATAFLG         ; LIST quote-state: 0=outside, $FF=inside literal
+        sta     INDEX
+        sta     INDEX+1
+        lda     BASIC_DEFAULT_ATTR
+        sta     TEXT_ATTR
+        ldy     #$04
+@find_end:
+        iny
+        lda     (LOWTRX),y
+        bne     @find_end
+        iny                     ; Y = optional sidecar offset within the line
+        tya
+        clc
+        adc     LOWTRX
+        sta     INDEX
+        lda     LOWTRX+1
+        adc     #$00
+        sta     INDEX+1
+        ldy     #$00
+        lda     (INDEX),y
+        cmp     #STYLE_SIDE_MAGIC0
+        bne     @clear
+        iny
+        lda     (INDEX),y
+        cmp     #STYLE_SIDE_MAGIC1
+        bne     @clear
+        ldy     #$03
+        lda     (INDEX),y
+        bne     @ret
+@clear:
+        lda     #$00
+        sta     INDEX
+        sta     INDEX+1
+@ret:
+        rts
+
+list_outdo_styled:
+        pha                     ; save char
+        cmp     #$22
+        beq     @quote
+        tya
+        pha                     ; save tokenized line offset
+        lda     DATAFLG
+        beq     @plain
+        lda     INDEX
+        ora     INDEX+1
+        beq     @plain
+        cpy     #$04
+        bcc     @plain
+        tya
+        sec
+        sbc     #$04
+        sta     EOLPNTR         ; literal offset within tokenized text
+        ldy     #$03
+        lda     (INDEX),y
+        sta     TEMP1           ; record count
+        beq     @plain
+        iny                     ; Y = first record offset
+@record:
+        sty     TEMP2           ; record start within the sidecar
+        lda     (INDEX),y
+        sta     DIMFLG          ; record literal_offset
+        lda     EOLPNTR
+        cmp     DIMFLG
+        bcc     @plain
+        sec
+        sbc     DIMFLG          ; A = offset within this literal if in range
+        iny
+        cmp     (INDEX),y       ; offset < literal_len?
+        bcc     @match
+        lda     (INDEX),y       ; next record = start + 2 + literal_len
+        clc
+        adc     TEMP2
+        clc
+        adc     #$02
+        tay
+        dec     TEMP1
+        bne     @record
+        beq     @plain
+@match:
+        clc
+        adc     TEMP2
+        clc
+        adc     #$02
+        tay
+        lda     (INDEX),y
+        jsr     set_effective_text_attr
+        pla
+        tay
+        pla
+        pha
+        jsr     styled_outc
+        lda     BASIC_DEFAULT_ATTR
+        sta     TEXT_ATTR
+        pla
+        rts
+@quote:
+        pla
+        jsr     OUTDO
+        pha
+        lda     DATAFLG
+        eor     #$FF
+        sta     DATAFLG
+        pla
+        rts
+@plain:
+        pla
+        tay
+        pla
+        jmp     OUTDO
+.endif
+
 .include "inline.s"
 
 ; ----------------------------------------------------------------------------
 ; TOKENIZE THE INPUT LINE
 ; ----------------------------------------------------------------------------
 PARSE_INPUT_LINE:
+.ifdef STYLED_STRINGS
+        jsr     style_side_init
+.endif
         ldx     TXTPTR
         ldy     #$04
         sty     DATAFLG
@@ -340,7 +702,11 @@ LC49E:
         beq     L24AC
         sta     ENDCHR
         cmp     #$22
+.ifdef STYLED_STRINGS
+        beq     L24D0_QUOTE
+.else
         beq     L24D0
+.endif
         bit     DATAFLG
         bvs     L24AC
         cmp     #$3F
@@ -414,12 +780,32 @@ L24C8:
         lda     INPUTBUFFERX,x
         beq     L24AC
         cmp     ENDCHR
+.ifdef STYLED_STRINGS
+        beq     L24C8_END
+.else
         beq     L24AC
+.endif
 L24D0:
         iny
         sta     INPUTBUFFER-5,y
+.ifdef STYLED_STRINGS
+        jsr     style_side_append_attr
+.endif
         inx
         bne     L24C8
+.ifdef STYLED_STRINGS
+L24D0_QUOTE:
+        iny
+        sta     INPUTBUFFER-5,y
+        inx
+        jsr     style_side_begin_literal
+        jmp     L24C8
+L24C8_END:
+        pha
+        jsr     style_side_end_literal
+        pla
+        jmp     L24AC
+.endif
 ; ----------------------------------------------------------------------------
 ; ADVANCE POINTER TO NEXT TOKEN NAME
 ; ----------------------------------------------------------------------------
@@ -736,13 +1122,36 @@ L25C1:
 ; ---LIST ONE LINE----------------
 L25C3:
         sty     FORPNT
+.ifdef STYLED_STRINGS
+        pha                     ; LINPRT can clobber LOWTRX via string output
+        txa
+        pha
+        lda     LOWTRX
+        sta     STYLE_SIDE_BUF
+        lda     LOWTRX+1
+        sta     STYLE_SIDE_BUF+1
+        pla
+        tax
+        pla
+.endif
         jsr     LINPRT
+.ifdef STYLED_STRINGS
+        lda     STYLE_SIDE_BUF
+        sta     LOWTRX
+        lda     STYLE_SIDE_BUF+1
+        sta     LOWTRX+1
+        jsr     list_style_init
+.endif
         lda     #$20
 L25CA:
         ldy     FORPNT
         and     #$7F
 L25CE:
+.ifdef STYLED_STRINGS
+        jsr     list_outdo_styled
+.else
         jsr     OUTDO
+.endif
 .ifdef CONFIG_DATAFLG
         cmp     #$22
         bne     LA519
@@ -783,6 +1192,10 @@ L25E5a:
         jmp     RESTART
 L25E8:
         bpl     L25CE
+.ifdef STYLED_STRINGS
+        bit     DATAFLG
+        bmi     L25CE           ; high tile inside quotes, not a BASIC token
+.endif
 .ifdef CONFIG_DATAFLG
         cmp     #$FF
         beq     L25CE
@@ -808,4 +1221,3 @@ L25FD:
         bmi     L25CA
         jsr     OUTDO
         bne     L25FD	; always
-

@@ -132,7 +132,6 @@ VIDX_BANK_SELECT    = $85      ; 5 bytes: bg, bg alt, overlay, overlay alt, spri
 VIDX_CHR_1BPP       = $86      ; 2 bytes: CHR_1BPP_MASK, CHR_1BPP_PLANES
 VIDX_BACKDROP_COLOR = $87      ; 1 byte: palette/color selector
 VIDX_PALETTE_0      = $90      ; first of 16 palette-bank indexes
-PALETTE_COUNT       = 8        ; kernel loads palette banks 0-7
 VIDX_OVERLAY_NT     = $B8      ; overlay nametable, 1000 bytes @ $10080
 VIDX_OVERLAY_ATTR   = $B9      ; overlay attributes, 1000 bytes @ $10468
 
@@ -189,6 +188,7 @@ SCR_ROWS            = 25
 ; ----------------------------------------------------------------------------
 CHR_BS              = $08      ; backspace: cursor left one cell and erase
 CHR_LF              = $0A      ; line feed: ignored (CR does the newline)
+CHR_ESC             = $1B      ; editor: ESC command prefix (Phase 5 styling)
 CHR_FF              = $0C      ; form feed: clear screen and home
 CHR_CR              = $0D      ; carriage return: newline
 CHR_CRSR_DOWN       = $11      ; cursor down one row
@@ -217,6 +217,7 @@ KERN_PRSTR         = KERN_BASE + $1B   ; print $00-terminated string at (KPTR)
 KERN_LOAD          = KERN_BASE + $1E   ; load (stub for now)
 KERN_SAVE          = KERN_BASE + $21   ; save (stub for now)
 KERN_EDITKEY       = KERN_BASE + $24   ; screen editor: next char of edited line
+KERN_CHROUT_GLYPH  = KERN_BASE + $27   ; A = tile -> console as a raw glyph (no ctrl)
 
 ; ----------------------------------------------------------------------------
 ; Kernel variable page ($0300-$03FF). See docs/memory-map.md.
@@ -261,7 +262,27 @@ CURSOR_BLINK_COUNT  = KVARS + $7F  ; ticks until the next cursor toggle
 ; strings, see docs/styled-strings.md). EDIT_ATTR_BUF[k] is the attribute of
 ; EDIT_BUF[k], which BASIC's INLIN stores 1:1 at INPUTBUFFER[k]. 80 bytes.
 EDIT_ATTR_BUF       = KVARS + $80   ; $0380-$03CF
-; Last used kernel variable byte is EDIT_ATTR_BUF+79 ($03CF); $03D0-$03FF free.
 
-; Cursor glyph printed into the overlay while waiting for input.
-CURSOR_TILE        = '_'
+; Phase 5 editor styling state (charset/keyboard glyph entry; see
+; docs/phase5-charset-keyboard.md). Lives in the free KVARS tail $03D0-$03FF.
+EDIT_MODE          = KVARS + $D0   ; glyph mode 0/1/2: tile = (ascii + mode*$60)
+EDIT_PAINT         = KVARS + $D1   ; nonzero while Paint mode (format brush) active
+EDIT_CMD_PENDING   = KVARS + $D2   ; nonzero between ESC and its command key
+BASIC_DEFAULT_ATTR = KVARS + $FD   ; BASIC default output attr (COLOR/FLIPX/FLIPY/ALT)
+BASIC_STYLE_MASK   = KVARS + $FE   ; BASIC style override mask in overlay attr bits
+STYLE_SIDE_BUF     = KVARS + $D3   ; BASIC tokenizer sidecar scratch ($03D3-$03FC)
+STYLE_SIDE_BUF_SIZE = $2A
+STYLE_BASE_LEN     = KVARS + $FF   ; stored-line base len ($03FF)
+; Last used kernel/shared variable byte is STYLE_BASE_LEN ($03FF).
+
+; Cursor indicator tiles: the blinking cursor previews the editor's glyph mode,
+; pen, and command state (Phase 5, §4.6). The charset author draws bespoke art at
+; $F8-$FF; reverse uses a glyph swap (not CHR_ALT) so the solid mode-0 square
+; doesn't blank out on blink.
+CUR_TILE_PENDING   = $F8           ; ESC pressed, command pending
+CUR_TILE_PAINT     = $F9           ; Paint mode active
+CUR_TILE_MODE0     = $FA           ; glyph mode 0/1/2 (normal): CUR_TILE_MODE0 + mode
+CUR_TILE_RMODE0    = $FD           ; glyph mode 0/1/2 (reversed): CUR_TILE_RMODE0 + mode
+
+; Default cursor glyph (mode-0 indicator: a solid square).
+CURSOR_TILE        = CUR_TILE_MODE0

@@ -54,6 +54,13 @@
 .ifndef CONFIG_NO_POKE
 		keyword_rts "POKE", POKE
 .endif
+.ifdef CLEMENTINA
+		keyword_rts "COLOR", BASIC_COLOR
+		keyword_rts "FLIPX", BASIC_FLIPX
+		keyword_rts "FLIPY", BASIC_FLIPY
+		keyword_rts "ALT", BASIC_ALT
+		keyword_rts "STYLE", BASIC_STYLE
+.endif
 .ifdef CONFIG_FILE
 		keyword_rts "PRINT#", PRINTH
 .endif

@@ -109,6 +109,9 @@ LA5DC:
 .else
         bne     COLON; new: 1 cycle more on ":" case
 .endif
+.ifdef STYLED_STRINGS
+        jsr     SKIP_TXTPTR_SIDECAR
+.endif
         ldy     #$02
         lda     (TXTPTR),y
         clc

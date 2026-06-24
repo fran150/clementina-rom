@@ -1,7 +1,10 @@
 # Styled strings — per-character attributes in BASIC strings
 
-Status: **capture working end-to-end through Phase 4 — emulator-validated**
-(2026-06-23). Phases 0–4 + 1c done; next is Phase 5 (charset). Validated with
+Status: **styled strings working through Phase 6 program-literal sidecars —
+emulator-validated** (2026-06-24). Phases 0–5 and the initial Phase 6 sidecar,
+`LIST`, `$0D` raw-glyph, and `DATA`/`READ` paths are implemented; BASIC
+default/style-policy commands remain future work.
+Validated with
 `10 POKE 770,5 : 20 INPUT A$ : 30 PRINT A$ : 40 PRINT LEFT$(A$,3):PRINT "X"+A$`:
 typed `FRAN` echoed in palette 5, `LEFT$` kept the style, and `"X"+A$` rendered
 the literal `X` white (DEFAULT_ATTR) with `FRAN` still palette 5 — confirming
@@ -159,20 +162,118 @@ mirroring `STRLT2`'s existing input-buffer check (string.s:88-96).
 
 Programs that use no styling pay **nothing** — backward compatible.
 
-**Option B (deferred):** per-character styled literals typed into program lines.
-Requires storing the literal's attrs inside the tokenized program (a run-length
-blob next to the literal) and copying styled literals into the heap *with* their
-attrs when referenced (giving up the in-place optimization for styled literals
-only; plain literals keep the fast path). Touches the tokenizer, `LIST`,
-`SAVE`/`LOAD`. Not in the initial scope.
+**Phase 6 initial implementation:** per-character styled literals typed into
+program lines. Do **not** hide bytes inside quotes or inline the style data in
+the executable token stream. Keep the normal tokenized line intact through its
+`$00` terminator, then append a Clementina-only **style sidecar** before the next
+BASIC line:
 
-### 3.6 Present (PRINT) — no kernel change required
+```text
+[next lo][next hi][line lo][line hi][tokenized text...][$00]
+[$CE][$FF][sidecar_len][record_count]
+[literal_offset][literal_len][attr0][attr1]...[attrN-1]
+...
+```
 
-`STRPRT` (print.s:274) walks the chars. For each char `i`: write `attr(i)` to the
-kernel's global `TEXT_ATTR` (`$0302`), then `OUTDO` the char (kernel `chrout`
-paints char + current `TEXT_ATTR`). Restore the prior `TEXT_ATTR` after the
-string. For program-text literals (no attr half) just leave `TEXT_ATTR` at the
-default. This reuses the existing `chrout` path unchanged.
+`literal_offset` is the offset of the first literal character within the tokenized
+line text (not the opening quote), `literal_len` is the character count, and the
+following bytes are raw overlay attribute bytes. The tokenizer records every
+non-empty quoted literal while entering a numbered line; lines with no quoted
+literals have no sidecar. `$CE,$FF` is the magic marker: `$FF` is impossible as a
+next-line pointer high byte in Clementina's `$0000-$7FFF` base-RAM program area,
+so old/plain lines will not be misread as styled sidecars.
+
+Runtime rule: when `STRLIT`/`STRLT2` evaluates a program-text literal, look for a
+sidecar record covering that literal. If none exists, keep the current fast path:
+the descriptor points directly into program text and prints with the default
+attribute. If a record exists, allocate a normal styled heap string, copy the
+literal bytes into the char half, copy the sidecar attrs into the attr half, and
+return that temp. From that point onward, existing styled-string machinery
+(`PRINT`, assignment, `CAT`, `LEFT$`/`MID$`/`RIGHT$`) works unchanged.
+
+BASIC line input must not apply the old terminal-era printable-ASCII filter to
+Clementina editor harvests. `KERN_EDITKEY` already performs interactive editing
+and then doles raw overlay tile bytes from `EDIT_BUF`; `INLIN` stores those bytes
+verbatim, using `EDIT_STATE` only to distinguish a harvested `$0D` tile from the
+synthetic final RETURN. This is what lets glyph-mode tiles such as `$A1`, `$91`,
+`$0D`, or `$02` survive inside quoted program literals.
+
+Editor-harvested bytes outside printable ASCII (`<$20` or `>=$7F`) get
+`STRING_RAW_TILE` (`$40`) ORed into their string/sidecar attr byte. That bit is
+internal to BASIC string storage, reusing the currently unexposed overlay
+priority bit. `styled_outc` checks it to draw control-range tiles raw (including
+tile `$0D`) and masks it back out before writing `TEXT_ATTR`, so it never reaches
+the overlay attribute plane as priority. Minted strings (`CHR$`, `STR$`,
+numeric strings) keep `DEFAULT_ATTR`, so `CHR$(13)` still prints a newline.
+
+Any code that advances between program lines must skip the optional sidecar.
+`FIX_LINKS` and sequential execution line advance do this now; `LIST` follows the
+rebuilt next-line links and does not print sidecar bytes. `LIST` also renders
+quoted literals with their stored attrs, so listing and re-entering a program
+preserves visible style naturally through the existing screen harvest. Important
+implementation gotcha: `LIST` must preserve `LOWTRX` across `LINPRT` before
+scanning for the sidecar, because line-number formatting can clobber that scratch
+pointer via the string output path. `LIST` must also treat high bytes inside
+quotes as glyphs instead of BASIC tokens. `DATA`/`READ` scanning also skips
+sidecars when walking to the next DATA statement.
+
+### 3.6 Present (PRINT)
+
+`STRPRT` (print.s:274) walks the chars. For each char `i`, it combines the stored
+attr with the BASIC default/policy, writes the effective attr to the kernel's
+global `TEXT_ATTR` (`$0302`), then outputs the char. Program-text literals with no
+attr half use `BASIC_DEFAULT_ATTR`.
+
+The BASIC default/style policy distinguishes three concepts:
+
+- **Current pen** — the kernel/editor `TEXT_ATTR`; used for the cursor preview and
+  new typed/stamped cells. `PRINT` may temporarily use it while drawing chars.
+- **BASIC default attribute** — `BASIC_DEFAULT_ATTR` (`$03FD`); used for unstyled
+  BASIC output, startup/error/READY text,
+  unstyled literals, and default-filled heap strings. After styled output,
+  `TEXT_ATTR` is restored to this value rather than hardcoded white.
+- **Style policy mask** — `BASIC_STYLE_MASK` (`$03FE`). Effective output attr:
+
+```text
+effective = (stored_attr & ~override_mask) | (BASIC_DEFAULT_ATTR & override_mask)
+```
+
+`BASIC_STYLE_MASK = $00` means AUTO/use stored sidecar or heap attrs.
+`BASIC_STYLE_MASK = $BF` means override palette, flip-X, flip-Y, and CHR_ALT from
+`BASIC_DEFAULT_ATTR` while leaving the internal raw-tile bit 6 alone.
+
+User-facing commands:
+
+- `COLOR n` — set default palette color, `0-15`.
+- `FLIPX n` — set default flip-X off/on (`0` off, nonzero on).
+- `FLIPY n` — set default flip-Y off/on.
+- `ALT n` — set default CHR_ALT/reverse off/on.
+- `STYLE n` — set override policy as a bitmask: bit 0/color, bit 1/flip-X,
+  bit 2/flip-Y, bit 3/ALT. Bits set use `BASIC_DEFAULT_ATTR`; bits clear use the
+  string's stored attr. Examples: `STYLE 0` = AUTO, `STYLE 1` = override color
+  only, `STYLE 1 OR 8` = override color and ALT, `STYLE 15` = override all.
+  Values outside `0-15` raise `ILLEGAL QUANTITY`.
+
+Output depends on whether the string is a **heap** string (carries an attribute
+half — can hold Phase 5 graphic tile codes) or a program-text **literal/message**
+(no attr half, plain unstyled text):
+
+- **Literals/messages → plain `OUTDO`** (the pre-Phase-5 behavior). They contain
+  CR/LF formatting that `chrout` must interpret — message strings begin with a
+  CR+LF and the LF (`$0A`) must be *ignored*. Drawing those raw would stamp a blank
+  LF glyph at column 0 of every message line (the bug that shipped briefly).
+- **Heap strings → `styled_outc`.** Graphic tile codes `$80–$FF` (and mode-2 wraps
+  into `$00–$3E`) collide with `chrout`'s control codes (`$0D` CR,
+  `$11/$13/$1D/$91/$9D` cursor moves). Plain text `$20-$7E` goes through `OUTDO`
+  (keeps `Z14`/`POSX` bookkeeping). Untagged `$0D` remains newline (`OUTDO` +
+  `PRINTNULLS`, so `CHR$(13)` still breaks lines). Tagged control-range bytes and
+  all other non-plain bytes are drawn as **raw tiles** via
+  `MONCOUT_GLYPH → KERN_CHROUT_GLYPH` (`$0427`), advancing `POSX` one column and
+  honoring `Z14`.
+
+See [phase5-charset-keyboard.md §6.1](phase5-charset-keyboard.md). Remaining
+literal-storage limit: tile `$00` cannot be represented directly inside stored
+BASIC source text because `$00` terminates a tokenized line.
 
 ### 3.7 Capture (INPUT / screen editor)
 
@@ -184,7 +285,9 @@ Mechanism (Phase 4):
    bytes, in the free `$0380–$03FF` region). Same start cell, same count.
 2. **Alignment** — BASIC's `INLIN` stores the doled chars at `INPUTBUFFER,x`
    from `x = 0` (inline.s), and the editor doles `EDIT_BUF` from index 0, so
-   `EDIT_ATTR_BUF[k]` is the attribute of `INPUTBUFFER[k]`. No `INLIN` change.
+   `EDIT_ATTR_BUF[k]` is the attribute of `INPUTBUFFER[k]`. For Clementina,
+   `INLIN` trusts this already-edited stream and stores raw glyph bytes, including
+   high bytes and control-range tiles, instead of filtering to printable ASCII.
 3. **Route into the string** — the input-buffer→heap literal copy (`STRLT2`/
    `LD399`, taken when the literal lives in zero-page = the input buffer) copies,
    after the character `MOVSTR`, `N` attribute bytes from
@@ -195,21 +298,28 @@ Mechanism (Phase 4):
    are unaffected → still `DEFAULT_ATTR` (option B territory).
 
 Source of non-default attributes during typing: the kernel paints typed cells
-with the current `TEXT_ATTR`. Until a key-driven attribute selector exists
-(Phase 5), set it programmatically — `POKE 770,n` (770 = `$0302` = `TEXT_ATTR`).
-`READ`/`DATA` come from program text → `DEFAULT_ATTR`.
+with the current `TEXT_ATTR`. Phase 5 now sets that pen from the keyboard
+(`ESC 0–F` color, `ESC R/H/V` reverse/flip, `ESC P` Paint mode — see
+[phase5-charset-keyboard.md](phase5-charset-keyboard.md)); it can still be set
+programmatically with `POKE 770,n` (770 = `$0302` = `TEXT_ATTR`). `READ`/`DATA`
+come from program text → `DEFAULT_ATTR`.
 
 Test: `10 POKE 770,5` / `20 INPUT A$` / `30 PRINT A$`, RUN, type text → it should
 print back in palette 5 (the `?` prompt is drawn via `OUTDO`, which does not
 reset `TEXT_ATTR`, so the pen survives into the editor).
 
-### 3.8 Charset (parallel track)
+### 3.8 Charset (parallel track) — see Phase 5 spec
 
 Default 1bpp charset using **two banks**: bank 0 = regular glyphs, bank 1 =
-reversed (0/1 swapped) at the **same** positions. C64-style `SHIFT`/`COMMODORE`
-key combinations select glyphs. "Reverse" maps naturally onto the alternate-bank
-attribute bit (equivalently the high bit of the tile code, C64 screen-code
-style) and can be handled in `chrout`. Authoring via `tools/tile-editor.html`.
+reversed (0/1 swapped) at the **same** positions; "reverse" = the CHR_ALT
+attribute bit. **Superseded detail:** the original "C64 SHIFT/COMMODORE held
+combinations select glyphs" idea was dropped — held modifiers corrupt the FIFO
+byte (host composition/suppression), so glyph selection is instead done
+kernel-side via three *glyph modes* on clean ASCII, plus an ESC-prefix command
+layer for color/flip/reverse. Full design (input model, attribute bits, modes,
+commands, Paint mode, cursor indicators, charset tile map) is the authoritative
+[phase5-charset-keyboard.md](phase5-charset-keyboard.md). Authoring via
+`tools/tile-editor.html`.
 
 ---
 
@@ -224,7 +334,8 @@ style) and can be handled in `chrout`. Authoring via `tools/tile-editor.html`.
 | `src/kernel/editor.s` | harvest overlay attribute plane into `EDIT_ATTR_BUF` |
 | `src/kernel/console.s` | optional reverse-as-alt-bank in `chrout`; per-char `TEXT_ATTR` already supported |
 | `src/basic/defines_clementina.s` | `STYLED_STRINGS` flag, `DEFAULT_ATTR` |
-| charset assets + `tools/tile-editor.html` | two-bank 1bpp font + key combos |
+| charset assets + `tools/tile-editor.html` | two-bank 1bpp font + glyph-mode/ESC styling workflow |
+| Future Phase 6 | `program.s` tokenizer/LIST/line traversal, `string.s` literal evaluation, `clementina_extra.s`/`print.s` default/style policy, `defines_clementina.s` runtime defaults |
 
 **Untouched:** `LEN`, comparison, `ASC`, `VAL`, descriptor layout, 255 limit,
 variable/array storage.
@@ -253,13 +364,15 @@ variable/array storage.
 - Memory budget: styled strings cost 2× heap inside `$3000–$8000`. Option to
   relocate the attr half to banked Extended RAM (`$8000–$BFFF`) later — rejected
   for now due to bank-switch cost inside GC.
-- Option B (styled literals) tokenizer/LIST/SAVE format. Deferred.
+- Phase 6 styled program literals: sidecar format, line-skip helper, `LIST`
+  rendering, `$0D` raw-glyph disambiguation, and `DATA`/`READ` sidecar walking
+  are implemented. Remaining work: runtime default/style policy; see §3.5/§3.6.
 
 ---
 
 ## 6. Execution plan (phased)
 
-Status as of 2026-06-23. The emulator embeds `kernel.bin` at compile time, so
+Status as of 2026-06-24. The emulator embeds `kernel.bin` at compile time, so
 after `make install` the emulator must be **rebuilt** (`go run`), not just reset.
 
 - **Phase 0 — foundations — DONE.** This doc, plus `STYLED_STRINGS`,
@@ -293,9 +406,19 @@ after `make install` the emulator must be **rebuilt** (`go run`), not just reset
   copy (`LD399`, string.s) routes `N` attr bytes from
   `EDIT_ATTR_BUF + (STRNG1 − INPUTBUFFER)` into the new string's attr half (over
   the `DEFAULT_ATTR` fill). First point where styling originates from typing.
-- **Phase 5 — charset:** two-bank 1bpp font + C64-style key combos;
-  reverse-as-alt-bank in `chrout`.
-- **Phase 6 (optional) — option B styled literals.**
+- **Phase 5 — charset + keyboard glyph entry — PARTLY IMPLEMENTED
+  (2026-06-24).** Full spec in
+  [phase5-charset-keyboard.md](phase5-charset-keyboard.md):
+  256 glyphs in two banks (bank 0 normal, bank 1 reversed; reverse = CHR_ALT);
+  3 kernel-side glyph modes (`tile = (ascii + mode*$60) & $FF`); pen =
+  `TEXT_ATTR` bits (palette/flip-X/flip-Y/reverse); ESC-prefix command layer +
+  Paint mode; cursor = live pen preview (8 indicator tiles `$F8–$FF`). FIFO-only
+  and source-agnostic (WiFi/USB-host/console). 5a-5e are done; 5f (console ANSI
+  decoder) is deferred.
+- **Phase 6 — styled program literals + BASIC style defaults — IMPLEMENTED.**
+  Stores literal attrs in the program-line sidecar described in §3.5. Runtime
+  `BASIC_DEFAULT_ATTR` + `BASIC_STYLE_MASK` are controlled by `COLOR`, `FLIPX`,
+  `FLIPY`, `ALT`, and `STYLE n` (§3.6).
 
 Verification: `make` builds `build/kernel.bin`; `make install` copies it into the
 emulator asset; then rebuild the emulator (`go run`) to re-embed it.

@@ -50,6 +50,10 @@ edit_line:
         sta EDIT_START_Y
 @loop:
         jsr chrin               ; A = key (cursor shown while waiting, hidden on return)
+        ldx EDIT_PAINT
+        bne @paint              ; Paint mode: arrows move, SPACE stamps, ESC exits
+        cmp #CHR_ESC
+        beq @command            ; ESC: styling command prefix (Phase 5)
         cmp #CHR_CR
         beq @enter
         cmp #CHR_BS
@@ -58,7 +62,13 @@ edit_line:
         beq @del_fwd            ; delete: gap-closing delete at the cursor
         cmp #CHR_INSERT
         beq @insert             ; insert: open a gap at the cursor
-        jsr chrout              ; echo: draw / move / overtype directly on the overlay
+        jsr edit_echo           ; echo with glyph-mode offset, then draw via CHROUT
+        bra @loop
+@paint:
+        jsr edit_paint_key
+        bra @loop
+@command:
+        jsr edit_command
         bra @loop
 @del_left:
         jsr edit_delete_left
@@ -297,8 +307,10 @@ edit_line_setup:
         sta EDIT_CP
         rts
 
-; edit_read_line / edit_write_line - move EDIT_LL cells between the overlay run
-; (from row EDIT_RS, column 0) and EDIT_BUF, using $B8's read/write auto-step.
+; edit_read_line / edit_write_line - move EDIT_LL cells between the overlay
+; nametable run (from row EDIT_RS, column 0) and EDIT_BUF, using $B8's
+; read/write auto-step. edit_read_attrs / edit_write_attrs do the same for the
+; parallel attribute plane and EDIT_ATTR_BUF.
 edit_read_line:
         jsr edit_line_addr
         ldx EDIT_LL
@@ -323,11 +335,41 @@ edit_write_line:
         bne @w
         rts
 
+edit_read_attrs:
+        jsr edit_attr_line_addr
+        ldx EDIT_LL
+        ldy #$00
+@r:
+        lda IDXA_PORT
+        sta EDIT_ATTR_BUF,y
+        iny
+        dex
+        bne @r
+        rts
+
+edit_write_attrs:
+        jsr edit_attr_line_addr
+        ldx EDIT_LL
+        ldy #$00
+@w:
+        lda EDIT_ATTR_BUF,y
+        sta IDXA_PORT
+        iny
+        dex
+        bne @w
+        rts
+
 edit_line_addr:
         lda EDIT_RS
         sta KCNT
         stz KCNT+1
         jmp overlay_set_rc      ; $B8 -> overlay cell (EDIT_RS, 0)
+
+edit_attr_line_addr:
+        lda EDIT_RS
+        sta KCNT
+        stz KCNT+1
+        jmp overlay_set_rc_attr ; $B9 -> overlay attr cell (EDIT_RS, 0)
 
 ; edit_cursor_from_cp - place CURSOR_X/Y from EDIT_CP (linear pos, <= two rows).
 edit_cursor_from_cp:
@@ -359,19 +401,25 @@ edit_delete_left:
         cmp EDIT_LL
         bcs @done               ; out of range (cursor past two-row cap)
         jsr edit_read_line
+        jsr edit_read_attrs
         ldx EDIT_CP
         dex                     ; X = dest = cp-1
         ldy EDIT_CP             ; Y = src = cp
 @shift:
         lda EDIT_BUF,y
         sta EDIT_BUF,x
+        lda EDIT_ATTR_BUF,y
+        sta EDIT_ATTR_BUF,x
         inx
         iny
         cpy EDIT_LL
         bne @shift
         lda #' '
         sta EDIT_BUF,x          ; blank the freed last cell
+        lda TEXT_ATTR
+        sta EDIT_ATTR_BUF,x
         jsr edit_write_line
+        jsr edit_write_attrs
         dec EDIT_CP
         jsr edit_cursor_from_cp
 @done:
@@ -388,6 +436,7 @@ edit_delete_fwd:
         cmp EDIT_LL
         bcs @done
         jsr edit_read_line
+        jsr edit_read_attrs
         ldx EDIT_CP             ; X = dest = cp
         ldy EDIT_CP
         iny                     ; Y = src = cp+1
@@ -396,6 +445,8 @@ edit_delete_fwd:
 @shift:
         lda EDIT_BUF,y
         sta EDIT_BUF,x
+        lda EDIT_ATTR_BUF,y
+        sta EDIT_ATTR_BUF,x
         inx
         iny
         cpy EDIT_LL
@@ -403,7 +454,10 @@ edit_delete_fwd:
 @blank:
         lda #' '
         sta EDIT_BUF,x          ; blank the freed last cell
+        lda TEXT_ATTR
+        sta EDIT_ATTR_BUF,x
         jsr edit_write_line
+        jsr edit_write_attrs
 @done:
         rts
 
@@ -418,6 +472,7 @@ edit_insert:
         cmp EDIT_LL
         bcs @done
         jsr edit_read_line
+        jsr edit_read_attrs
         ldx EDIT_LL
         dex                     ; X = dest = LL-1 (work backward)
 @shift:
@@ -428,11 +483,183 @@ edit_insert:
         dey                     ; Y = src = X-1
         lda EDIT_BUF,y
         sta EDIT_BUF,x
+        lda EDIT_ATTR_BUF,y
+        sta EDIT_ATTR_BUF,x
         dex
         bra @shift
 @gap:
         lda #' '
         sta EDIT_BUF,x          ; blank at the cursor (X == cp)
+        lda TEXT_ATTR
+        sta EDIT_ATTR_BUF,x
         jsr edit_write_line
+        jsr edit_write_attrs
 @done:
         rts
+
+; ============================================================================
+; Phase 5 - glyph modes, ESC styling command layer, Paint mode.
+; See docs/phase5-charset-keyboard.md. All FIFO-only, so identical across the
+; WiFi / USB-host / console input sources.
+; ============================================================================
+
+; ----------------------------------------------------------------------------
+; edit_echo - echo a typed key (A = byte). Printable bytes ($20-$7E) get the
+; glyph-mode offset (tile = c + EDIT_MODE*$60, mod 256) so modes 1/2 reach the
+; high glyph banks, then draw via chrout_glyph as a raw tile - modes 1/2 produce
+; codes ($91/$9D/$0D/...) that plain chrout would treat as cursor moves / CR.
+; True control codes (cursor moves, HOME) pass through chrout unchanged.
+; ----------------------------------------------------------------------------
+edit_echo:
+        cmp #$20
+        bcc @ctrl               ; control code below the printable range
+        cmp #$7F
+        bcs @ctrl               ; $7F+ : not an offsettable printable
+        ldx EDIT_MODE
+        beq @glyph              ; mode 0 = identity
+@add:
+        clc
+        adc #$60                ; +$60 per mode step; 8-bit add wraps (mod 256)
+        dex
+        bne @add
+@glyph:
+        jmp chrout_glyph        ; draw the tile raw (no control interpretation)
+@ctrl:
+        jmp chrout
+
+; ----------------------------------------------------------------------------
+; edit_command - ESC styling command layer. Raise the pending flag (so the $F8
+; cursor shows), read the command key, then apply it: M cycles glyph mode;
+; R/H/V toggle reverse/flip-H/flip-V; 0-9 and A-F set palette 0-15; SPACE resets
+; the pen + glyph mode; P enters Paint mode; anything else cancels (no-op).
+; Case-insensitive. See docs/phase5-charset-keyboard.md §4.4.
+; ----------------------------------------------------------------------------
+edit_command:
+        lda #$01
+        sta EDIT_CMD_PENDING    ; CHRIN now draws the $F8 "command pending" cursor
+        jsr chrin
+        stz EDIT_CMD_PENDING
+        ; Fold lowercase a-z to upper so commands/colors are case-insensitive.
+        cmp #'a'
+        bcc @nofold
+        cmp #'z'+1
+        bcs @nofold
+        sec
+        sbc #$20
+@nofold:
+        cmp #' '                ; SPACE resets the pen + glyph mode
+        bne @notspace
+        jmp @reset              ; (absolute: @reset is out of branch range)
+@notspace:
+        cmp #'0'
+        bcc @done
+        cmp #'9'+1
+        bcs @alpha
+        sec
+        sbc #'0'                ; '0'-'9' -> palette 0-9
+        jmp set_palette
+@alpha:
+        cmp #'A'
+        bcc @done
+        cmp #'F'+1
+        bcs @cmd
+        sec
+        sbc #('A'-10)           ; 'A'-'F' -> palette 10-15
+        jmp set_palette
+@cmd:
+        cmp #'M'
+        beq @mode
+        cmp #'R'
+        beq @rev
+        cmp #'H'
+        beq @fliph
+        cmp #'V'
+        beq @flipv
+        cmp #'P'
+        beq @paint
+@done:
+        rts
+@mode:
+        ldx EDIT_MODE           ; cycle 0 -> 1 -> 2 -> 0
+        inx
+        cpx #$03
+        bne :+
+        ldx #$00
+:       stx EDIT_MODE
+        rts
+@rev:
+        lda #$80                ; toggle CHR_ALT (reverse)
+        eor TEXT_ATTR
+        sta TEXT_ATTR
+        rts
+@fliph:
+        lda #$10                ; toggle flip-X
+        eor TEXT_ATTR
+        sta TEXT_ATTR
+        rts
+@flipv:
+        lda #$20                ; toggle flip-Y
+        eor TEXT_ATTR
+        sta TEXT_ATTR
+        rts
+@paint:
+        lda #$01
+        sta EDIT_PAINT
+        rts
+@reset:
+        stz EDIT_MODE
+        stz TEXT_ATTR           ; palette 0, no flip/reverse
+        rts
+
+; ----------------------------------------------------------------------------
+; set_palette - set the palette nibble (bits 0-3) of TEXT_ATTR to A (0-15),
+; preserving the flip/reverse bits.
+; ----------------------------------------------------------------------------
+set_palette:
+        and #$0F
+        pha
+        lda TEXT_ATTR
+        and #$F0                ; clear the old palette nibble
+        sta TEXT_ATTR
+        pla
+        ora TEXT_ATTR
+        sta TEXT_ATTR
+        rts
+
+; ----------------------------------------------------------------------------
+; edit_paint_key - Paint mode key handler (A = byte). Arrows move the cursor;
+; SPACE stamps the pen and advances; ESC exits; everything else is ignored.
+; ----------------------------------------------------------------------------
+edit_paint_key:
+        cmp #CHR_ESC
+        bne :+
+        stz EDIT_PAINT          ; ESC leaves Paint mode
+        rts
+:       cmp #CHR_CRSR_RIGHT
+        beq @move
+        cmp #CHR_CRSR_LEFT
+        beq @move
+        cmp #CHR_CRSR_UP
+        beq @move
+        cmp #CHR_CRSR_DOWN
+        beq @move
+        cmp #' '
+        beq @stamp
+        rts                     ; ignore non-nav keys while painting
+@move:
+        jmp chrout              ; CHROUT moves the cursor for arrow codes
+@stamp:
+        jmp paint_stamp
+
+; ----------------------------------------------------------------------------
+; paint_stamp - overwrite the attribute byte of the cell under the cursor with
+; the pen (TEXT_ATTR), then advance the cursor right (with wrap). The cursor is
+; hidden on entry (CHRIN hid it), so the cell shows its real glyph; we touch only
+; the attribute plane, then let CHROUT's cursor-right move advance and redraw.
+; ----------------------------------------------------------------------------
+paint_stamp:
+        jsr cursor_attr_to_idxa ; $B9 -> attribute cell at the cursor
+        lda TEXT_ATTR
+        sta IDXA_PORT
+        lda #CHR_CRSR_RIGHT
+        jmp chrout              ; advance + redraw (tail call)

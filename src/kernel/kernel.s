@@ -49,9 +49,10 @@ KCHR:   .res 1          ; character being printed by CHROUT
         jmp load                ; KERN_LOAD
         jmp save                ; KERN_SAVE
         jmp editkey             ; KERN_EDITKEY
+        jmp chrout_glyph        ; KERN_CHROUT_GLYPH
 
 ; Compile-time guard: confirm the table lines up with the published ABI.
-.assert (* = KERN_BASE + $27), error, "kernel jump table size/layout mismatch"
+.assert (* = KERN_BASE + $2A), error, "kernel jump table size/layout mismatch"
 
 ; ============================================================================
 ; Code
@@ -85,12 +86,17 @@ coldstart:
         stz CURSOR_Y
         lda #ATTR_WHITE         ; sets color white for the text
         sta TEXT_ATTR
+        sta BASIC_DEFAULT_ATTR
+        stz BASIC_STYLE_MASK
         stz LAST_KEY            ; 
         stz KEY_COUNT
         stz CURSOR_VISIBLE
         stz CURSOR_SAVE_CHR
         stz CURSOR_SAVE_ATTR
         stz EDIT_STATE          ; screen editor starts idle
+        stz EDIT_MODE           ; glyph mode 0 (identity) at cold start
+        stz EDIT_PAINT          ; not painting
+        stz EDIT_CMD_PENDING    ; no ESC command pending
         stz CURSOR_BLINK_ACTIVE
         stz CURSOR_BLINK_COUNT
 
