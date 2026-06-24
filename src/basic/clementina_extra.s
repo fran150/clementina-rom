@@ -34,3 +34,78 @@ MONRDKEY_NB:
 ; editing runs in the kernel; GET keeps using the raw single-char MONRDKEY.
 MONRDLINE:
         jmp KERN_EDITKEY
+
+.ifdef STYLED_STRINGS
+; ----------------------------------------------------------------------------
+; STRPRT_STYLED - PRINT a string applying per-character attributes. Entered via
+; an absolute jmp from STRPRT (print.s) with A = N (length) and INDEX = character
+; data pointer; FREFAC has already run. Heap strings carry an attribute half at
+; (data + N); program-text literals/messages do not, and print at DEFAULT_ATTR.
+; Classify by data address: a heap string's data sits at or above the heap
+; bottom, everything else (program text, messages, FBUFFR) below it. We compare
+; against DEST, a snapshot of FRETOP that STRPRT takes *before* FREFAC: FREFAC
+; frees a printed temp and raises FRETOP above it, but the temp keeps its bytes
+; (including the attr half), so classifying against the post-free FRETOP would
+; misread a styled temp (PRINT A$+B$, PRINT LEFT$(A$,3)) as a literal. FRETOP is
+; snapshot (not STREND) because STREND is not yet initialized when the cold-start
+; "BYTES FREE" message prints. Lives in the EXTRA segment so it never perturbs
+; the CODE segment's tight branches. See docs/styled-strings.md §3.7/§5.
+; ----------------------------------------------------------------------------
+STRPRT_STYLED:
+        pha                     ; save N
+        ldy     INDEX+1
+        cpy     DEST+1          ; DEST = FRETOP snapshot from STRPRT (pre-FREFAC)
+        bcc     @lit
+        bne     @heap
+        ldy     INDEX
+        cpy     DEST
+        bcc     @lit
+@heap:
+        pla                     ; A = N
+        pha
+        clc
+        adc     INDEX           ; FRESPC = data + N (attribute base)
+        sta     FRESPC
+        lda     INDEX+1
+        adc     #$00
+        sta     FRESPC+1
+        pla                     ; A = N
+        tax
+        ldy     #$00
+        inx
+@hloop:
+        dex
+        beq     @hdone
+        lda     (FRESPC),y      ; this character's attribute
+        sta     TEXT_ATTR
+        lda     (INDEX),y       ; the character
+        jsr     OUTDO
+        iny
+        cmp     #$0D
+        bne     @hloop
+        jsr     PRINTNULLS
+        jmp     @hloop
+@hdone:
+        lda     #DEFAULT_ATTR   ; leave following output unstyled
+        sta     TEXT_ATTR
+        rts
+@lit:
+        lda     #DEFAULT_ATTR
+        sta     TEXT_ATTR
+        pla                     ; A = N
+        tax
+        ldy     #$00
+        inx
+@lloop:
+        dex
+        beq     @ldone
+        lda     (INDEX),y
+        jsr     OUTDO
+        iny
+        cmp     #$0D
+        bne     @lloop
+        jsr     PRINTNULLS
+        jmp     @lloop
+@ldone:
+        rts
+.endif

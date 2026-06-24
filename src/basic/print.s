@@ -272,7 +272,23 @@ STROUT:
 ; PRINT STRING AT (FACMO,FACLO)
 ; ----------------------------------------------------------------------------
 STRPRT:
+.ifdef STYLED_STRINGS
+        ; Snapshot the heap bottom before FREFAC frees a printed temp. FREFAC
+        ; raises FRETOP above a just-freed temp, but the temp's bytes (including
+        ; its attribute half) survive, so STRPRT_STYLED classifies the data ptr
+        ; against this pre-free bound (DEST) rather than the now-raised FRETOP -
+        ; otherwise a styled temp (e.g. PRINT A$+B$ or PRINT LEFT$(A$,3)) would
+        ; misclassify as a literal and print at DEFAULT_ATTR. FRETOP is valid
+        ; this early (set to MEMSIZ at init) where STREND is not. See §5.
+        lda     FRETOP
+        sta     DEST
+        lda     FRETOP+1
+        sta     DEST+1
         jsr     FREFAC
+        jmp     STRPRT_STYLED   ; styled implementation lives in clementina_extra.s
+.else
+        jsr     FREFAC
+.endif
         tax
         ldy     #$00
         inx

@@ -147,7 +147,51 @@ harvest_line:
         iny
         dex
         bne @read
+        ; Harvest the matching attribute cells into EDIT_ATTR_BUF (parallel to
+        ; EDIT_BUF) so styling typed into the line can be captured into strings.
+        ; KCNT/KCNT+1 (start cell) survive the char read; KTMP still holds the
+        ; cell count, but overlay_set_rc_attr clobbers it, so save it first.
+        lda KTMP                ; count (<= EDIT_BUF_SIZE, so KTMP+1 = 0)
+        pha
+        jsr overlay_set_rc_attr ; $B8 -> overlay ATTRIBUTE cell (KCNT row, col)
+        pla
+        tax
+        ldy #$00
+@aread:
+        lda IDXA_PORT
+        sta EDIT_ATTR_BUF,y
+        iny
+        dex
+        bne @aread
         stz EDIT_IDX
+        rts
+
+; ----------------------------------------------------------------------------
+; overlay_set_rc_attr - like overlay_set_rc but binds index $B8 to the overlay
+; ATTRIBUTE plane cell at (KCNT = row, KCNT+1 = col). Clobbers A/X/Y and KTMP.
+; ----------------------------------------------------------------------------
+overlay_set_rc_attr:
+        lda KCNT
+        jsr mul40               ; KTMP = row * 40
+        lda KTMP
+        clc
+        adc KCNT+1              ; + col
+        sta KTMP
+        bcc :+
+        inc KTMP+1
+:       lda KTMP                ; + overlay attribute base ($10468)
+        clc
+        adc #OVATTR_ADDR_L
+        sta KTMP
+        lda KTMP+1
+        adc #OVATTR_ADDR_M
+        sta KTMP+1
+        lda #VIDX_OVERLAY_ATTR
+        sta IDXA_SELECT
+        lda KTMP
+        ldx KTMP+1
+        ldy #OVATTR_ADDR_H
+        jsr set_idxa_addr
         rts
 
 ; ----------------------------------------------------------------------------

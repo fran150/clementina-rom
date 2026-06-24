@@ -257,7 +257,11 @@ EDIT_CP            = EDIT_LEN + 7             ; insert/delete scratch: cursor po
 EDIT_LL            = EDIT_LEN + 8             ; insert/delete scratch: logical-line cell count
 CURSOR_BLINK_ACTIVE = KVARS + $7E  ; nonzero when Timer 1 may toggle the cursor
 CURSOR_BLINK_COUNT  = KVARS + $7F  ; ticks until the next cursor toggle
-; Last used kernel variable byte is CURSOR_BLINK_COUNT ($037F); $0380-$03FF free.
+; Per-cell attributes of the harvested line, parallel to EDIT_BUF (styled
+; strings, see docs/styled-strings.md). EDIT_ATTR_BUF[k] is the attribute of
+; EDIT_BUF[k], which BASIC's INLIN stores 1:1 at INPUTBUFFER[k]. 80 bytes.
+EDIT_ATTR_BUF       = KVARS + $80   ; $0380-$03CF
+; Last used kernel variable byte is EDIT_ATTR_BUF+79 ($03CF); $03D0-$03FF free.
 
 ; Cursor glyph printed into the overlay while waiting for input.
 CURSOR_TILE        = '_'

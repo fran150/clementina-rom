@@ -36,7 +36,42 @@ STRSPA:
         stx     FAC+1
         sty     FAC+2
         sta     FAC
+.ifdef STYLED_STRINGS
+        jsr     fill_attr_default
+.endif
         rts
+
+.ifdef STYLED_STRINGS
+; ----------------------------------------------------------------------------
+; fill_attr_default - initialize the attribute half of a freshly allocated
+; string to DEFAULT_ATTR. The block is 2N: chars at the base, attrs at base+N.
+; In:  FAC = N (logical length), (FAC+1,FAC+2) = base address.
+; Out: attr half [base+N, base+2N) filled with DEFAULT_ATTR.
+; Clobbers A, Y, INDEX. INDEX is re-established by every caller's character copy
+; before use; FRESPC (which that copy relies on) is left untouched. Callers read
+; the result from FAC/FAC+1/FAC+2, not from registers. See docs/styled-strings.md.
+; ----------------------------------------------------------------------------
+fill_attr_default:
+        pha                     ; STRSPA must return A = N (the literal-copy path
+                                ; in STRLT2 uses it as MOVSTR's byte count)
+        lda     FAC+1
+        clc
+        adc     FAC             ; base + N -> start of the attribute half
+        sta     INDEX
+        lda     FAC+2
+        adc     #$00
+        sta     INDEX+1
+        ldy     FAC             ; Y = N
+        beq     @done
+        lda     #DEFAULT_ATTR
+@loop:
+        dey                     ; dey sets Z; the stores below don't touch flags
+        sta     (INDEX),y
+        bne     @loop           ; keep A = DEFAULT_ATTR for every byte
+@done:
+        pla                     ; restore A = N
+        rts
+.endif
 
 ; ----------------------------------------------------------------------------
 ; BUILD A DESCRIPTOR FOR STRING STARTING AT Y,A
@@ -100,6 +135,34 @@ LD399:
         ldx     STRNG1
         ldy     STRNG1+1
         jsr     MOVSTR
+.ifdef STYLED_STRINGS
+        ; Phase 4b: route captured attributes. This string was copied from the
+        ; input buffer, whose per-cell attributes the editor harvested into
+        ; EDIT_ATTR_BUF (EDIT_ATTR_BUF[k] = attr of INPUTBUFFER[k]). MOVSTR left
+        ; FRESPC at base+N (the attribute half) and FAC = N (length, set by
+        ; STRLT2/STRSPA, untouched by MOVSTR). Copy N attr bytes from
+        ; EDIT_ATTR_BUF + (STRNG1 - INPUTBUFFER) over the DEFAULT_ATTR fill, for
+        ; input-buffer strings only. Minted strings (CHR$/STR$) never reach here;
+        ; program-text literals take the PUTNEW path. See docs/styled-strings.md.
+        lda     STRNG1
+        sec
+        sbc     #<INPUTBUFFER       ; offset of the literal within the input buffer
+        clc
+        adc     #<EDIT_ATTR_BUF
+        sta     INDEX
+        lda     #>EDIT_ATTR_BUF
+        adc     #$00                ; carry out of the low-byte add
+        sta     INDEX+1
+        ldy     FAC                 ; Y = N
+        beq     @noattr
+@acopy:
+        dey
+        lda     (INDEX),y           ; EDIT_ATTR_BUF[offset + y]
+        sta     (FRESPC),y          ; attribute half byte y of the new string
+        tya
+        bne     @acopy
+@noattr:
+.endif
 
 ; ----------------------------------------------------------------------------
 ; STORE DESCRIPTOR IN TEMPORARY DESCRIPTOR STACK
@@ -154,6 +217,18 @@ L32F1:
         bcs     L32FC
         dey
 L32FC:
+.ifdef STYLED_STRINGS
+        ; Reserve a second N bytes for this string's attribute half, so the block
+        ; is 2N (N chars followed by N attrs). N is still on the stack from the
+        ; pha above; subtract it again, propagating the borrow into Y. The stored
+        ; length stays one logical byte (no 127 cap). See docs/styled-strings.md.
+        sec
+        tsx
+        sbc     $0101,x
+        bcs     :+
+        dey
+:
+.endif
         cpy     STREND+1
         bcc     L3311
         bne     L3306
@@ -382,6 +457,18 @@ MOVE_HIGHEST_STRING_TO_TOP:
         lda     LOWTR+1
         adc     #$00
         sta     HIGHTR+1
+.ifdef STYLED_STRINGS
+        ; The string occupies 2N bytes (chars + attrs): add the length a second
+        ; time so the whole block is relocated, not just the char half. Y still
+        ; points at the descriptor's length byte. See docs/styled-strings.md.
+        lda     (FNCNAM),y
+        clc
+        adc     HIGHTR
+        sta     HIGHTR
+        bcc     :+
+        inc     HIGHTR+1
+:
+.endif
         lda     FRETOP
         ldx     FRETOP+1
         sta     HIGHDS
@@ -421,11 +508,17 @@ CAT:
         jmp     ERROR
 L3454:
         jsr     STRINI
+.ifdef STYLED_STRINGS
+        jsr     cat_classify    ; record left/right heap flags while both are live
+.endif
         jsr     MOVINS
         lda     DSCPTR
         ldy     DSCPTR+1
         jsr     FRETMP
         jsr     MOVSTR1
+.ifdef STYLED_STRINGS
+        jsr     cat_attrs       ; append left then right attr runs to the result
+.endif
         lda     STRNG1
         ldy     STRNG1+1
         jsr     FRETMP
@@ -475,6 +568,142 @@ L3490:
 L3499:
         rts
 
+.ifdef STYLED_STRINGS
+; ----------------------------------------------------------------------------
+; append_attr_run - place one source string's attribute run into the result
+; being built at FRESPC (Phase 1c: slice/concat attribute propagation).
+; In:  A     = count (this source's logical length)
+;      INDEX = source attribute pointer (source data ptr + source length); only
+;              read when the source is a heap string
+;      X     = nonzero if the source is a heap string (has an attribute half, so
+;              copy its attrs); zero if it is a program-text literal (no attr
+;              half - leave the DEFAULT_ATTR fill in place and just step over it)
+; Out: FRESPC advanced by count. Clobbers A, Y (and, on the heap path, INDEX).
+; See docs/styled-strings.md §3.4.
+; ----------------------------------------------------------------------------
+append_attr_run:
+        cpx     #$00
+        bne     MOVSTR1         ; heap: copy count attrs from INDEX, advance FRESPC
+        clc                     ; literal: keep the default fill, advance FRESPC
+        adc     FRESPC
+        sta     FRESPC
+        bcc     :+
+        inc     FRESPC+1
+:       rts
+
+; ----------------------------------------------------------------------------
+; classify_heap - decide whether the string whose 3-byte descriptor is at
+; (INDEX) is a live heap string (data ptr >= FRETOP, so it carries an attribute
+; half) or a program-text literal (no attr half). Callers must invoke this while
+; the string is still live - before any FRETMP frees it and raises FRETOP past
+; it. In: INDEX -> descriptor. Out: A = 1 heap / 0 literal. Clobbers A, Y.
+; See docs/styled-strings.md §3.4/§5.
+; ----------------------------------------------------------------------------
+classify_heap:
+        ldy     #$02
+        lda     (INDEX),y       ; data ptr hi
+        cmp     FRETOP+1
+        bcc     @lit
+        bne     @heap
+        dey
+        lda     (INDEX),y       ; data ptr lo
+        cmp     FRETOP
+        bcc     @lit
+@heap:  lda     #$01
+        rts
+@lit:   lda     #$00
+        rts
+
+; ----------------------------------------------------------------------------
+; slice_attrs - copy a substring's attribute run (LEFT$/RIGHT$/MID$, Phase 1c).
+; Entered after the char copy with INDEX = parent data ptr + start and FRESPC =
+; result base + count. The parent attr half is at parent data ptr + parentLen,
+; so the slice's attr source = INDEX + parentLen; parentLen is at (DSCPTR),0,
+; count is in FAC, and DEST (set by classify_heap before the parent was freed)
+; says whether the parent had attrs. See docs/styled-strings.md §3.4.
+; ----------------------------------------------------------------------------
+slice_attrs:
+        ldy     #$00
+        lda     (DSCPTR),y      ; parentLen
+        clc
+        adc     INDEX
+        sta     INDEX
+        bcc     :+
+        inc     INDEX+1
+:       ldx     DEST            ; 1 = parent heap (copy), 0 = literal (default fill)
+        lda     FAC             ; count = slice length
+        jmp     append_attr_run
+
+; ----------------------------------------------------------------------------
+; append_desc_attrs - append to the result at FRESPC the attribute run of the
+; source string whose 3-byte descriptor is at (INDEX). In: INDEX -> descriptor;
+; X = heap flag (1 copy attrs / 0 literal -> keep default fill). The source attr
+; run lives at the source's data ptr + its length. Out: FRESPC advanced by the
+; source length. Clobbers A, Y, INDEX (X preserved into append_attr_run).
+; ----------------------------------------------------------------------------
+append_desc_attrs:
+        ldy     #$00
+        lda     (INDEX),y       ; source length
+        pha                     ; save count
+        ldy     #$01
+        lda     (INDEX),y       ; source data ptr lo
+        pha
+        ldy     #$02
+        lda     (INDEX),y       ; source data ptr hi
+        sta     INDEX+1
+        pla                     ; data ptr lo
+        sta     INDEX           ; INDEX = source data ptr
+        pla                     ; count
+        pha                     ; keep a copy
+        clc
+        adc     INDEX           ; INDEX = data ptr + length = source attr run
+        sta     INDEX
+        bcc     :+
+        inc     INDEX+1
+:       pla                     ; A = count
+        jmp     append_attr_run
+
+; ----------------------------------------------------------------------------
+; cat_classify / cat_attrs - CAT (string concatenation) attribute propagation.
+; cat_classify records, while both operands are still live (after STRINI, before
+; the operands are freed), whether each carries an attr half: DEST = left flag
+; (descriptor at STRNG1), DEST+1 = right flag (descriptor at DSCPTR). cat_attrs
+; then appends left then right attr runs to the result at FRESPC (after both
+; char halves are in place, FRESPC = result base + total length). The operand
+; descriptors and their data survive FRETMP (which only raises FRETOP), and the
+; result is built below them, so the sources are still readable here.
+; See docs/styled-strings.md §3.4.
+; ----------------------------------------------------------------------------
+cat_classify:
+        lda     STRNG1
+        sta     INDEX
+        lda     STRNG1+1
+        sta     INDEX+1
+        jsr     classify_heap
+        sta     DEST
+        lda     DSCPTR
+        sta     INDEX
+        lda     DSCPTR+1
+        sta     INDEX+1
+        jsr     classify_heap
+        sta     DEST+1
+        rts
+
+cat_attrs:
+        lda     STRNG1
+        sta     INDEX
+        lda     STRNG1+1
+        sta     INDEX+1
+        ldx     DEST            ; left heap flag
+        jsr     append_desc_attrs
+        lda     DSCPTR
+        sta     INDEX
+        lda     DSCPTR+1
+        sta     INDEX+1
+        ldx     DEST+1          ; right heap flag
+        jmp     append_desc_attrs
+.endif
+
 ; ----------------------------------------------------------------------------
 ; IF (FAC) IS A TEMPORARY STRING, RELEASE DESCRIPTOR
 ; ----------------------------------------------------------------------------
@@ -514,6 +743,25 @@ FRETMP:
         bne     L34CD
         cpx     FRETOP
         bne     L34CD
+.ifdef STYLED_STRINGS
+        ; The freed block is 2N (chars + attrs); bump FRETOP by the length twice.
+        ; A holds the logical length N on entry and is restored to N on exit
+        ; (CAT relies on FRETMP returning the length in A).
+        pha
+        clc
+        adc     FRETOP
+        sta     FRETOP
+        bcc     :+
+        inc     FRETOP+1
+:       pla
+        pha
+        clc
+        adc     FRETOP
+        sta     FRETOP
+        bcc     :+
+        inc     FRETOP+1
+:       pla
+.else
         pha
         clc
         adc     FRETOP
@@ -522,6 +770,7 @@ FRETMP:
         inc     FRETOP+1
 L34CC:
         pla
+.endif
 L34CD:
         stx     INDEX
         sty     INDEX+1
@@ -581,6 +830,16 @@ SUBSTRING2:
 SUBSTRING3:
         pha
         jsr     STRSPA
+.ifdef STYLED_STRINGS
+        ; Classify the parent while still live (before the FRETMP below frees it
+        ; and raises FRETOP past it). DEST = 1 heap / 0 literal. See §3.4/§5.
+        lda     DSCPTR
+        sta     INDEX
+        lda     DSCPTR+1
+        sta     INDEX+1
+        jsr     classify_heap
+        sta     DEST
+.endif
         lda     DSCPTR
         ldy     DSCPTR+1
         jsr     FRETMP
@@ -595,6 +854,9 @@ SUBSTRING3:
 L351C:
         tya
         jsr     MOVSTR1
+.ifdef STYLED_STRINGS
+        jsr     slice_attrs     ; copy the slice's attr run (or keep default fill)
+.endif
         jmp     PUTNEW
 
 ; ----------------------------------------------------------------------------

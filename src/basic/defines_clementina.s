@@ -35,6 +35,29 @@ SPACE_FOR_GOSUB  := $33
 WIDTH            := 40
 WIDTH2           := 14
 
+; ----------------------------------------------------------------------------
+; Styled strings (see docs/styled-strings.md)
+; ----------------------------------------------------------------------------
+; Each BASIC string carries a per-character attribute byte. A string of logical
+; length N occupies a 2N-byte heap block: N character bytes followed by N
+; attribute bytes, so char(X) = ptr[X] and attr(X) = ptr[N+X]. The descriptor is
+; unchanged (length stays the logical char count N, <= 255); the 2N allocation is
+; reserved by subtracting N from FRETOP twice. STYLED_STRINGS gates the feature
+; so it can be disabled for bring-up/regression against stock behavior.
+STYLED_STRINGS   := 1
+; Attribute applied to characters with no captured style (CHR$, STR$, numeric
+; conversions, program-text literals). $00 = palette 0 (white on the blue
+; backdrop), matching the kernel cold-start TEXT_ATTR. See memory-map.md §5.
+DEFAULT_ATTR     := $00
+; Kernel per-cell text attribute (memory-map.md §5). STRPRT sets this before each
+; character so the kernel chrout paints that character's stored attribute.
+TEXT_ATTR        := $0302
+; Kernel buffer holding the harvested line's per-cell attributes, parallel to the
+; chars BASIC's INLIN dropped into INPUTBUFFER (EDIT_ATTR_BUF[k] = attr of
+; INPUTBUFFER[k]). The input-buffer->heap copy (LD399) routes these into the new
+; string's attribute half. Keep in sync with EDIT_ATTR_BUF in kernel.inc.
+EDIT_ATTR_BUF    := $0380
+
 ; memory layout
 ; BASIC program/variable workspace starts safely above the combined
 ; kernel+BASIC image. The RAM ceiling is $8000, where the banked Extended RAM
