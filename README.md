@@ -13,6 +13,11 @@ make            # build the kernel image -> build/kernel.bin (loads at $0400)
 make install    # copy kernel.bin into the emulator's embedded asset
 ```
 
+## Monitor
+
+From BASIC, type `MON` to enter WozMon. From WozMon, type `Q` to return to the
+BASIC `READY.` prompt without clearing the current program.
+
 ## Documentation
 
 - [docs/memory-map.md](docs/memory-map.md) — *Mapping the Clementina*, a living,

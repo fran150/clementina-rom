@@ -7,16 +7,32 @@
 ; ============================================================================
 
 .segment "EXTRA"
-.export BASIC_COLD_START, MONRDKEY, MONRDKEY_NB, MONCOUT, MONRDLINE
+.export BASIC_COLD_START, BASIC_WARM_START, MONRDKEY, MONRDKEY_NB, MONCOUT, MONRDLINE
 
 KERN_CHROUT       = $0406
 KERN_CHRIN        = $0409
 KERN_GETKEY_NB    = $040C
 KERN_EDITKEY      = $0424
 KERN_CHROUT_GLYPH = $0427
+KERN_WOZMON       = $042A
+
+; Console control codes (CHROUT interprets these) and overlay geometry. Keep in
+; sync with src/kernel/kernel.inc.
+CHR_FF            = $0C    ; form feed: clear screen and home the cursor
+CHR_CRSR_DOWN     = $11    ; cursor down one row
+CHR_HOME          = $13    ; cursor to top-left
+CHR_CRSR_RIGHT    = $1D    ; cursor right one cell
+SCR_COLS          = 40
+SCR_ROWS          = 25
 
 BASIC_COLD_START:
         jmp COLD_START
+
+; Warm restart: keep the current program/variables and return to the READY
+; prompt. Used by the kernel warmstart entry (KERN_WARMSTART) so a user can quit
+; the WOZ monitor back to BASIC without losing their program.
+BASIC_WARM_START:
+        jmp RESTART
 
 ; A = character to print. Kernel CHROUT preserves A/X/Y.
 MONCOUT:
@@ -35,6 +51,70 @@ MONRDKEY_NB:
 ; editing runs in the kernel; GET keeps using the raw single-char MONRDKEY.
 MONRDLINE:
         jmp KERN_EDITKEY
+
+; Enter the WOZ monitor. Return to BASIC from WozMon with Q.
+BASIC_MON:
+        jmp KERN_WOZMON
+
+; ----------------------------------------------------------------------------
+; BASIC console statements
+;
+; MON       enter the WOZ monitor; return to BASIC from WozMon with Q.
+; CLS       clear the screen and home the cursor.
+; CRSR x,y  move the cursor to column x (0..SCR_COLS-1), row y (0..SCR_ROWS-1).
+;           0,0 is the top-left corner; 39,24 the bottom-right.
+;
+; Both drive the cursor through the kernel console (MONCOUT/CHROUT) so the
+; software cursor glyph and the logical-line link table stay consistent: CLS
+; emits a form feed (clrscr + home), CRSR homes then steps the cursor with
+; the cursor-down / cursor-right control codes. Out-of-range arguments raise
+; ILLEGAL QUANTITY, matching COLOR/STYLE.
+;
+; NOTE: these keyword names are short on purpose. BASIC's tokenizer indexes the
+; keyword name table with an 8-bit Y register, so ALL keyword names plus the
+; terminator must fit in 256 bytes (see token.s). Long names overflow the table
+; and hang the tokenizer on every typed line.
+; ----------------------------------------------------------------------------
+BASIC_CLS:
+        lda     #$00
+        sta     POSX                    ; BASIC column tracker: home is column 0
+        lda     #CHR_FF
+        jmp     MONCOUT                 ; clear + home (tail call; cursor handled)
+
+BASIC_CRSR:
+        jsr     GETBYT                  ; X = column
+        cpx     #SCR_COLS
+        bcs     @iq
+        stx     LINNUM                  ; survives the second GETBYT (POKE pattern)
+        jsr     COMBYTE                 ; X = row
+        cpx     #SCR_ROWS
+        bcs     @iq
+        lda     #CHR_HOME
+        jsr     MONCOUT                 ; cursor to (0,0); preserves X
+        txa                             ; A = row count (sets Z)
+        beq     @cols
+@rows:
+        lda     #CHR_CRSR_DOWN
+        jsr     MONCOUT                 ; preserves X
+        dex
+        bne     @rows
+@cols:
+        ldx     LINNUM
+        beq     @done
+@colloop:
+        lda     #CHR_CRSR_RIGHT
+        jsr     MONCOUT                 ; preserves X
+        dex
+        bne     @colloop
+@done:
+        lda     LINNUM                  ; column = LINNUM (preserved through MONCOUT)
+        sta     POSX                    ; keep BASIC's column (POS/TAB/PRINT) in sync
+        rts
+@iq:
+        jmp     IQERR
+
+; MONCOUT routes A through the kernel console; chrout preserves A/X/Y, so the
+; loops above can hold their counter in X across the call.
 
 .ifdef STYLED_STRINGS
 ; ----------------------------------------------------------------------------

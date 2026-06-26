@@ -9,13 +9,16 @@
 ; Internally WozMon keeps the Apple-1 convention of bit7-set characters; the I/O
 ; primitives translate to/from the kernel's plain-ASCII console.
 ;
-; Not yet wired into the milestone-1 image; this establishes the kernel-I/O
-; port (see AGENTS.md and docs/memory-map.md).
+; Linked into the combined image and reached through the kernel jump table at
+; KERN_WOZMON ($042A); enter with `JMP WOZMON` (or BASIC `MON`/`USR`). Quit back
+; to BASIC by typing `Q` (or run the warm-start vector manually with `403R`).
+; See docs/memory-map.md.
 ; ============================================================================
 
 .setcpu "65C02"
 
 ; Kernel jump table (keep in sync with ../kernel/kernel.inc).
+KERN_WARMSTART  = $0403
 KERN_CHROUT     = $0406
 KERN_CHRIN      = $0409
 
@@ -75,6 +78,10 @@ NEXTITEM:       LDA IN,Y        ; Get character.
                 BEQ SETSTOR     ; Yes. Set STOR mode.
                 CMP #'R'+$80    ; "R"?
                 BEQ RUN         ; Yes. Run user program.
+                CMP #'Q'+$80    ; "Q"?
+                BEQ QUIT        ; Yes. Return to BASIC.
+                CMP #'q'+$80    ; "q"?
+                BEQ QUIT        ; Yes. Return to BASIC.
                 STX L           ; $00->L.
                 STX H           ;  and H.
                 STY YSAV        ; Save Y for comparison.
@@ -108,6 +115,7 @@ NOTHEX:         CPY YSAV        ; Check if L, H empty (no hex digits).
                 INC STH         ; Add carry to 'store index' high order.
 TONEXTITEM:     JMP NEXTITEM    ; Get next command item.
 RUN:            JMP (XAML)      ; Run at current XAM index.
+QUIT:           JMP KERN_WARMSTART
 NOTSTOR:        BMI XAMNEXT     ; B7=0 for XAM, 1 for BLOCK XAM.
                 LDX #$02        ; Byte count.
 SETADR:         LDA L-1,X       ; Copy hex data to

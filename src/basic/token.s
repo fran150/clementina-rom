@@ -55,11 +55,17 @@
 		keyword_rts "POKE", POKE
 .endif
 .ifdef CLEMENTINA
+		; Keyword names must stay SHORT: the tokenizer indexes this name table
+		; with an 8-bit Y register, so every name plus the trailing $00 must fit
+		; in 256 bytes. Overflowing it makes the keyword search never find the
+		; terminator and hang on every typed line. (CRSR=cursor position x,y.)
 		keyword_rts "COLOR", BASIC_COLOR
 		keyword_rts "FLIPX", BASIC_FLIPX
 		keyword_rts "FLIPY", BASIC_FLIPY
 		keyword_rts "ALT", BASIC_ALT
 		keyword_rts "STYLE", BASIC_STYLE
+		keyword_rts "CRSR", BASIC_CRSR
+		keyword_rts "CLS", BASIC_CLS
 .endif
 .ifdef CONFIG_FILE
 		keyword_rts "PRINT#", PRINTH
@@ -163,6 +169,12 @@ UNFNC_ATN:
 .endif
         .segment "KEYWORDS"
 		.byte   0
+
+		; The tokenizer (PARSE_INPUT_LINE in program.s) walks this name table
+		; with an 8-bit Y index, so the terminator must sit at offset <= 255 or
+		; the keyword search never ends and hangs on every typed line. Guard it
+		; at build time: shorten keyword names if this fails.
+		.assert (* - TOKEN_NAME_TABLE) <= 256, error, "BASIC keyword name table exceeds 256 bytes (8-bit tokenizer index)"
 
         .segment "VECTORS"
 MATHTBL:

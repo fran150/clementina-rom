@@ -152,6 +152,11 @@ EXECUTE_STATEMENT:
         sec
 .endif
 EXECUTE_STATEMENT1:
+.ifdef CLEMENTINA
+        cmp     #TOKEN_MON
+        beq     @mon
+        sec
+.endif
         sbc     #$80
 .ifndef CONFIG_11
         jcc     LET	; old: 1 cycle more on instr.
@@ -168,9 +173,13 @@ EXECUTE_STATEMENT1:
         tay
         lda     TOKEN_ADDRESS_TABLE+1,y
         pha
-        lda     TOKEN_ADDRESS_TABLE,y
-        pha
-        jmp     CHRGET
+         lda     TOKEN_ADDRESS_TABLE,y
+         pha
+         jmp     CHRGET
+.ifdef CLEMENTINA
+@mon:
+        jmp     BASIC_MON
+.endif
 
 .ifdef CONFIG_11
 LET1:

@@ -138,7 +138,7 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 
 ---
 
-## 6. Kernel jump table (`$0400–$0426`)
+## 6. Kernel jump table (`$0400–$042C`)
 
 The **stable ABI**. Each entry is a 3-byte `JMP`. Callers (BASIC, WozMon, user
 programs) bind to these fixed addresses; the routines behind them may move
@@ -147,7 +147,7 @@ freely. Anchored at the load base so `$0400` is also the reset entry.
 | Addr | Symbol | In | Out | Description |
 | --- | --- | --- | --- | --- |
 | `$0400` | `KERN_COLDSTART` | — | — | Reset entry. MIA points RESET here. Sets up the machine, console, prints the banner, then enters BASIC. |
-| `$0403` | `KERN_WARMSTART` | — | — | Re-enter BASIC. |
+| `$0403` | `KERN_WARMSTART` | — | — | Re-enter BASIC at the READY prompt, **preserving** the current program and variables. Resets the stack and re-enables interrupts first, so it is safe to reach mid-statement (used by WozMon's `Q` quit command; `403R` still works manually). |
 | `$0406` | `KERN_CHROUT` | `A`=char | A/X/Y preserved | Write one character to the console at the cursor. Handles CR (`$0D`, newline), LF (`$0A`, ignored), BS (`$08`), FF (`$0C`, clear), the cursor moves (`$11`/`$91`/`$1D`/`$9D`) and HOME (`$13`), printable bytes. |
 | `$0409` | `KERN_CHRIN` | — | `A`=char | Blocking read of one raw text byte from the MIA FIFO (single key; used by BASIC `GET`). Updates `LAST_KEY`/`KEY_COUNT`. |
 | `$040C` | `KERN_GETKEY_NB` | — | `C`=1 & `A`=char, or `C`=0 | Non-blocking read. |
@@ -159,6 +159,8 @@ freely. Anchored at the load base so `$0400` is also the reset entry.
 | `$041E` | `KERN_LOAD` | — | — | Storage load. **Stub** (`RTS`) until the FAT layer lands. |
 | `$0421` | `KERN_SAVE` | — | — | Storage save. **Stub** (`RTS`). |
 | `$0424` | `KERN_EDITKEY` | — | `A`=char | Full-screen line editor. Runs the interactive editor (cursor moves, overtype, gap-closing backspace `$08` / delete `$7F`, insert `$94`) on the overlay, harvests the logical line under the cursor on RETURN, and returns it one byte at a time followed by a synthetic final CR. BASIC's `GETLN` uses this for line input and treats bytes returned while `EDIT_STATE` is nonzero as raw source data; `GET` stays on `KERN_CHRIN`. |
+| `$0427` | `KERN_CHROUT_GLYPH` | `A`=tile | A/X/Y preserved | Write `A` to the console as a raw glyph at the cursor, bypassing control-code handling (so high tiles that collide with codes like `$0D` still draw). |
+| `$042A` | `KERN_WOZMON` | — | (does not return) | Enter the WOZ monitor (`src/monitor/wozmon-clementina.s`). Examine/deposit memory and run code; quit back to BASIC with `Q` (runs `KERN_WARMSTART`). Invoke from BASIC with `MON`; the older `USR` vector method still works. |
 
 > When you add a kernel call, append a new `JMP` to the table in
 > `src/kernel/kernel.s`, add the `KERN_*` equate in `kernel.inc`, bump the
@@ -202,10 +204,10 @@ combined kernel+BASIC image is ~11.4 KiB. Notable internal routines:
 ## 8. BASIC free workspace (`end-of-image … $7FFF`)
 
 At runtime BASIC's program text, variables, arrays, and strings live between
-`TXTTAB` and `MEMSIZ`. Clementina currently sets `RAMSTART2 = $3400`, safely
-above the combined kernel+BASIC image, and caps `MEMSIZ` at `$8000` (the start
-of the banked Extended RAM window). `make` fails if `build/kernel.bin` grows past
-the `$3400` boundary, because BASIC's cold-start RAM probe writes from
+`TXTTAB` and `MEMSIZ`. Clementina currently sets `RAMSTART2 = $3600`, safely
+above the combined kernel+BASIC+monitor image, and caps `MEMSIZ` at `$8000` (the
+start of the banked Extended RAM window). `make` fails if `build/kernel.bin` grows
+past the `$3600` boundary, because BASIC's cold-start RAM probe writes from
 `RAMSTART2` upward. The resulting span is what BASIC prints as **"bytes free"**.
 
 ---

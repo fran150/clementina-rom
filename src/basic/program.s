@@ -713,7 +713,11 @@ LC49E:
         bne     L2484
         lda     #TOKEN_PRINT
         bne     L24AC
-L2484:
+  L2484:
+.ifdef CLEMENTINA
+        jsr     TOKENIZE_MON
+        bcs     L24AC
+.endif
         cmp     #$30
         bcc     L248C
         cmp     #$3C
@@ -829,6 +833,40 @@ L24EA:
         lda     #<(INPUTBUFFER-1)
         sta     TXTPTR
         rts
+
+.ifdef CLEMENTINA
+TOKENIZE_MON:
+        cmp     #'M'
+        beq     @check
+        cmp     #'m'
+        bne     @no
+@check:
+        lda     INPUTBUFFERX+1,x
+        and     #$DF
+        cmp     #'O'
+        bne     @restore
+        lda     INPUTBUFFERX+2,x
+        and     #$DF
+        cmp     #'N'
+        bne     @restore
+        lda     INPUTBUFFERX+3,x
+        beq     @emit
+        cmp     #$20
+        beq     @emit
+        cmp     #$3A
+        bne     @restore
+@emit:
+        inx
+        inx
+        lda     #TOKEN_MON
+        sec
+        rts
+@restore:
+        lda     INPUTBUFFERX,x
+@no:
+        clc
+        rts
+.endif
 
 ; ----------------------------------------------------------------------------
 ; SEARCH FOR LINE
@@ -1190,11 +1228,23 @@ L25E5:
 L25E5a:
 .endif
         jmp     RESTART
-L25E8:
+  L25E8:
         bpl     L25CE
 .ifdef STYLED_STRINGS
         bit     DATAFLG
         bmi     L25CE           ; high tile inside quotes, not a BASIC token
+.endif
+.ifdef CLEMENTINA
+        cmp     #TOKEN_MON
+        bne     @not_mon_token
+        sty     FORPNT
+        lda     #'M'
+        jsr     OUTDO
+        lda     #'O'
+        jsr     OUTDO
+        lda     #'N'
+        jmp     L25CA
+@not_mon_token:
 .endif
 .ifdef CONFIG_DATAFLG
         cmp     #$FF

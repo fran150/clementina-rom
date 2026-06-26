@@ -20,6 +20,8 @@
 .include "kernel.inc"
 
 .import BASIC_COLD_START
+.import BASIC_WARM_START
+.import WOZMON
 
 ; ----------------------------------------------------------------------------
 ; Kernel zero page ($00F0-, see clementina.cfg)
@@ -50,9 +52,10 @@ KCHR:   .res 1          ; character being printed by CHROUT
         jmp save                ; KERN_SAVE
         jmp editkey             ; KERN_EDITKEY
         jmp chrout_glyph        ; KERN_CHROUT_GLYPH
+        jmp WOZMON              ; KERN_WOZMON
 
 ; Compile-time guard: confirm the table lines up with the published ABI.
-.assert (* = KERN_BASE + $2A), error, "kernel jump table size/layout mismatch"
+.assert (* = KERN_BASE + $2D), error, "kernel jump table size/layout mismatch"
 
 ; ============================================================================
 ; Code
@@ -111,10 +114,16 @@ coldstart:
         jmp BASIC_COLD_START
 
 ; ----------------------------------------------------------------------------
-; warmstart - re-enter BASIC
+; warmstart - re-enter BASIC preserving the current program (READY prompt).
+; Reachable from the jump table and used as WozMon's "quit" target: the user may
+; arrive here mid-statement (e.g. after `403R` from the monitor), so reset the
+; stack and re-enable interrupts before handing control back to BASIC.
 ; ----------------------------------------------------------------------------
 warmstart:
-        jmp BASIC_COLD_START
+        ldx #$FF
+        txs
+        cli
+        jmp BASIC_WARM_START
 
 ; ============================================================================
 ; Subsystem sources

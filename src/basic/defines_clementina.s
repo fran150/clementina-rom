@@ -34,6 +34,7 @@ STACK_TOP        := $FC
 SPACE_FOR_GOSUB  := $33
 WIDTH            := 40
 WIDTH2           := 14
+TOKEN_MON        := $FE
 
 ; ----------------------------------------------------------------------------
 ; Styled strings (see docs/styled-strings.md)
@@ -83,10 +84,10 @@ STYLE_SIDE_MAGIC1   := $FF
 ; memory layout
 ; BASIC program/variable workspace starts safely above the combined
 ; kernel+BASIC image. Keep this in sync with Makefile's MAX_KERNEL_BYTES guard:
-; MIA loads the image at $0400, so RAMSTART2=$3400 allows up to $3000 bytes of
-; loaded image. The RAM ceiling is $8000, where the banked Extended RAM window
-; begins.
-RAMSTART2        := $3400
+; MIA loads the image at $0400, so RAMSTART2=$3600 allows up to $3200 bytes of
+; loaded image (kernel + BASIC + WOZ monitor). The RAM ceiling is $8000, where
+; the banked Extended RAM window begins, so the workspace is still ~18 KB.
+RAMSTART2        := $3600
 
 ; storage: route the LOAD/SAVE tokens to the kernel jump table (stubs today).
 KERN_LOAD := $041E
