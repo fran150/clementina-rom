@@ -85,9 +85,12 @@ edit_line:
 @enter:
         jsr harvest_line        ; overlay -> EDIT_BUF/EDIT_LEN, EDIT_IDX = 0
         lda EDIT_RE
-        sta CURSOR_Y            ; move below the harvested logical line
-        lda #CHR_CR
-        jsr chrout
+        sta CURSOR_Y            ; park the cursor on the harvested line's last row.
+                                ; Do NOT emit a CR here: BASIC's line input (INLIN)
+                                ; ends every line with CRDO, which routes through
+                                ; chrout's @cr - resetting the column, advancing one
+                                ; row (below the logical line), and starting a fresh
+                                ; LINE_LINK. A CR here too would drop the cursor twice.
         rts
 
 ; ----------------------------------------------------------------------------
