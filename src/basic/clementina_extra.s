@@ -297,13 +297,18 @@ STRPRT_STYLED:
         sta     TEXT_ATTR       ; user output; the BASIC pen for a STROUT message)
         rts
 @lit:
-        ; Literals/messages carry no attribute half and are plain unstyled text -
-        ; including CR/LF formatting that CHROUT must interpret (e.g. message
-        ; strings begin with CR+LF, and LF is ignored). So print them through plain
-        ; OUTDO, exactly as before Phase 5: only the heap path (which can carry
-        ; graphic tile codes) needs the raw-glyph treatment. They print at the live
-        ; pen: user PRINT output keeps the editor pen; a system message arrives here
-        ; with the BASIC pen already loaded by STROUT (print.s).
+        ; Numbers, unstyled literals and messages carry no attribute half and are
+        ; plain unstyled text - including CR/LF formatting that CHROUT must interpret
+        ; (message strings begin with CR+LF, and LF is ignored). So print them through
+        ; plain OUTDO: only the heap path (graphic tile codes) needs raw-glyph output.
+        ; They print at the BASIC pen - styled string literals are promoted to heap
+        ; strings (STRLT2 / styled_program_literal_to_heap) and take the @heap path in
+        ; their written colors, so only genuinely unstyled output reaches here. E.g.
+        ; PRINT "FRAN";A prints FRAN in its stored color but the number A in the BASIC
+        ; pen. The pen saved at entry is restored at @ldone. (STROUT messages arrive
+        ; with the BASIC pen already loaded; this is consistent.)
+        lda     BASIC_DEFAULT_ATTR
+        sta     TEXT_ATTR
         pla                     ; A = N
         tax
         ldy     #$00

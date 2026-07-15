@@ -28,6 +28,11 @@ ERROR:
         sta     CURDVC
 LC366:
 .endif
+.ifdef STYLED_STRINGS
+        lda     BASIC_DEFAULT_ATTR   ; the whole error line (?<name> ERROR) prints in
+        sta     TEXT_ATTR            ; the BASIC pen. OUTQUES/OUTDO print '?'<name> at
+.endif                               ; the live pen, so set it here; edit_line reasserts
+                                     ; the editor pen for the cursor afterward.
         jsr     CRDO
         jsr     OUTQUES
 L2329:

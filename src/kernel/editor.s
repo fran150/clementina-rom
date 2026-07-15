@@ -420,7 +420,8 @@ edit_delete_left:
         lda #' '
         sta EDIT_BUF,x          ; blank the freed last cell
         lda TEXT_ATTR
-        sta EDIT_ATTR_BUF,x
+        and #$7F                ; blank cells are never reversed (a reversed space is
+        sta EDIT_ATTR_BUF,x     ; a solid block); keep color/flip, clear CHR_ALT
         jsr edit_write_line
         jsr edit_write_attrs
         dec EDIT_CP
@@ -458,7 +459,8 @@ edit_delete_fwd:
         lda #' '
         sta EDIT_BUF,x          ; blank the freed last cell
         lda TEXT_ATTR
-        sta EDIT_ATTR_BUF,x
+        and #$7F                ; blank cells are never reversed (a reversed space is
+        sta EDIT_ATTR_BUF,x     ; a solid block); keep color/flip, clear CHR_ALT
         jsr edit_write_line
         jsr edit_write_attrs
 @done:
@@ -494,7 +496,8 @@ edit_insert:
         lda #' '
         sta EDIT_BUF,x          ; blank at the cursor (X == cp)
         lda TEXT_ATTR
-        sta EDIT_ATTR_BUF,x
+        and #$7F                ; blank cells are never reversed (a reversed space is
+        sta EDIT_ATTR_BUF,x     ; a solid block); keep color/flip, clear CHR_ALT
         jsr edit_write_line
         jsr edit_write_attrs
 @done:

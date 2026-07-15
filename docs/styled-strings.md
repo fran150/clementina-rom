@@ -221,18 +221,24 @@ sidecars when walking to the next DATA statement.
 
 `STRPRT` (print.s) walks the chars. For a heap (styled) string it combines each
 char's stored attr with the BASIC default/policy, writes the effective attr to the
-kernel's global `TEXT_ATTR` (`$0302`), then outputs the char. Program-text literals
-with no attr half print at the **live pen** (see below).
+kernel's global `TEXT_ATTR` (`$0302`), then outputs the char. Genuinely unstyled
+output — numbers, unstyled literals, messages — has no attr half and prints at the
+**BASIC pen** (`@lit`). String literals that were *written* in a color are not
+unstyled: they are promoted to heap strings carrying their attrs (a direct-mode
+literal via `STRLT2`/`EDIT_ATTR_BUF`, a program literal via
+`styled_program_literal_to_heap`) and take the heap path in their written colors.
+So `PRINT "FRAN";A` prints `FRAN` in its stored color but the number `A` in the
+BASIC pen.
 
 The pen model keeps the **editor pen and the BASIC pen independent** — the editor
 pen the user sets with ESC is never clobbered by BASIC output:
 
 - **Editor pen / current pen** — the kernel/editor `TEXT_ATTR` (`$0302`); set from
   the keyboard (ESC commands) and used for the cursor preview, new typed/stamped
-  cells, and plain `PRINT` output (so `PRINT "X"` prints in the color it was typed).
-  It is *persistent*: `STRPRT_STYLED` saves it at entry and restores it at every
-  exit, so a styled string (whose per-char loop rewrites `TEXT_ATTR`) leaves it
-  unchanged, and the cursor keeps its color across a `PRINT`.
+  cells, and the color newly typed text is stored with (which is what a string
+  literal carries into `PRINT`). It is *persistent*: `STRPRT_STYLED` saves it at
+  entry and restores it at every exit, so styled output leaves it unchanged and the
+  cursor keeps its color across a `PRINT`.
 - **BASIC default attribute / BASIC pen** — `BASIC_DEFAULT_ATTR` (`$03FD`); set by
   `COLOR`/`FLIPX`/`FLIPY`/`ALT` (which no longer touch `TEXT_ATTR`). Used for
   (a) system messages — startup/error/`READY.` text and `INPUT` prompts, which
@@ -427,16 +433,23 @@ after `make install` the emulator must be **rebuilt** (`go run`), not just reset
   `FLIPY`, `ALT`, and `STYLE n` (§3.6).
 - **Phase 7 — editor pen / BASIC pen independence — IMPLEMENTED.** BASIC no
   longer overwrites the editor pen. `COLOR`/`FLIPX`/`FLIPY`/`ALT` set
-  `BASIC_DEFAULT_ATTR` only (dropped the `sta TEXT_ATTR` sync). Plain literals
-  (`@lit`) print at the live `TEXT_ATTR` instead of forcing `BASIC_DEFAULT_ATTR`,
-  and `STRPRT_STYLED` saves the pen at entry and restores it at every exit (heap
-  loop no longer resets to the BASIC default). System messages route through
-  `STROUT`, which loads `BASIC_DEFAULT_ATTR` into `TEXT_ATTR` for the message and
-  restores the editor pen after. Net: `PRINT "X"` prints in the color it was
-  typed, `READY.`/errors print in the BASIC pen, and the cursor keeps the editor
-  pen across a `PRINT`. Emulator-validated (`TestPenIndependence`,
-  `pkg/computers/clementina`). Note: `COLOR` no longer tints plain `PRINT` output
-  — it governs system messages and the styled-string override source only.
+  `BASIC_DEFAULT_ATTR` only (dropped the `sta TEXT_ATTR` sync). `STRPRT_STYLED`
+  saves the pen at entry and restores it at every exit (heap loop no longer resets
+  to the BASIC default). Unstyled output (numbers, unstyled literals) prints at the
+  BASIC pen (`@lit`); string literals written in a color are promoted to heap
+  strings and keep their written colors (heap path), so `PRINT "FRAN";A` prints
+  `FRAN` in its stored color and the number `A` in the BASIC pen. System messages
+  route through `STROUT`, which loads `BASIC_DEFAULT_ATTR` into `TEXT_ATTR` for the
+  message and restores the editor pen after. The whole error line is set to the
+  BASIC pen at the top of `ERROR` (so the `?<name>` prefix matches the `ERROR`
+  suffix); the cursor is an
+  input-time construct redrawn only by `chrin`, and the editor reasserts
+  `EDITOR_PEN` (`$0304`) into `TEXT_ATTR` at each line edit so its color survives
+  any BASIC output (LIST/errors/styled PRINT). Emulator-validated
+  (`TestPenIndependence`, `TestUnstyledNumberUsesBasicPen`,
+  `TestErrorMessageUsesBasicPen`, `TestCursor*`, `pkg/computers/clementina`).
+  Note: `COLOR` governs system messages and the styled-string override source, not
+  the color of typed text (that is the editor pen, carried by the string literal).
 
 Verification: `make` builds `build/kernel.bin`; `make install` copies it into the
 emulator asset; then rebuild the emulator (`go run`) to re-embed it.
