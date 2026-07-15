@@ -9,8 +9,8 @@
 
 ; ----------------------------------------------------------------------------
 ; chrin - blocking read of one text byte from the MIA FIFO -> A
-; Records LAST_KEY / KEY_COUNT for easy verification in the emulator's memory
-; window before the video client is attached.
+; Records LAST_KEY for easy verification in the emulator's memory window before
+; the video client is attached.
 ; ----------------------------------------------------------------------------
 chrin:
         jsr cursor_show
@@ -29,7 +29,6 @@ chrin:
         plp
         lda KCHR
         sta LAST_KEY
-        inc KEY_COUNT
         rts
 
 ; ----------------------------------------------------------------------------

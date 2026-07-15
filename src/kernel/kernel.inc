@@ -228,7 +228,12 @@ CURSOR_X           = KVARS + $00   ; 0..SCR_COLS-1
 CURSOR_Y           = KVARS + $01   ; 0..SCR_ROWS-1
 TEXT_ATTR          = KVARS + $02   ; overlay attribute/color for new cells
 LAST_KEY           = KVARS + $03   ; debug: last byte returned by CHRIN
-KEY_COUNT          = KVARS + $04   ; debug: count of bytes read by CHRIN
+EDITOR_PEN         = KVARS + $04   ; persistent editor pen: the pen the screen
+                                   ; editor reasserts into TEXT_ATTR whenever it
+                                   ; takes control, so BASIC output (LIST, messages,
+                                   ; styled PRINT) can drive TEXT_ATTR transiently
+                                   ; without changing the color the cursor/typing use.
+                                   ; (Was KEY_COUNT, a write-only debug counter.)
 CINV               = KVARS + $05   ; reserved: redirectable CHRIN vector (2)
 COUTV              = KVARS + $07   ; reserved: redirectable CHROUT vector (2)
 CURSOR_VISIBLE     = KVARS + $09   ; nonzero when cursor glyph is drawn

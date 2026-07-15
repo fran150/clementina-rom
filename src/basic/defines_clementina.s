@@ -85,8 +85,9 @@ STYLE_SIDE_MAGIC1   := $FF
 ; BASIC program/variable workspace starts safely above the combined
 ; kernel+BASIC image. Keep this in sync with Makefile's MAX_KERNEL_BYTES guard:
 ; MIA loads the image at $0400, so RAMSTART2=$3600 allows up to $3200 bytes of
-; loaded image (kernel + BASIC + WOZ monitor). The RAM ceiling is $8000, where
-; the banked Extended RAM window begins, so the workspace is still ~18 KB.
+; loaded image (kernel + BASIC + WOZ monitor). BASIC continues through Extended
+; RAM bank 0 at $8000-$BFFF and uses $C000 as its exclusive memory ceiling,
+; giving it a 35,327-byte workspace after the initial empty-program marker.
 RAMSTART2        := $3600
 
 ; storage: route the LOAD/SAVE tokens to the kernel jump table (stubs today).

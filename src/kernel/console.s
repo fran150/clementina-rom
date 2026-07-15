@@ -200,7 +200,12 @@ chrout:
         jsr put_glyph_raw
 
 @done:
-        jsr cursor_show
+        ; The cursor is hidden while text is drawn and is NOT re-shown here: it is
+        ; an input-time construct, drawn only by chrin while it waits for a key (as
+        ; on the C64/Spectrum). Re-showing it after every chrout would paint it in
+        ; whatever pen the current output uses (e.g. the BASIC pen during READY/LIST)
+        ; and leave it stuck there until a blink; letting chrin own the cursor keeps
+        ; it invisible during PRINT and always in the live editor pen.
         ply
         plx
         pla
@@ -222,7 +227,8 @@ chrout_glyph:
         pla
         pha                     ; A = tile; keep a copy to honor the A-preserved contract
         jsr put_glyph_raw       ; draws + advances; clobbers A/X/Y, KTMP, KCHR
-        jsr cursor_show
+        ; Cursor left hidden here, like chrout's @done: chrin re-shows it when it
+        ; next waits for input, so output never paints or strands the cursor.
         pla
         plx
         ply

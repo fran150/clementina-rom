@@ -90,9 +90,9 @@ coldstart:
         lda #ATTR_WHITE         ; sets color white for the text
         sta TEXT_ATTR
         sta BASIC_DEFAULT_ATTR
+        sta EDITOR_PEN          ; editor pen starts white too
         stz BASIC_STYLE_MASK
-        stz LAST_KEY            ; 
-        stz KEY_COUNT
+        stz LAST_KEY            ;
         stz CURSOR_VISIBLE
         stz CURSOR_SAVE_CHR
         stz CURSOR_SAVE_ATTR
@@ -117,11 +117,14 @@ coldstart:
 ; warmstart - re-enter BASIC preserving the current program (READY prompt).
 ; Reachable from the jump table and used as WozMon's "quit" target: the user may
 ; arrive here mid-statement (e.g. after `403R` from the monitor), so reset the
-; stack and re-enable interrupts before handing control back to BASIC.
+; stack, restore BASIC's Extended RAM bank, and re-enable interrupts before
+; handing control back to BASIC.
 ; ----------------------------------------------------------------------------
 warmstart:
+        sei
         ldx #$FF
         txs
+        jsr exram_select_basic_bank
         cli
         jmp BASIC_WARM_START
 

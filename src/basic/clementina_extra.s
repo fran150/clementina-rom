@@ -169,9 +169,9 @@ style_set_default_bit:
         and     BASIC_DEFAULT_ATTR
 style_store_default_attr:
         and     #DISPLAY_ATTR_MASK
-        sta     BASIC_DEFAULT_ATTR
-        sta     TEXT_ATTR
-        rts
+        sta     BASIC_DEFAULT_ATTR      ; COLOR/FLIPX/FLIPY/ALT set the BASIC pen only.
+        rts                             ; The live editor pen (TEXT_ATTR) is independent
+                                        ; and is never overwritten here.
 
 BASIC_STYLE:
         jsr     GETBYT
@@ -247,7 +247,11 @@ MONCOUT_GLYPH:
 ; docs/styled-strings.md §3.7/§5.
 ; ----------------------------------------------------------------------------
 STRPRT_STYLED:
-        pha                     ; save N
+        tax                     ; hold N while we stack the live pen
+        lda     TEXT_ATTR
+        pha                     ; save the pen *under* N; every exit restores it, so a
+        txa                     ; styled string (whose per-char loop rewrites TEXT_ATTR)
+        pha                     ; leaves the pen unchanged. Then save N, as before.
         lda     STREND
         ora     STREND+1
         beq     @class_heap
@@ -289,17 +293,17 @@ STRPRT_STYLED:
         iny
         jmp     @hloop
 @hdone:
-        lda     BASIC_DEFAULT_ATTR ; leave following output at BASIC default
-        sta     TEXT_ATTR
+        pla                     ; restore the pen saved at entry (the editor pen for
+        sta     TEXT_ATTR       ; user output; the BASIC pen for a STROUT message)
         rts
 @lit:
         ; Literals/messages carry no attribute half and are plain unstyled text -
         ; including CR/LF formatting that CHROUT must interpret (e.g. message
         ; strings begin with CR+LF, and LF is ignored). So print them through plain
         ; OUTDO, exactly as before Phase 5: only the heap path (which can carry
-        ; graphic tile codes) needs the raw-glyph treatment.
-        lda     BASIC_DEFAULT_ATTR
-        sta     TEXT_ATTR
+        ; graphic tile codes) needs the raw-glyph treatment. They print at the live
+        ; pen: user PRINT output keeps the editor pen; a system message arrives here
+        ; with the BASIC pen already loaded by STROUT (print.s).
         pla                     ; A = N
         tax
         ldy     #$00
@@ -315,6 +319,8 @@ STRPRT_STYLED:
         jsr     PRINTNULLS
         jmp     @lloop
 @ldone:
+        pla                     ; balance the pen saved at entry (literals leave it
+        sta     TEXT_ATTR       ; unchanged, so this just restores the same value)
         rts
 
 ; ----------------------------------------------------------------------------

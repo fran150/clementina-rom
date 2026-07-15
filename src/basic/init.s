@@ -254,9 +254,10 @@ L40D7:
         bmi     L40FA
 .endif
 .ifdef CLEMENTINA
-; Clementina: base RAM ends at $8000; above that is the Extended RAM window.
+; Clementina: BASIC also owns Extended RAM bank 0 at $8000-$BFFF. Stop at
+; $C000 before the RAM probe reaches the VIA/I/O region.
         lda     LINNUM+1
-        cmp     #$80
+        cmp     #$C0
         beq     L40FA
 .endif
 .if .def(AIM65)

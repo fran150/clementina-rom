@@ -267,6 +267,21 @@ L2A13:
 ; ----------------------------------------------------------------------------
 STROUT:
         jsr     STRLIT
+.ifdef STYLED_STRINGS
+        ; Clementina: system messages (READY., errors, INPUT prompts) print in the
+        ; BASIC pen (COLOR), then the editor pen is restored so the cursor and the
+        ; next typed line keep their color. User PRINT output takes STRPRT directly
+        ; and prints at the live editor pen (STRPRT_STYLED @lit). See
+        ; docs/styled-strings.md.
+        lda     TEXT_ATTR
+        pha                     ; save the editor pen
+        lda     BASIC_DEFAULT_ATTR
+        sta     TEXT_ATTR       ; the message prints in the BASIC pen
+        jsr     STRPRT
+        pla
+        sta     TEXT_ATTR       ; restore the editor pen (cursor keeps its color)
+        rts
+.endif
 
 ; ----------------------------------------------------------------------------
 ; PRINT STRING AT (FACMO,FACLO)

@@ -15,14 +15,23 @@ save:
         rts
 
 ; ----------------------------------------------------------------------------
+; exram_select_basic_bank - restore the Extended RAM mapping BASIC relies on.
+; BASIC's 16-bit workspace extends through bank 0 at $8000-$BFFF, so no other
+; bank may remain selected while the interpreter is active.
+; ----------------------------------------------------------------------------
+exram_select_basic_bank:
+        stz VIA_ORA             ; latch external RAM bank 0 first
+        lda #VIA_DDRA_BANK_BITS
+        sta VIA_DDRA            ; PA0-PA4 drive the SRAM bank address
+        rts
+
+; ----------------------------------------------------------------------------
 ; via_init - initialize the 65C22 for deterministic bank 0 and Timer 1 IRQs.
 ; Timer 1 runs in free-run mode with PB7 output disabled; the IRQ handler clears
 ; the T1 flag and uses it as a cursor blink tick only while CHRIN is polling.
 ; ----------------------------------------------------------------------------
 via_init:
-        stz VIA_ORA             ; external RAM bank 0
-        lda #VIA_DDRA_BANK_BITS
-        sta VIA_DDRA
+        jsr exram_select_basic_bank
 
         lda #$7F                ; disable and clear all VIA interrupt sources
         sta VIA_IER

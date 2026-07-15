@@ -39,10 +39,10 @@ CPU: **65C02S** (the `STZ`, `BRA`, `PHX/PLX`, etc. extensions are available).
 | `$0200–$02FF` | Line input buffer (§4) |
 | `$0300–$03FF` | Kernel variables and vectors (§5) |
 | `$0400–…` | Kernel image: jump table (§6), then code and data (§7) |
-| `…–$7FFF` | BASIC free workspace (§8) — the bytes BASIC reports as "free" |
+| `…–$7FFF` | Lower part of BASIC's free workspace (§8) |
 
-The image is packed at the bottom so all occupied RAM is contiguous and the
-free workspace is one block at the top of base RAM.
+The image is packed at the bottom. BASIC's logical workspace continues from the
+top of base RAM into Extended RAM bank 0 at `$8000-$BFFF`.
 
 ---
 
@@ -106,9 +106,9 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 | --- | --- | --- | --- |
 | `$0300` | `CURSOR_X` | 1 | Text cursor column, `0..39`. |
 | `$0301` | `CURSOR_Y` | 1 | Text cursor row, `0..24`. |
-| `$0302` | `TEXT_ATTR` | 1 | Overlay text attribute for new console cells. Bits `0-3` select the palette bank; the default is palette `0` white text over the blue backdrop. |
+| `$0302` | `TEXT_ATTR` | 1 | Live overlay pen for new console cells. Bits `0-3` select the palette bank; the default is palette `0` white text over the blue backdrop. BASIC output drives this transiently; the editor reasserts `EDITOR_PEN` into it whenever it takes control. |
 | `$0303` | `LAST_KEY` | 1 | Debug: last byte returned by `CHRIN`. Watch this in the emulator's memory window to confirm input before attaching a video client. |
-| `$0304` | `KEY_COUNT` | 1 | Debug: running count of bytes read by `CHRIN`. |
+| `$0304` | `EDITOR_PEN` | 1 | Persistent editor pen. The pen the screen editor sets from the keyboard (ESC commands) and reasserts into `TEXT_ATTR` at each line edit, so the cursor and typed text keep their color across BASIC output (LIST, messages, styled `PRINT`). Was `KEY_COUNT` (a write-only debug counter). |
 | `$0305` | `CINV` | 2 | Reserved: redirectable `CHRIN` vector (not yet used). |
 | `$0307` | `COUTV` | 2 | Reserved: redirectable `CHROUT` vector (not yet used). |
 | `$0309` | `CURSOR_VISIBLE` | 1 | Nonzero when the software cursor glyph is currently drawn into the overlay. |
@@ -149,7 +149,7 @@ freely. Anchored at the load base so `$0400` is also the reset entry.
 | `$0400` | `KERN_COLDSTART` | — | — | Reset entry. MIA points RESET here. Sets up the machine, console, prints the banner, then enters BASIC. |
 | `$0403` | `KERN_WARMSTART` | — | — | Re-enter BASIC at the READY prompt, **preserving** the current program and variables. Resets the stack and re-enables interrupts first, so it is safe to reach mid-statement (used by WozMon's `Q` quit command; `403R` still works manually). |
 | `$0406` | `KERN_CHROUT` | `A`=char | A/X/Y preserved | Write one character to the console at the cursor. Handles CR (`$0D`, newline), LF (`$0A`, ignored), BS (`$08`), FF (`$0C`, clear), the cursor moves (`$11`/`$91`/`$1D`/`$9D`) and HOME (`$13`), printable bytes. |
-| `$0409` | `KERN_CHRIN` | — | `A`=char | Blocking read of one raw text byte from the MIA FIFO (single key; used by BASIC `GET`). Updates `LAST_KEY`/`KEY_COUNT`. |
+| `$0409` | `KERN_CHRIN` | — | `A`=char | Blocking read of one raw text byte from the MIA FIFO (single key; used by BASIC `GET`). Shows the cursor while waiting and updates `LAST_KEY`. |
 | `$040C` | `KERN_GETKEY_NB` | — | `C`=1 & `A`=char, or `C`=0 | Non-blocking read. |
 | `$040F` | `KERN_STOP` | — | `Z`=1 if break | ISCNTC / Ctrl-C check. **Placeholder** today (never reports a break); real handling lands with BASIC. |
 | `$0412` | `KERN_CLRSCR` | — | — | Clear the overlay (fill with spaces) and home the cursor. |
@@ -185,7 +185,11 @@ combined kernel+BASIC image is ~11.4 KiB. Notable internal routines:
   and set its current address to the current console cell.
 - `cursor_show` / `cursor_hide` / `cursor_toggle` — draw, restore, or flip the
   software cursor at the current console cell while preserving the tile and
-  attribute underneath it.
+  attribute underneath it. The cursor is an input-time construct: `chrout` hides
+  it before drawing and does **not** re-show it, so it is invisible during program
+  output (PRINT/LIST). `chrin` shows it (in `EDITOR_PEN`) while waiting for a key,
+  and the Timer-1 IRQ blinks it — mirroring how the C64/Spectrum only cursor during
+  input/editing.
 - `char_to_tile` — convert ASCII-ish kernel strings/input into the
   C64-style screen codes used by the default PETSCII font bank.
 - `set_idxa_addr` / `set_idxa_limit` — write the current/limit address of the
@@ -201,22 +205,29 @@ combined kernel+BASIC image is ~11.4 KiB. Notable internal routines:
 
 ---
 
-## 8. BASIC free workspace (`end-of-image … $7FFF`)
+## 8. BASIC free workspace (`$3601 … $BFFF`)
 
 At runtime BASIC's program text, variables, arrays, and strings live between
 `TXTTAB` and `MEMSIZ`. Clementina currently sets `RAMSTART2 = $3600`, safely
-above the combined kernel+BASIC+monitor image, and caps `MEMSIZ` at `$8000` (the
-start of the banked Extended RAM window). `make` fails if `build/kernel.bin` grows
-past the `$3600` boundary, because BASIC's cold-start RAM probe writes from
-`RAMSTART2` upward. The resulting span is what BASIC prints as **"bytes free"**.
+above the combined kernel+BASIC+monitor image. Cold start selects Extended RAM
+bank 0 and caps `MEMSIZ` at `$C000`, immediately before the I/O region. The empty
+program marker advances `TXTTAB` to `$3601`, giving BASIC 35,327 bytes. `make`
+fails if `build/kernel.bin` grows past the `$3600` boundary, because BASIC's
+cold-start RAM probe writes from `RAMSTART2` upward.
+
+Bank 0 must remain selected while BASIC is active: changing PA0-PA4 would replace
+the portion of its live workspace at `$8000-$BFFF`. Kernel warm start therefore
+restores bank 0 before returning to the interpreter.
 
 ---
 
 ## 9. Extended RAM (`$8000–$BFFF`)
 
 A 16 KiB window into 512 KiB of banked RAM. The active 16 KiB bank is selected
-by VIA Port A bits PA0–PA4 (32 banks). Reserved for future use: RAM disk,
-paged data/assets, large buffers. Not used by the kernel yet.
+by VIA Port A bits PA0–PA4 (32 banks). BASIC uses bank 0 as the upper 16 KiB of
+its normal workspace. Banks 1–31 remain available for future bank-aware access,
+such as a RAM disk, paged data/assets, or large buffers; accesses to them must
+restore bank 0 before resuming BASIC.
 
 ---
 

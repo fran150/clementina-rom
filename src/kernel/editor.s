@@ -44,6 +44,9 @@ editkey:
 ; drop the cursor to the line below it.
 ; ----------------------------------------------------------------------------
 edit_line:
+        lda EDITOR_PEN          ; reassert the editor pen: BASIC output (LIST, styled
+        sta TEXT_ATTR           ; PRINT, messages) may have driven TEXT_ATTR elsewhere,
+                                ; but typed text and the cursor use the editor's color.
         lda CURSOR_X
         sta EDIT_START_X        ; where this input began (past any printed prompt)
         lda CURSOR_Y
@@ -591,16 +594,19 @@ edit_command:
         lda #$80                ; toggle CHR_ALT (reverse)
         eor TEXT_ATTR
         sta TEXT_ATTR
+        sta EDITOR_PEN          ; persist the pen change across input lines
         rts
 @fliph:
         lda #$10                ; toggle flip-X
         eor TEXT_ATTR
         sta TEXT_ATTR
+        sta EDITOR_PEN
         rts
 @flipv:
         lda #$20                ; toggle flip-Y
         eor TEXT_ATTR
         sta TEXT_ATTR
+        sta EDITOR_PEN
         rts
 @paint:
         lda #$01
@@ -609,6 +615,7 @@ edit_command:
 @reset:
         stz EDIT_MODE
         stz TEXT_ATTR           ; palette 0, no flip/reverse
+        stz EDITOR_PEN
         rts
 
 ; ----------------------------------------------------------------------------
@@ -624,6 +631,7 @@ set_palette:
         pla
         ora TEXT_ATTR
         sta TEXT_ATTR
+        sta EDITOR_PEN          ; persist the pen change across input lines
         rts
 
 ; ----------------------------------------------------------------------------
