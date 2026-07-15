@@ -50,7 +50,8 @@ clrscr:
         sta KCNT+1
 @attr_fill:
         lda TEXT_ATTR
-        sta IDXA_PORT
+        and #$7F                ; cleared cells are blank spaces, never reversed
+        sta IDXA_PORT           ; (a reversed space is a solid block); clear CHR_ALT
         lda KCNT
         bne @attr_dec
         dec KCNT+1
@@ -140,7 +141,8 @@ chrout:
         sta IDXA_PORT           ; erase the character under the cursor
         jsr cursor_attr_to_idxa
         lda TEXT_ATTR
-        sta IDXA_PORT
+        and #$7F                ; the erased cell is a space, never reversed
+        sta IDXA_PORT           ; (a reversed space is a solid block); clear CHR_ALT
 @bs_done:
         jmp @done
 
@@ -310,6 +312,8 @@ scroll_up:
         jsr set_idxa_addr
         ldx #SCR_COLS
         lda TEXT_ATTR
+        and #$7F                ; the blanked bottom row is spaces, never reversed
+                                ; (a reversed space is a solid block); clear CHR_ALT
 @attr_blank:
         sta IDXA_PORT
         dex
