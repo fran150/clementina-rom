@@ -752,6 +752,9 @@ L2498:
         beq     L2497
   .endif
 .endif
+.ifdef CLEMENTINA
+        jsr     TOKEN_UPPER     ; keywords may be typed in either case
+.endif
         sec
         sbc     TOKEN_NAME_TABLE,y
         beq     L2496
@@ -828,6 +831,9 @@ L24DB:
         lda     TOKEN_NAME_TABLE,y
         bne     L2498
         lda     INPUTBUFFERX,x
+.ifdef CLEMENTINA
+        jsr     TOKEN_UPPER     ; store program text folded: 'a' and 'A' are one variable
+.endif
         bpl     L24AA
 ; ---END OF LINE------------------
 L24EA:
@@ -840,6 +846,23 @@ L24EA:
         rts
 
 .ifdef CLEMENTINA
+; ----------------------------------------------------------------------------
+; A = 'a'..'z' -> 'A'..'Z', any other value unchanged. Called only from the
+; tokenizer's non-literal path, so text inside quotes and after REM/DATA keeps
+; the case it was typed in. Exits with N/Z set from A: the caller at the end of
+; the keyword search branches on the sign of the returned character.
+; ----------------------------------------------------------------------------
+TOKEN_UPPER:
+        cmp     #'a'
+        bcc     @done
+        cmp     #'z'+1
+        bcs     @done
+        sbc     #$1F            ; carry is clear here, so this subtracts $20
+@done:
+        cmp     #$00
+        rts
+
+; ----------------------------------------------------------------------------
 TOKENIZE_MON:
         cmp     #'M'
         beq     @check
