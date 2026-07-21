@@ -25,6 +25,19 @@ ZP_START4 := $65
 ; extra ZP variables
 USR              := $000A
 
+; Relocate Z14 (the PRINT output-suppress / CTRL-O flag) out of the ZP_START3
+; block. That block is 11 bytes ($5B-$65), so its last byte lands on $65 - the
+; exact address `.org ZP_START4` assigns to TEMPPT, the temporary-string
+; descriptor stack pointer. With Z14 == TEMPPT, every `lsr Z14` (INPUT, warm
+; restart) and `stx Z14` (end of program) silently mangles TEMPPT; a program
+; that PRINTs string literals inside an INPUT loop then walks TEMPPT down into
+; low zero page, and PUTNEW scribbles string descriptors over the GORESTART /
+; GOSTROUT / USR JMP thunks at $00-$0C - crashing the interpreter (typically
+; when RESTART calls the corrupted GOSTROUT). Give Z14 its own byte in the free
+; span above the zero-page CHRGET routine ($C2-$DE) so it no longer aliases
+; TEMPPT. zeropage.s only reserves Z14 in-block when it is not defined here.
+Z14              := $00DF
+
 ; BASIC keeps its line input buffer in zero page (the proven 65C02 layout).
 ; WozMon uses the $0200 page; the two are never active at the same time.
 ; (Open item: optionally move BASIC's buffer to $0200 during full BASIC bring-up.)

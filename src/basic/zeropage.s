@@ -61,8 +61,11 @@ INPUTFLG:
 	.res 1
 CPRMASK:
 	.res 1
+.ifndef Z14 ; allow override: a target may relocate Z14 out of this block so the
+	    ; .org ZP_START4 below does not overlap it (see defines_clementina.s).
 Z14:
 	.res 1
+.endif
 
 .org ZP_START4
 
