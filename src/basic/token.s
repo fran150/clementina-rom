@@ -198,3 +198,19 @@ MATHTBL:
         .word   EQUOP-1
         .byte   $64
         .word   RELOPS-1
+
+.ifdef CLEMENTINA
+; ----------------------------------------------------------------------------
+; Extension keyword table (two-byte tokens). The cruncher emits TOKEN_EXT ($FF)
+; followed by a subtoken ($80|index) for these keywords, so they cost nothing in
+; the full 256-byte primary name table above and dodge the 128 single-byte token
+; limit. Each extension table has its own 256-byte / 128-entry budget. Add new
+; sprite/sound/etc. statements here; the tokenizer (TOKENIZE_EXT), statement
+; dispatch (EXECUTE_STATEMENT1 @ext) and LIST detokenizer in program.s/flow1.s
+; handle the prefix generically, so no other code changes are needed per command.
+; Handlers live in clementina_extra.s (EXTRA segment).
+; ----------------------------------------------------------------------------
+        init_ext_token_tables
+        ext_keyword_rts "BCOLOR", BASIC_BCOLOR
+        end_ext_token_tables
+.endif

@@ -155,6 +155,8 @@ EXECUTE_STATEMENT1:
 .ifdef CLEMENTINA
         cmp     #TOKEN_MON
         beq     @mon
+        cmp     #TOKEN_EXT
+        beq     @ext
         sec
 .endif
         sbc     #$80
@@ -179,6 +181,25 @@ EXECUTE_STATEMENT1:
 .ifdef CLEMENTINA
 @mon:
         jmp     BASIC_MON
+; Extension statement: TXTPTR is on the TOKEN_EXT prefix. Read the subtoken and
+; dispatch through EXT_ADDRESS_TABLE, then fall into the token's handler with A =
+; first argument char and TXTPTR advanced past both bytes - exactly the state a
+; primary statement handler is entered with (via the RTS built by jmp CHRGET).
+@ext:
+        jsr     CHRGET          ; A = subtoken ($80|index)
+        sec
+        sbc     #$80            ; A = extension index
+        cmp     #NUM_EXT_TOKENS
+        bcs     @ext_syn        ; unknown subtoken -> SYNTAX ERROR
+        asl     a
+        tay
+        lda     EXT_ADDRESS_TABLE+1,y
+        pha
+        lda     EXT_ADDRESS_TABLE,y
+        pha
+        jmp     CHRGET          ; step past subtoken to first arg; RTS -> handler
+@ext_syn:
+        jmp     SYNERR
 .endif
 
 .ifdef CONFIG_11

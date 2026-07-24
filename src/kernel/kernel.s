@@ -53,9 +53,10 @@ KCHR:   .res 1          ; character being printed by CHROUT
         jmp editkey             ; KERN_EDITKEY
         jmp chrout_glyph        ; KERN_CHROUT_GLYPH
         jmp WOZMON              ; KERN_WOZMON
+        jmp set_backdrop        ; KERN_SET_BACKDROP
 
 ; Compile-time guard: confirm the table lines up with the published ABI.
-.assert (* = KERN_BASE + $2D), error, "kernel jump table size/layout mismatch"
+.assert (* = KERN_BASE + $30), error, "kernel jump table size/layout mismatch"
 
 ; ============================================================================
 ; Code

@@ -15,6 +15,7 @@ KERN_GETKEY_NB    = $040C
 KERN_EDITKEY      = $0424
 KERN_CHROUT_GLYPH = $0427
 KERN_WOZMON       = $042A
+KERN_SET_BACKDROP = $042D
 
 ; Console control codes (CHROUT interprets these) and overlay geometry. Keep in
 ; sync with src/kernel/kernel.inc.
@@ -115,6 +116,36 @@ BASIC_CRSR:
 
 ; MONCOUT routes A through the kernel console; chrout preserves A/X/Y, so the
 ; loops above can hold their counter in X across the call.
+
+; ----------------------------------------------------------------------------
+; BCOLOR n  set the screen background to the same color COLOR n gives text.
+;
+; The backdrop is a palette selector: bits 3-6 pick the palette bank, bits 0-2
+; the color index within it (see VIDX_BACKDROP_COLOR). COLOR n draws text in
+; color index 1 of palette bank n, so BCOLOR n = (n<<3)|1 paints the background
+; in that exact ink color. n is 0-15, matching COLOR; BCOLOR 6 restores the
+; default backdrop blue (palette 6's ink is the backdrop blue - see the startup
+; palette in docs/phase5-charset-keyboard.md). Out-of-range raises ILLEGAL
+; QUANTITY, like COLOR.
+;
+; BCOLOR is an extension-token statement (the primary keyword table is full):
+; it is registered in the EXT_NAME_TABLE / EXT_ADDRESS_TABLE in token.s and
+; dispatched via the TOKEN_EXT prefix. It is entered exactly like a primary
+; statement handler (A = first arg char, TXTPTR positioned), so nothing here is
+; special-cased.
+; ----------------------------------------------------------------------------
+BASIC_BCOLOR:
+        jsr     GETBYT                  ; X = color 0-15
+        cpx     #$10
+        bcs     @iq
+        txa
+        asl     a
+        asl     a
+        asl     a                       ; n<<3 -> palette bank field (bits 3-6)
+        ora     #$01                    ; color index 1 = the ink color of palette n
+        jmp     KERN_SET_BACKDROP       ; tail call; kernel does the IRQ-safe write
+@iq:
+        jmp     IQERR
 
 .ifdef STYLED_STRINGS
 ; ----------------------------------------------------------------------------

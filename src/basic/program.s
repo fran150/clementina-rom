@@ -722,6 +722,8 @@ LC49E:
 .ifdef CLEMENTINA
         jsr     TOKENIZE_MON
         bcs     L24AC
+        jsr     TOKENIZE_EXT    ; extension keywords -> TOKEN_EXT + subtoken
+        jcs     L246C           ; matched: TOKENIZE_EXT already stored both bytes
 .endif
         cmp     #$30
         bcc     L248C
@@ -892,6 +894,69 @@ TOKENIZE_MON:
 @restore:
         lda     INPUTBUFFERX,x
 @no:
+        clc
+        rts
+
+; ----------------------------------------------------------------------------
+; TOKENIZE_EXT - match the input word at INPUTBUFFERX,x against the extension
+; keyword table (EXT_NAME_TABLE) and, on a match, crunch it to the two-byte form
+; TOKEN_EXT + subtoken ($80|index). Called from the crunch loop after
+; TOKENIZE_MON. Unlike TOKENIZE_MON (which returns a single token for the caller
+; to store), this stores BOTH bytes itself and returns C=1 so the caller resumes
+; the main loop directly (jcs L246C) - bypassing the L24AC post-store DATA/REM
+; check, which must not run on a subtoken. On match X is left just past the
+; keyword and Y at the last output byte. On no match X/Y/A are restored (A =
+; current char) and C=0, so the primary keyword search runs normally.
+;
+; Mirrors the primary keyword search (L248C..L24D7) over EXT_NAME_TABLE. Scratch:
+; TXTPTR = input word start, STRNG2 = saved crunch output index, EOLPNTR =
+; running extension index - all re-initialised by the primary search on no match.
+; ----------------------------------------------------------------------------
+TOKENIZE_EXT:
+        sty     STRNG2          ; save crunch output index
+        ldy     #$00
+        sty     EOLPNTR         ; extension keyword index = 0
+        dey                     ; Y = $FF (name-table index, pre-incremented)
+        stx     TXTPTR          ; input word start
+        dex                     ; X = start-1 (pre-incremented)
+@advance:
+        iny
+@nextin:
+        inx
+@compare:
+        lda     INPUTBUFFERX,x
+        jsr     TOKEN_UPPER     ; fold case, exactly like the primary search
+        sec
+        sbc     EXT_NAME_TABLE,y
+        beq     @advance        ; char matches (not final) -> step both
+        cmp     #$80            ; matched the final (high-bit) char?
+        bne     @nextkw
+        ; --- MATCH: A=$80, X on last char, EOLPNTR=index, Y=name index ---
+        ora     EOLPNTR         ; A = subtoken = $80 | index
+        ldy     STRNG2          ; Y = crunch output index
+        iny
+        pha
+        lda     #TOKEN_EXT
+        sta     INPUTBUFFER-5,y ; store the prefix byte
+        pla
+        iny
+        sta     INPUTBUFFER-5,y ; store the subtoken byte
+        inx                     ; X: last keyword char -> next input char
+        sec                     ; C=1: caller resumes the main loop
+        rts
+@nextkw:
+        ldx     TXTPTR          ; reset input to the word start
+        inc     EOLPNTR         ; advance to the next extension keyword
+@skip:
+        iny
+        lda     EXT_NAME_TABLE-1,y
+        bpl     @skip           ; scan to the end (high-bit char) of this name
+        lda     EXT_NAME_TABLE,y
+        bne     @compare        ; another keyword follows -> try it
+        ; --- end of table: no extension keyword matched ---
+        ldx     TXTPTR          ; restore input index (word start)
+        ldy     STRNG2          ; restore crunch output index
+        lda     INPUTBUFFERX,x  ; A = current char, for the caller's cmp #$30
         clc
         rts
 .endif
@@ -1273,6 +1338,32 @@ L25E5a:
         lda     #'N'
         jmp     L25CA
 @not_mon_token:
+        cmp     #TOKEN_EXT
+        bne     @not_ext_token
+        ; Extension keyword: the next program byte is the subtoken ($80|index).
+        ; Detokenize it from EXT_NAME_TABLE, mirroring the primary scan below.
+        iny
+        lda     (LOWTRX),y      ; A = subtoken
+        sty     FORPNT          ; resume the list loop after the subtoken byte
+        sec
+        sbc     #$7F            ; index+1 (subtoken $80 -> 1)
+        tax
+        ldy     #$FF
+@ext_l1:
+        dex
+        beq     @ext_l3
+@ext_l2:
+        iny
+        lda     EXT_NAME_TABLE,y
+        bpl     @ext_l2
+        bmi     @ext_l1
+@ext_l3:
+        iny
+        lda     EXT_NAME_TABLE,y
+        bmi     L25CA           ; final char (high bit) -> mask, output, continue
+        jsr     OUTDO
+        bne     @ext_l3         ; always (name chars are nonzero)
+@not_ext_token:
 .endif
 .ifdef CONFIG_DATAFLG
         cmp     #$FF

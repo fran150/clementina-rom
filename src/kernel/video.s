@@ -63,6 +63,26 @@ video_init:
         rts
 
 ; ----------------------------------------------------------------------------
+; set_backdrop - set the screen backdrop color. In: A = backdrop selector
+; (bits 0-2 = color index, bits 3-6 = palette bank; see VIDX_BACKDROP_COLOR).
+; The renderer repaints the backdrop from VRAM every frame, so writing the
+; selector is enough - no refresh command needed. The two-register window A
+; write is fenced with sei so a cursor-blink IRQ (cursor_show/hide rebind
+; window A to the overlay index) can't land between the select and the data
+; write. Preserves X/Y; returns with A = selector.
+; ----------------------------------------------------------------------------
+set_backdrop:
+        php                     ; save the caller's interrupt-enable state
+        sei
+        pha
+        lda #VIDX_BACKDROP_COLOR
+        sta IDXA_SELECT
+        pla                     ; A = selector again
+        sta IDXA_PORT
+        plp                     ; restore interrupts (re-enable if they were on)
+        rts
+
+; ----------------------------------------------------------------------------
 ; init_scroll_indexes - reserve $F0-$F3 as fixed DMA source/destination pairs.
 ; ----------------------------------------------------------------------------
 init_scroll_indexes:

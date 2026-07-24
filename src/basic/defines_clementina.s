@@ -48,6 +48,11 @@ SPACE_FOR_GOSUB  := $33
 WIDTH            := 40
 WIDTH2           := 14
 TOKEN_MON        := $FE
+; Extension-token prefix. A two-byte token TOKEN_EXT + subtoken ($80|index)
+; dispatches sprite/sound/etc. statements from the separate extension keyword
+; table (token.s), sidestepping the 256-byte / 128-token limits of the primary
+; table. $FF is free in this build (the CBM/DATAFLG uses of $FF are inactive).
+TOKEN_EXT        := $FF
 
 ; ----------------------------------------------------------------------------
 ; Styled strings (see docs/styled-strings.md)
@@ -97,11 +102,18 @@ STYLE_SIDE_MAGIC1   := $FF
 ; memory layout
 ; BASIC program/variable workspace starts safely above the combined
 ; kernel+BASIC image. Keep this in sync with Makefile's MAX_KERNEL_BYTES guard:
-; MIA loads the image at $0400, so RAMSTART2=$3600 allows up to $3200 bytes of
+; MIA loads the image at $0400, so RAMSTART2=$4000 allows up to $3C00 bytes of
 ; loaded image (kernel + BASIC + WOZ monitor). BASIC continues through Extended
 ; RAM bank 0 at $8000-$BFFF and uses $C000 as its exclusive memory ceiling,
-; giving it a 35,327-byte workspace after the initial empty-program marker.
-RAMSTART2        := $3600
+; giving it a ~32,767-byte workspace after the initial empty-program marker.
+; Raised from $3600 to make room for the extension-token command set (sprites,
+; sound, ...); bump it further (with MAX_KERNEL_BYTES) as more commands land.
+;
+; AVOID TXTTAB in ~[$39FE, $3AC0]: a pre-existing latent bug (reproduces on stock
+; baseline, unrelated to the extension tokens) makes INPUT misread its buffer and
+; re-prompt "??" when the program text starts in that ~200-byte window. $3600 and
+; $3B00+ are fine; $4000 clears it with margin. See the note in docs/memory-map.md.
+RAMSTART2        := $4000
 
 ; storage: route the LOAD/SAVE tokens to the kernel jump table (stubs today).
 KERN_LOAD := $041E

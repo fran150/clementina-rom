@@ -57,6 +57,41 @@ DUMMY_START:
 		NUM_TOKENS := <(*-DUMMY_START)
 .endmacro
 
+; ----------------------------------------------------------------------------
+; Extension keyword tables (two-byte tokens: TOKEN_EXT prefix + subtoken).
+; A parallel name table (EXT_NAME_TABLE) and RTS-style address table
+; (EXT_ADDRESS_TABLE) live in their own segments so each has its own 256-byte /
+; 128-entry budget, independent of the full primary tables. ext_keyword_rts
+; appends to both in lockstep, so extension index N indexes both tables. See
+; the tokenizer (TOKENIZE_EXT), dispatch (EXECUTE_STATEMENT1 @ext) and LIST
+; hooks in program.s / flow1.s.
+.macro init_ext_token_tables
+        .segment "EXTVEC"
+EXT_ADDRESS_TABLE:
+        .segment "EXTKEYW"
+EXT_NAME_TABLE:
+.endmacro
+
+.macro ext_keyword_rts key, vec
+        .segment "EXTVEC"
+		.word	vec-1
+        .segment "EXTKEYW"
+		htasc	key
+.endmacro
+
+.macro end_ext_token_tables
+        .segment "EXTKEYW"
+		.byte	0                       ; name-table terminator
+EXT_NAME_TABLE_END:
+        .segment "EXTVEC"
+EXT_ADDRESS_TABLE_END:
+		; Both extension tables are indexed with an 8-bit register, exactly like
+		; the primary tables, so each must stay within its own budget.
+		NUM_EXT_TOKENS = <((EXT_ADDRESS_TABLE_END - EXT_ADDRESS_TABLE) / 2)
+		.assert (EXT_NAME_TABLE_END - EXT_NAME_TABLE) <= 256, error, "extension keyword name table exceeds 256 bytes"
+		.assert (EXT_ADDRESS_TABLE_END - EXT_ADDRESS_TABLE) <= 256, error, "extension address table exceeds 128 entries"
+.endmacro
+
 .macro init_error_table
         .segment "ERROR"
 ERROR_MESSAGES:

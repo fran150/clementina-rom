@@ -205,15 +205,24 @@ combined kernel+BASIC image is ~11.4 KiB. Notable internal routines:
 
 ---
 
-## 8. BASIC free workspace (`$3601 … $BFFF`)
+## 8. BASIC free workspace (`$4001 … $BFFF`)
 
 At runtime BASIC's program text, variables, arrays, and strings live between
-`TXTTAB` and `MEMSIZ`. Clementina currently sets `RAMSTART2 = $3600`, safely
+`TXTTAB` and `MEMSIZ`. Clementina currently sets `RAMSTART2 = $4000`, safely
 above the combined kernel+BASIC+monitor image. Cold start selects Extended RAM
 bank 0 and caps `MEMSIZ` at `$C000`, immediately before the I/O region. The empty
-program marker advances `TXTTAB` to `$3601`, giving BASIC 35,327 bytes. `make`
-fails if `build/kernel.bin` grows past the `$3600` boundary, because BASIC's
-cold-start RAM probe writes from `RAMSTART2` upward.
+program marker advances `TXTTAB` to `$4001`, giving BASIC ~32,767 bytes. `make`
+fails if `build/kernel.bin` grows past the `$4000` boundary, because BASIC's
+cold-start RAM probe writes from `RAMSTART2` upward. (`RAMSTART2` was raised from
+`$3600` to make room for the extension-token command set; raise it further, in
+lockstep with `MAX_KERNEL_BYTES`, as more commands are added.)
+
+> **Known landmine — avoid `TXTTAB` in ~`[$39FE, $3AC0]`.** A pre-existing latent
+> bug (present on the stock baseline, independent of the extension tokens) makes
+> `INPUT` misread its buffer and re-prompt `??` when the program text begins in
+> that ~200-byte window. `$3600` and `$3B00`+ are unaffected; `$4000` clears it
+> with margin. Root cause not yet diagnosed; keep `RAMSTART2` clear of that window
+> when choosing future values (`$5000`, `$6000`, … are all fine).
 
 Bank 0 must remain selected while BASIC is active: changing PA0-PA4 would replace
 the portion of its live workspace at `$8000-$BFFF`. Kernel warm start therefore

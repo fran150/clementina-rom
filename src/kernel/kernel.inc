@@ -219,6 +219,7 @@ KERN_SAVE          = KERN_BASE + $21   ; save (stub for now)
 KERN_EDITKEY       = KERN_BASE + $24   ; screen editor: next char of edited line
 KERN_CHROUT_GLYPH  = KERN_BASE + $27   ; A = tile -> console as a raw glyph (no ctrl)
 KERN_WOZMON        = KERN_BASE + $2A   ; enter the WOZ monitor (see src/monitor)
+KERN_SET_BACKDROP  = KERN_BASE + $2D   ; A = backdrop selector -> VIDX_BACKDROP_COLOR
 
 ; ----------------------------------------------------------------------------
 ; Kernel variable page ($0300-$03FF). See docs/memory-map.md.

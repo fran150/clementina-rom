@@ -121,7 +121,7 @@ Startup text-ink order:
 | `3` | 3 | yellow |
 | `4` | 4 | green |
 | `5` | 5 | cyan |
-| `6` | 6 | blue |
+| `6` | 6 | backdrop blue (the default; `BCOLOR 6` restores it) |
 | `7` | 7 | violet / purple |
 | `8` | 8 | magenta / pink |
 | `9` | 9 | black |
@@ -129,7 +129,7 @@ Startup text-ink order:
 | `B` | 11 | light gray |
 | `C` | 12 | dark red / brown |
 | `D` | 13 | dark green |
-| `E` | 14 | backdrop blue |
+| `E` | 14 | blue (the brighter blue formerly at palette 6) |
 | `F` | 15 | bright white / highlight |
 
 This deliberately keeps `0` as the existing white/default, puts the rainbow-ish
