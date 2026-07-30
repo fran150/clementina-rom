@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clementina Key-Map Editor</title>
+<style>
+  :root{
+    --bg:#14110d; --bg2:#0d0b08; --panel:#1e1a14; --panel2:#262017;
+    --line:#3a3022; --line2:#4d4129; --ink:#ffb000; --ink-dim:#b3822a;
+    --text:#e2d9b8; --dim:#8f876c; --dim2:#6b6350; --sel:#36c9d6;
+    --ok:#7bd88f; --lock:#5a5344; --warn:#ff9f6e;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:"SF Mono","JetBrains Mono",Menlo,Consolas,ui-monospace,monospace;font-size:13px;}
+  canvas{image-rendering:pixelated;display:block;}
+  button,label.btn{font-family:inherit;font-size:12px;background:var(--panel2);color:var(--text);
+    border:1px solid var(--line);border-radius:5px;padding:5px 10px;cursor:pointer;}
+  button:hover,label.btn:hover{background:#322a1d;border-color:var(--line2);}
+  button:disabled{opacity:.4;cursor:default;}
+  button.on{background:var(--ink);color:var(--bg);border-color:var(--ink);font-weight:700;}
+  input[type=file]{display:none;}
+
+  header{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 16px;
+    background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:10;}
+  header h1{font-size:14px;margin:0;color:var(--ink);letter-spacing:.5px;font-weight:600;}
+  header h1 small{color:var(--dim);font-weight:400;}
+  header .sep{width:1px;height:22px;background:var(--line);}
+  header .fname{color:var(--dim);font-size:12px;}
+  .grow{flex:1;}
+
+  main{display:grid;grid-template-columns:360px 1fr;gap:16px;padding:16px;align-items:start;}
+  @media(max-width:1120px){main{grid-template-columns:1fr;}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;}
+  .panel h2{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);margin:0 0 10px;font-weight:600;
+    display:flex;align-items:center;gap:8px;}
+  .panel h2 .count{margin-left:auto;color:var(--text);font-weight:400;text-transform:none;letter-spacing:0;
+    font-variant-numeric:tabular-nums;}
+
+  /* glyph bag */
+  .baghint{color:var(--dim);font-size:11px;line-height:1.6;margin:0 0 10px;}
+  .bagtools{display:flex;gap:10px;margin-bottom:10px;flex-wrap:wrap;align-items:center;}
+  .bagtools label{display:inline-flex;align-items:center;gap:5px;color:var(--dim);font-size:11px;}
+  .famlegend{display:flex;flex-wrap:wrap;gap:4px 10px;margin:0 0 12px;font-size:10px;color:var(--dim);}
+  .famlegend .li{display:inline-flex;align-items:center;gap:5px;}
+  .famlegend .sw{width:9px;height:9px;border-radius:2px;}
+  .bag{display:grid;grid-template-columns:repeat(16,1fr);gap:2px;}
+  .g{position:relative;aspect-ratio:1;background:#000;border:1px solid #000;border-radius:2px;cursor:pointer;}
+  .g canvas{width:100%;height:100%;}
+  .g .fb{position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:2px 0 0 2px;opacity:.85;}
+  .g.sel{outline:2px solid var(--sel);outline-offset:1px;z-index:2;}
+  .g.placed{opacity:.3;}
+  .g.placed::after{content:"";position:absolute;right:1px;bottom:1px;width:5px;height:5px;border-radius:50%;
+    background:var(--ok);box-shadow:0 0 3px var(--ok);}
+  .g.reserved{cursor:not-allowed;background:#0a0906;}
+  .g.reserved canvas{opacity:.32;}
+  .g.blank{cursor:pointer;background:#0a0806;}
+
+  /* selected chip */
+  .selbar{display:flex;align-items:center;gap:10px;background:var(--bg2);border:1px solid var(--line);
+    border-radius:6px;padding:8px 10px;margin-bottom:12px;min-height:52px;}
+  .selbar canvas{width:34px;height:34px;background:#000;border:1px solid var(--line);border-radius:3px;flex:0 0 auto;}
+  .selbar .t{font-size:12px;line-height:1.5;}
+  .selbar .t b{color:var(--sel);}
+  .selbar .none{color:var(--dim2);}
+
+  /* keyboard */
+  .modebar{display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap;}
+  .modebar .lbl{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.1em;}
+  .modedesc{color:var(--dim);font-size:12px;margin:2px 0 12px;min-height:16px;}
+  .board{background:linear-gradient(180deg,#100d09,#171209);border:1px solid var(--line2);border-radius:10px;
+    padding:12px;overflow-x:auto;}
+  .krow{display:flex;gap:6px;margin-bottom:6px;min-width:900px;}
+  .krow:last-child{margin-bottom:0;}
+  .cap{width:78px;min-width:78px;background:#221d16;border:1px solid var(--line);border-top-color:var(--line2);
+    border-radius:6px;padding:4px;position:relative;display:flex;flex-direction:column;gap:3px;
+    box-shadow:0 2px 0 #0c0a07;}
+  .cap .kl{position:absolute;top:2px;right:5px;font-size:10px;color:var(--dim);font-weight:700;z-index:2;}
+  .slot{height:34px;border:1px dashed var(--line2);border-radius:4px;background:#000;position:relative;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;overflow:hidden;}
+  .slot canvas{width:30px;height:30px;}
+  .slot .role{position:absolute;left:3px;top:2px;font-size:8px;color:var(--dim2);}
+  .slot .dh{position:absolute;right:3px;bottom:1px;font-size:8px;color:var(--dim2);font-variant-numeric:tabular-nums;}
+  .slot.empty{border-style:dashed;}
+  .slot.filled{border-style:solid;border-color:var(--line2);background:#0a0806;}
+  .slot.locked{cursor:not-allowed;border-style:solid;border-color:#2a251b;background:#151109;}
+  .slot.locked .lockmsg{color:var(--lock);font-size:9px;letter-spacing:.04em;text-align:center;padding:0 2px;}
+  .slot.fixed{cursor:default;border-color:#2a251b;background:#0f0c07;}
+  .slot.fixed .lockmsg{color:var(--lock);font-size:9px;text-align:center;}
+  .slot.valid{border-color:var(--sel);box-shadow:inset 0 0 0 1px rgba(54,201,214,.35);}
+  .slot.hit{animation:hit .5s ease;}
+  @keyframes hit{0%{background:#3a2a12}100%{}}
+  .mod{background:#171310;border:1px solid var(--line);border-radius:6px;color:var(--dim2);
+    display:flex;align-items:center;justify-content:center;font-size:10px;letter-spacing:.06em;text-transform:uppercase;
+    box-shadow:0 2px 0 #0c0a07;flex:0 0 auto;padding:0 4px;}
+  .cap.spacecap{flex:1;min-width:220px;}
+
+  footer{position:sticky;bottom:0;background:var(--panel);border-top:1px solid var(--line);
+    padding:7px 16px;color:var(--dim);font-size:12px;display:flex;gap:18px;align-items:center;flex-wrap:wrap;}
+  footer b{color:var(--text);font-variant-numeric:tabular-nums;}
+  .pill{padding:2px 8px;border-radius:20px;font-size:11px;}
+  .pill.ok{background:#12291a;color:var(--ok);}
+  .pill.warn{background:#2a1d12;color:var(--warn);}
+  .emptybox{color:var(--dim2);text-align:center;padding:40px 10px;line-height:1.7;}
+
+  /* inline glyph editor */
+  #editorWrap{background:var(--bg2);border:1px solid var(--line);border-radius:6px;padding:10px;margin-bottom:12px;}
+  .edbar{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-size:12px;color:var(--text);}
+  .edbar b{color:var(--sel);}
+  .edbar button{padding:3px 9px;}
+  #edcanvas{image-rendering:pixelated;cursor:crosshair;touch-action:none;background:#000;
+    border:1px solid var(--line);border-radius:4px;display:block;margin:0 auto;}
+  .edtools{display:grid;grid-template-columns:repeat(2,1fr);gap:5px;margin-top:9px;}
+  .edtools button{padding:5px 0;}
+  .edhint{color:var(--dim);font-size:11px;line-height:1.5;margin:8px 0 0;}
+</style>
+</head>
+<body>
+<header>
+  <h1>Clementina Key-Map Editor <small>· arrange glyphs onto keys · .mtb</small></h1>
+  <div class="sep"></div>
+  <label class="btn" for="openInput">Load .mtb…</label>
+  <input type="file" id="openInput" accept=".mtb,application/octet-stream">
+  <button id="refreshBtn" disabled title="Reload glyph art from an edited .mtb — keeps every key mapping.">Refresh glyphs…</button>
+  <input type="file" id="refreshInput" accept=".mtb,application/octet-stream">
+  <span class="fname" id="fname">no file</span>
+  <div class="grow"></div>
+  <button id="loadMapBtn">Load map…</button>
+  <input type="file" id="mapInput" accept=".json">
+  <button id="saveMapBtn" disabled>Save map</button>
+  <button id="exportBtn" class="on" disabled>Save .mtb</button>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>Glyph bag <span class="count" id="bagCount">—</span></h2>
+    <div class="selbar" id="selbar">
+      <span class="none" id="selnone">No glyph selected — click one below.</span>
+    </div>
+    <div id="editorWrap" style="display:none">
+      <div class="edbar">
+        <span id="edTitle">Editing</span>
+        <span class="grow"></span>
+        <button id="edUndoBtn" title="Undo (⌘Z)">↶</button>
+        <button id="edRedoBtn" title="Redo (⇧⌘Z)">↷</button>
+      </div>
+      <canvas id="edcanvas" width="240" height="240"></canvas>
+      <div class="edtools">
+        <button data-edop="clear">Clear</button><button data-edop="invert">Invert</button>
+        <button data-edop="fliph">Flip ↔</button><button data-edop="flipv">Flip ↕</button>
+        <button data-edop="left">Shift ←</button><button data-edop="right">Shift →</button>
+        <button data-edop="up">Shift ↑</button><button data-edop="down">Shift ↓</button>
+        <button data-edop="copy">Copy</button><button data-edop="paste">Paste</button>
+      </div>
+      <p class="edhint">Left-drag paint · right-drag erase · reverse-video kept in sync · edits save with the .mtb</p>
+    </div>
+    <p class="baghint">Click a glyph to pick it up, then click a key slot to drop it. Green dot = placed
+      (click it to move it). ASCII <b style="color:var(--dim)">$20–$7E</b> and cursor
+      <b style="color:var(--dim)">$F8–$FF</b> are reserved.</p>
+    <div class="bagtools">
+      <label><input type="checkbox" id="claLabels" checked> clascii families / names</label>
+      <label><input type="checkbox" id="hideBlank"> hide blank tiles</label>
+      <button id="automapBtn" title="Assign every reachable glyph to the key that produces its own tile code. Fills empty slots only — won't disturb what you've placed by hand.">Automap</button>
+      <button id="clearAllBtn">Clear all</button>
+    </div>
+    <div class="famlegend" id="famLegend"></div>
+    <div class="bag" id="bag"><div class="emptybox">Load a .mtb file to begin.</div></div>
+  </section>
+
+  <section class="panel">
+    <h2>Keyboard</h2>
+    <div class="modebar">
+      <span class="lbl">Mode</span>
+      <button class="modebtn on" data-m="0">0 · ASCII (fixed)</button>
+      <button class="modebtn" data-m="1">1 · $80–$DE</button>
+      <button class="modebtn" data-m="2">2 · $E0–$FF + $00–$3E</button>
+    </div>
+    <div class="modedesc" id="modedesc"></div>
+    <div class="board" id="board"><div class="emptybox">Load a .mtb file to begin.</div></div>
+  </section>
+</main>
+
+<footer>
+  <span id="status">Ready. Load a .mtb to start arranging.</span>
+  <div class="grow"></div>
+  <span>placed <b id="fPlaced">0</b>/<b id="fTotal">0</b></span>
+  <span>mode-1 <b id="fM1">0</b>/94</span>
+  <span>mode-2 <b id="fM2">0</b>/55</span>
+  <span class="pill" id="fPill"></span>
+</footer>
+
+<script>
+"use strict";
+// ===== .mtb format (matches tile-editor.html) =====
+const GH=8, TILES=256, PLANE=TILES*GH, BANK=3*PLANE, NBANKS=8, CHR_TOTAL=NBANKS*BANK;
+const PAL_BANKS=16, PAL_COLORS=8, MAGIC2=[0x4D,0x54,0x42,0x32];
+const $=id=>document.getElementById(id);
+const hx=t=>t.toString(16).toUpperCase().padStart(2,"0");
+
+// ===== state =====
+let loaded=null;                 // {chr, bankBpp[8], bankPlane[8], pal, name}
+let assign=new Map();            // destTile -> srcTile
+let placed=new Map();            // srcTile -> destTile
+let selected=null;               // srcTile or null
+let mode=0, hideBlank=false, claLabels=true;
+const INK="#ffcf5a";
+
+// ===== inline glyph editor state =====
+let edClip=null, edUndo=[], edRedo=[];
+let edPainting=false, edPaintVal=1, edStrokeBefore=null;
+const ED=30;
+
+// ===== art helpers (bank plane 0) =====
+function art(bank,t){ if(!loaded) return new Uint8Array(8);
+  const base=bank*BANK + t*8; return loaded.chr.subarray(base,base+8); }
+function isBlank(t){ const a=art(0,t); for(let i=0;i<8;i++) if(a[i]) return false; return true; }
+const isAscii =t=>t>=0x20&&t<=0x7E;
+const isCursor=t=>t>=0xF8&&t<=0xFF;
+const isSource=t=>!isAscii(t)&&!isCursor(t);           // a glyph that can be arranged
+function drawGlyph(cv,bank,t,color){
+  cv.width=8;cv.height=8;const c=cv.getContext("2d");c.clearRect(0,0,8,8);c.fillStyle=color||INK;
+  const a=art(bank,t); for(let y=0;y<8;y++){const b=a[y];for(let x=0;x<8;x++) if((b>>x)&1) c.fillRect(x,y,1,1);}
+}
+
+// ===== inline glyph editor (edits bank 0 plane 0; mirrors bank 1 = ~bank0 reverse) =====
+function edGet(t,x,y){ return (loaded.chr[t*8+y]>>x)&1; }
+function edSet(t,x,y,v){ const i=t*8+y;
+  if(v) loaded.chr[i]|=(1<<x); else loaded.chr[i]&=~(1<<x);
+  loaded.chr[BANK+i]=(~loaded.chr[i])&0xFF;                 // keep reverse-video bank in sync
+}
+function edGetTile(t){ return loaded.chr.slice(t*8,t*8+8); }
+function edSetTile(t,b){ for(let y=0;y<8;y++){ loaded.chr[t*8+y]=b[y]; loaded.chr[BANK+t*8+y]=(~b[y])&0xFF; } }
+function edSame(a,b){ for(let i=0;i<8;i++) if(a[i]!==b[i]) return false; return true; }
+function edCommit(t,before){ const after=edGetTile(t); if(edSame(before,after)) return;
+  edUndo.push({t,before,after}); if(edUndo.length>300) edUndo.shift(); edRedo.length=0; renderAll(); }
+function drawEdGrid(){
+  const cv=$("edcanvas"), c=cv.getContext("2d");
+  c.fillStyle="#000"; c.fillRect(0,0,cv.width,cv.height);
+  if(selected!==null){ c.fillStyle=INK;
+    for(let y=0;y<8;y++) for(let x=0;x<8;x++) if(edGet(selected,x,y)) c.fillRect(x*ED,y*ED,ED,ED); }
+  c.strokeStyle="#2c2418"; c.lineWidth=1;
+  for(let i=0;i<=8;i++){
+    c.beginPath();c.moveTo(i*ED+.5,0);c.lineTo(i*ED+.5,cv.height);c.stroke();
+    c.beginPath();c.moveTo(0,i*ED+.5);c.lineTo(cv.width,i*ED+.5);c.stroke();
+  }
+}
+function updateEditor(){
+  const wrap=$("editorWrap");
+  if(!loaded||selected===null){ wrap.style.display="none"; return; }
+  wrap.style.display="";
+  $("edTitle").innerHTML=`Editing <b>$${hx(selected)}</b>`+(claLabels?` · ${nameOf(selected)}`:"");
+  $("edUndoBtn").disabled=!edUndo.length; $("edRedoBtn").disabled=!edRedo.length;
+  drawEdGrid();
+}
+// light live repaint during a stroke — no DOM rebuild
+function edLive(){
+  drawEdGrid();
+  const sb=$("selbar").querySelector("canvas"); if(sb) drawGlyph(sb,0,selected,INK);
+  const bc=$("bag").querySelector(`.g[data-t="${selected}"] canvas`); if(bc) drawGlyph(bc,0,selected,INK);
+  document.querySelectorAll(".slot.filled").forEach(s=>{
+    if(assign.get(+s.dataset.dest)===selected){ const cv=s.querySelector("canvas"); if(cv) drawGlyph(cv,0,selected,INK); }
+  });
+}
+function edXY(e){ const cv=$("edcanvas");                 // offset* is relative to the content box (border-safe)
+  return [Math.floor(e.offsetX/(cv.clientWidth/8)), Math.floor(e.offsetY/(cv.clientHeight/8))]; }
+function endEdStroke(){ if(!edPainting) return; edPainting=false; edCommit(selected,edStrokeBefore); }
+function edTransform(op){
+  if(selected===null||!loaded) return;
+  const t=selected, before=edGetTile(t);
+  if(op==="copy"){ edClip=before.slice(); setStatus(`Copied $${hx(t)}.`); return; }
+  if(op==="paste"){ if(!edClip){ setStatus("Editor clipboard empty."); return; } edSetTile(t,edClip); edCommit(t,before); return; }
+  const px=[]; for(let y=0;y<8;y++){ px[y]=[]; for(let x=0;x<8;x++) px[y][x]=edGet(t,x,y); }
+  const F={ clear:()=>0, invert:(x,y)=>1-px[y][x], fliph:(x,y)=>px[y][7-x], flipv:(x,y)=>px[7-y][x],
+    left:(x,y)=>px[y][(x+1)%8], right:(x,y)=>px[y][(x+7)%8], up:(x,y)=>px[(y+1)%8][x], down:(x,y)=>px[(y+7)%8][x] }[op];
+  if(!F) return;
+  for(let y=0;y<8;y++) for(let x=0;x<8;x++) edSet(t,x,y,F(x,y));
+  edCommit(t,before);
+}
+function edDoUndo(){ const e=edUndo.pop(); if(!e) return; edSetTile(e.t,e.before); edRedo.push(e); selected=e.t; renderAll(); }
+function edDoRedo(){ const e=edRedo.pop(); if(!e) return; edSetTile(e.t,e.after);  edUndo.push(e); selected=e.t; renderAll(); }
+
+// ===== clascii family + names (tint & hover; toggle off for other charsets) =====
+const FAMC={box1:"#36c9d6",box2:"#5b9be0",brush:"#b48cff",diag:"#6fd0ff",arrow:"#ffb000",sym:"#8bd867",
+  face:"#ff9f6e",suit:"#ff7a9c",icon:"#c9a86a",cursor:"#9aa0a6",ascii:"#6b6350"};
+const FAMN={box1:"box · single",box2:"box · double",brush:"brush / squares",diag:"diagonals / textures",
+  arrow:"arrows",sym:"symbols · math · UI",face:"faces / people",suit:"card suits",icon:"icons / objects",
+  cursor:"cursor / reserved",ascii:"ASCII"};
+const _S=a=>new Set(a);
+const _BOX1=_S([0xA1,0xA4,0xA5,0xAF,0xB0,0xB1,0xB2,0xB3,0xB4,0xB5,0xB9,0xC1,0xC4,0xC5,0xD1,0xD2,0xD3,0xD4,0xD5,0xD7,0xD9]);
+const _BOX2=_S([0xA6,0xA7,0xA8,0xA9,0xB6,0xB7,0xB8]);
+const _BRUSH=_S([0x82,0x8A,0x9A,0x9B,0x9C,0x9D,0xC2,0xD6]);
+const _DIAG=_S([0x97,0x98,0xA3,0xAE,0xBF,0xC0,0xC3,0xC9,0xCE,0xCF,0xD0,0xD8,0xDA,0xE7,0xE8,0xE9,0xEA,0xEB,0xEC,0xED,0xEE,0xEF,0xF4,0xF5,0xF6]);
+const _ARROW=_S([0x83,0x92,0x93,0x94,0x95,0x96,0xA0]);
+const _SYM=_S([0x7F,0x81,0x84,0x85,0x86,0x87,0x88,0x89,0x8B,0x8C,0x8D,0x8E,0x90,0x91,0x99,0xE3,0xE4,0xE5,0xE6]);
+const _FACE=_S([0x80,0xAA,0xAB,0xE0,0xE1,0xE2,0xF7]);
+const _SUIT=_S([0xBA,0xBB,0xBC,0xBD,0xC6,0xC7,0xC8,0xCA]);
+const _ICON=_S([0x8F,0x9E,0x9F,0xAC,0xAD,0xBE,0xCB,0xCC,0xCD,0xDB,0xDC,0xDD,0xDE,0xDF,0xF0,0xF1,0xF2,0xF3]);
+function famOf(t){
+  if(t>=0xF8||t===0xA2) return "cursor";
+  if(t<=0x1F) return "brush";
+  if(_BOX1.has(t))return"box1"; if(_BOX2.has(t))return"box2"; if(_ARROW.has(t))return"arrow";
+  if(_SUIT.has(t))return"suit"; if(_FACE.has(t))return"face"; if(_SYM.has(t))return"sym";
+  if(_DIAG.has(t))return"diag"; if(_BRUSH.has(t))return"brush";
+  if(_ICON.has(t))return"icon"; if(t>=0x20&&t<=0x7E)return"ascii"; return"icon";
+}
+const NAMES={};
+const _put=(a,b,s)=>{for(let t=a;t<=b;t++)NAMES[t]=s;};
+_put(0x00,0x18,"square brush");_put(0x19,0x1C,"diagonal chevron");_put(0x1D,0x1F,"horizontal chevron");
+NAMES[0x7F]="sum Σ";NAMES[0x80]="eye";NAMES[0x81]="square root √";NAMES[0x82]="square (opening)";NAMES[0x83]="double arrow";
+_put(0x84,0x86,"speaker / volume");_put(0x87,0x89,"transport button");NAMES[0x8A]="square outline";NAMES[0x8B]="transport button";
+NAMES[0x8C]="superscript ²";NAMES[0x8D]="superscript ³";NAMES[0x8E]="guillemet « »";NAMES[0x8F]="light bulb";NAMES[0x90]="gender ♀";NAMES[0x91]="pi π";
+_put(0x92,0x93,"arrow");_put(0x94,0x95,"triangle");NAMES[0x96]="checkmark ✓";NAMES[0x97]="angled line ½";NAMES[0x98]="angled line";NAMES[0x99]="gender ♂";
+NAMES[0x9A]="square (opening)";NAMES[0x9B]="square (opening)";NAMES[0x9C]="square";NAMES[0x9D]="square (= $82 rev)";NAMES[0x9E]="house";NAMES[0x9F]="building";
+NAMES[0xA0]="double arrow";NAMES[0xA2]="(empty)";_put(0xA6,0xA9,"double-line box");NAMES[0xAA]="face";NAMES[0xAB]="face";NAMES[0xAC]="copyright ©";NAMES[0xAD]="team badge";
+for(const t of [0xA1,0xA4,0xA5,0xAF,0xB0,0xB1,0xB2,0xB3,0xB4,0xB5,0xB9,0xC1,0xC4,0xC5,0xD1,0xD2,0xD3,0xD4,0xD5,0xD7,0xD9]) NAMES[t]="box block";
+for(const t of [0xA3,0xAE,0xBF,0xC0,0xC9,0xCE,0xCF]) NAMES[t]="diagonal";
+_put(0xB6,0xB8,"double-line box");
+NAMES[0xBA]="Spanish suit — oro";NAMES[0xBB]="Spanish suit — copa";NAMES[0xBC]="Spanish suit — espada";NAMES[0xBD]="Spanish suit — basto";NAMES[0xBE]="?";
+NAMES[0xC2]="square 4×4";NAMES[0xC3]="checker";NAMES[0xC6]="poker — diamond ♦";NAMES[0xC7]="poker — heart ♥";NAMES[0xC8]="poker — spade ♠ (dup ♦)";NAMES[0xCA]="poker — club ♣";
+NAMES[0xCB]="circle";NAMES[0xCC]="circle";NAMES[0xCD]="registered ®";NAMES[0xD0]="diagonal";NAMES[0xD6]="square 4×4";NAMES[0xD8]="checker";NAMES[0xDA]="checker";
+NAMES[0xDB]="flag";NAMES[0xDC]="key";NAMES[0xDD]="plane";NAMES[0xDE]="building (= $9F)";NAMES[0xDF]="TV";
+_put(0xE0,0xE2,"face");NAMES[0xE3]="double exclamation ‼";_put(0xE4,0xE5,"music note");NAMES[0xE6]="paragraph ¶";_put(0xE7,0xED,"diagonal pattern");_put(0xEE,0xEF,"noise");
+NAMES[0xF0]="sun";NAMES[0xF1]="UFO";NAMES[0xF2]="earth";NAMES[0xF3]="star";_put(0xF4,0xF6,"line");NAMES[0xF7]="person";_put(0xF8,0xFF,"cursor mode (reserved)");
+const nameOf=t=>(t>=0x20&&t<=0x7E)?("ASCII '"+String.fromCharCode(t)+"'"):(NAMES[t]||"—");
+const glyphTip=t=>claLabels?`$${hx(t)} — ${nameOf(t)} · ${FAMN[famOf(t)]}`:`$${hx(t)}`;
+
+// ===== keyboard layout (ANSI US) =====
+const K=(u,us,s,ss)=>({t:"k",u,us,s,ss});
+const M=(l,w)=>({t:"m",l,w});
+const SP={t:"space"};
+const LAYOUT=[
+  [K("`",0x60,"~",0x7E),K("1",0x31,"!",0x21),K("2",0x32,"@",0x40),K("3",0x33,"#",0x23),K("4",0x34,"$",0x24),
+   K("5",0x35,"%",0x25),K("6",0x36,"^",0x5E),K("7",0x37,"&",0x26),K("8",0x38,"*",0x2A),K("9",0x39,"(",0x28),
+   K("0",0x30,")",0x29),K("-",0x2D,"_",0x5F),K("=",0x3D,"+",0x2B),M("del",84)],
+  [M("tab",108),K("q",0x71,"Q",0x51),K("w",0x77,"W",0x57),K("e",0x65,"E",0x45),K("r",0x72,"R",0x52),
+   K("t",0x74,"T",0x54),K("y",0x79,"Y",0x59),K("u",0x75,"U",0x55),K("i",0x69,"I",0x49),K("o",0x6F,"O",0x4F),
+   K("p",0x70,"P",0x50),K("[",0x5B,"{",0x7B),K("]",0x5D,"}",0x7D),K("\\",0x5C,"|",0x7C)],
+  [M("caps",128),K("a",0x61,"A",0x41),K("s",0x73,"S",0x53),K("d",0x64,"D",0x44),K("f",0x66,"F",0x46),
+   K("g",0x67,"G",0x47),K("h",0x68,"H",0x48),K("j",0x6A,"J",0x4A),K("k",0x6B,"K",0x4B),K("l",0x6C,"L",0x4C),
+   K(";",0x3B,":",0x3A),K("'",0x27,'"',0x22),M("return",136)],
+  [M("shift",172),K("z",0x7A,"Z",0x5A),K("x",0x78,"X",0x58),K("c",0x63,"C",0x43),K("v",0x76,"V",0x56),
+   K("b",0x62,"B",0x42),K("n",0x6E,"N",0x4E),K("m",0x6D,"M",0x4D),K(",",0x2C,"<",0x3C),K(".",0x2E,">",0x3E),
+   K("/",0x2F,"?",0x3F),M("shift",172)],
+  [M("ctrl",54),M("opt",54),M("cmd",70),SP,M("cmd",70),M("opt",54)],
+];
+const destOf=(ascii,m)=>(ascii+m*0x60)&0xFF;
+function slotKind(dest,m){
+  if(m===0) return "fixed";
+  if(dest>=0x20&&dest<=0x7E) return "ascii";
+  if(dest>=0xF8&&dest<=0xFF) return "cursor";
+  return "open";
+}
+// tiles that a real key+mode can reach and hold arrangeable art (space excluded on purpose)
+function openDestSet(){
+  const set=new Set();
+  for(let m=1;m<=2;m++) for(const row of LAYOUT) for(const it of row){
+    if(it.t!=="k") continue;
+    for(const a of [it.us,it.ss]){ const d=destOf(a,m); if(slotKind(d,m)==="open") set.add(d); }
+  }
+  return set;   // 94 (mode1) + 55 (mode2) tiles; $80 and $E0 excluded since only space reaches them
+}
+
+// ===== render: glyph bag =====
+function renderBag(){
+  const bag=$("bag"); bag.innerHTML="";
+  if(!loaded){ bag.innerHTML='<div class="emptybox">Load a .mtb file to begin.</div>'; return; }
+  let total=0, done=0;
+  for(let t=0;t<256;t++){
+    const blank=isBlank(t);
+    if(hideBlank && blank && isSource(t)) continue;
+    const d=document.createElement("div"); d.className="g"; d.dataset.t=t;
+    if(isAscii(t)||isCursor(t)){ d.classList.add("reserved");
+      d.title=`$${hx(t)} — ${isAscii(t)?"ASCII (mode 0, fixed)":"cursor art (reserved)"}`; }
+    else if(blank){ d.classList.add("blank"); if(selected===t) d.classList.add("sel");
+      d.title=`$${hx(t)} — blank · click to draw a new glyph`; }
+    else{ total++;
+      if(placed.has(t)){ d.classList.add("placed"); done++;
+        d.title=`${glyphTip(t)}  ·  placed on ${destLabel(placed.get(t))}`; }
+      else d.title=`${glyphTip(t)}  ·  unplaced`;
+      if(selected===t) d.classList.add("sel");
+    }
+    const cv=document.createElement("canvas");
+    drawGlyph(cv,0,t, (isAscii(t)||isCursor(t))?"#7a7358":INK);
+    d.appendChild(cv);
+    if(claLabels && !blank){ const fb=document.createElement("div"); fb.className="fb"; fb.style.background=FAMC[famOf(t)]; d.appendChild(fb); }
+    bag.appendChild(d);
+  }
+  $("bagCount").textContent=`${done}/${total} placed`;
+  $("fPlaced").textContent=done; $("fTotal").textContent=total;
+}
+function buildLegend(){
+  const el=$("famLegend"); el.innerHTML="";
+  if(!claLabels){ return; }
+  for(const k of Object.keys(FAMC)){
+    const li=document.createElement("span"); li.className="li";
+    li.innerHTML=`<span class="sw" style="background:${FAMC[k]}"></span>${FAMN[k]}`;
+    el.appendChild(li);
+  }
+}
+// map a dest tile back to a human key label
+function destLabel(dest){
+  for(const row of LAYOUT) for(const it of row) if(it.t==="k"){
+    for(const m of [1,2]){ if(destOf(it.us,m)===dest) return `${it.u} (m${m})`; if(destOf(it.ss,m)===dest) return `⇧${it.s} (m${m})`; }
+  }
+  return `$${hx(dest)}`;
+}
+
+// ===== render: keyboard =====
+const MODEDESC={
+ 0:"Mode 0 is the fixed ASCII plane ($20–$7E). Shown for reference — not editable.",
+ 1:"Mode 1 → tiles $80–$DE. Every key/shift is assignable (94 slots; space stays a space).",
+ 2:"Mode 2 → $E0–$FF (number row) and $00–$3E (letters). Grey slots are ASCII echoes or cursor art — not assignable (55 slots).",
+};
+function renderBoard(){
+  const board=$("board"); board.innerHTML="";
+  if(!loaded){ board.innerHTML='<div class="emptybox">Load a .mtb file to begin.</div>'; return; }
+  $("modedesc").textContent=MODEDESC[mode];
+  for(const row of LAYOUT){
+    const r=document.createElement("div"); r.className="krow";
+    for(const it of row){
+      if(it.t==="m"){ const m=document.createElement("div"); m.className="mod"; m.style.width=it.w+"px"; m.style.minWidth=it.w+"px"; m.textContent=it.l; r.appendChild(m); continue; }
+      if(it.t==="space"){ r.appendChild(spaceCap()); continue; }
+      const cap=document.createElement("div"); cap.className="cap";
+      const kl=document.createElement("div"); kl.className="kl"; kl.textContent=it.u.toUpperCase(); cap.appendChild(kl);
+      cap.appendChild(makeSlot(it.ss,"⇧"));   // shift on top
+      cap.appendChild(makeSlot(it.us,"·"));    // unshift below
+      r.appendChild(cap);
+    }
+    board.appendChild(r);
+  }
+}
+function spaceCap(){
+  const cap=document.createElement("div"); cap.className="cap spacecap";
+  const kl=document.createElement("div"); kl.className="kl"; kl.textContent="SPACE"; cap.appendChild(kl);
+  const s=document.createElement("div"); s.className="slot fixed";     // no data-dest → never clickable
+  const msg=document.createElement("span"); msg.className="lockmsg"; msg.textContent="always space · $20";
+  s.appendChild(msg); s.title="Space is always $20 — not assignable.";
+  cap.appendChild(s);
+  return cap;
+}
+function makeSlot(ascii,role){
+  const dest=destOf(ascii,mode), kind=slotKind(dest,mode);
+  const s=document.createElement("div"); s.className="slot"; s.dataset.dest=dest;
+  const rl=document.createElement("span"); rl.className="role"; rl.textContent=role; s.appendChild(rl);
+  const dh=document.createElement("span"); dh.className="dh"; dh.textContent="$"+hx(dest); s.appendChild(dh);
+  if(kind==="fixed"){                 // mode 0: show ASCII glyph, read-only
+    s.classList.add("fixed");
+    const cv=document.createElement("canvas"); drawGlyph(cv,0,dest,"#b9ac82"); s.appendChild(cv);
+    s.title=`$${hx(dest)} — ASCII '${String.fromCharCode(dest)}' (fixed)`;
+    return s;
+  }
+  if(kind==="ascii"||kind==="cursor"){
+    s.classList.add("locked");
+    const msg=document.createElement("span"); msg.className="lockmsg"; msg.textContent=kind==="ascii"?"ASCII echo":"cursor"; s.appendChild(msg);
+    s.title=`$${hx(dest)} — ${kind==="ascii"?"shows an ASCII glyph; not assignable":"reserved cursor art"}`;
+    return s;
+  }
+  const src=assign.get(dest);
+  if(src!==undefined){ s.classList.add("filled");
+    const cv=document.createElement("canvas"); drawGlyph(cv,0,src,INK); s.appendChild(cv);
+    s.title=`$${hx(dest)} ← ${glyphTip(src)}. Click to remove (or, with a glyph picked, to replace).`;
+  } else { s.classList.add("empty");
+    if(selected!==null) s.classList.add("valid");
+    s.title=`$${hx(dest)} — empty. `+(selected!==null?`Click to place ${glyphTip(selected)}.`:"Pick a glyph first.");
+  }
+  return s;
+}
+
+// ===== interaction =====
+function selectGlyph(t){
+  if(!isSource(t)) return;                 // blank source tiles allowed: pick to draw a new glyph
+  selected = (selected===t)? null : t;
+  renderAll();
+}
+function renderSelbar(){
+  const bar=$("selbar");
+  if(selected===null){ bar.innerHTML='<span class="none">No glyph selected — click one below.</span>'; return; }
+  bar.innerHTML="";
+  const cv=document.createElement("canvas"); drawGlyph(cv,0,selected,INK);
+  const t=document.createElement("div"); t.className="t";
+  const nm=claLabels?` — ${nameOf(selected)}`:"";
+  const where=placed.has(selected)?` · on <b>${destLabel(placed.get(selected))}</b>`:"";
+  t.innerHTML=`Picked <b>$${hx(selected)}</b>${nm}${where}<br><span style="color:var(--dim)">click a key slot to place · Esc to cancel</span>`;
+  bar.append(cv,t);
+}
+function clickSlot(dest){
+  if(slotKind(dest,mode)!=="open") return;
+  const cur=assign.get(dest);
+  if(selected!==null){
+    if(placed.has(selected)) freeDest(placed.get(selected));   // move: drop old placement
+    if(assign.has(dest)) freeDest(dest);                       // replace: return old occupant
+    assign.set(dest,selected); placed.set(selected,dest);
+    _flash=dest; selected=null; renderAll();
+  } else if(cur!==undefined){
+    freeDest(dest); renderAll();
+  }
+}
+function freeDest(dest){ const s=assign.get(dest); if(s!==undefined){ assign.delete(dest); placed.delete(s); } }
+let _flash=null;
+function applyFlash(){ if(_flash===null) return; const el=document.querySelector(`.slot[data-dest="${_flash}"]`); if(el) el.classList.add("hit"); _flash=null; }
+
+// ===== footer =====
+function updateFooter(){
+  let m1=0,m2=0;
+  for(const dest of assign.keys()){ (dest>=0x80&&dest<=0xDE)?m1++:m2++; }
+  $("fM1").textContent=m1; $("fM2").textContent=m2;
+  const total=+$("fTotal").textContent, done=+$("fPlaced").textContent, pill=$("fPill");
+  if(total&&done===total){ pill.className="pill ok"; pill.textContent="all glyphs placed"; }
+  else if(total){ pill.className="pill warn"; pill.textContent=`${total-done} unplaced`; }
+  else{ pill.className="pill"; pill.textContent=""; }
+}
+
+// ===== load / save =====
+function parseMtb(buf,name){
+  const u=new Uint8Array(buf), dv=new DataView(buf);
+  if(!MAGIC2.every((m,i)=>u[i]===m)){ alert("Not an MTB2 file (8-bank .mtb expected)."); return null; }
+  const count=Math.min(NBANKS,u[5]||NBANKS), hasPal=(u[6]&1)!==0;
+  const chr=new Uint8Array(CHR_TOTAL);
+  chr.set(u.subarray(32,32+Math.min(count*BANK,u.length-32)),0);
+  const bankBpp=new Uint8Array(NBANKS).fill(1), bankPlane=new Uint8Array(NBANKS);
+  for(let b=0;b<count;b++){ bankBpp[b]=u[8+b]===3?3:1; bankPlane[b]=u[16+b]<3?u[16+b]:0; }
+  const pal=new Uint16Array(PAL_BANKS*PAL_COLORS);
+  let o=32+count*BANK;
+  if(hasPal) for(let i=0;i<pal.length&&o+1<u.length;i++){ pal[i]=dv.getUint16(o,true); o+=2; }
+  return {chr,bankBpp,bankPlane,pal,name:(name||"charset").replace(/\.[^.]+$/,"")};
+}
+function openMtb(buf,name){
+  const L=parseMtb(buf,name); if(!L) return;
+  loaded=L; assign=new Map(); placed=new Map(); selected=null;
+  edUndo=[]; edRedo=[]; edClip=null;
+  $("fname").textContent=name||"loaded";
+  $("saveMapBtn").disabled=false; $("exportBtn").disabled=false; $("refreshBtn").disabled=false;
+  renderAll(); setStatus(`Loaded ${name}. ${countSources()} arrangeable glyphs.`);
+}
+// Reload only the glyph art (CHR / banks / palette) from an edited .mtb, keeping
+// every key mapping. Works because assignments store tile INDICES, not pixels.
+function refreshGlyphs(buf,name){
+  if(!loaded){ openMtb(buf,name); return; }
+  const L=parseMtb(buf,name); if(!L) return;
+  loaded=L; edUndo=[]; edRedo=[];        // fresh art invalidates old edit snapshots
+  if(selected!==null && isBlank(selected)) selected=null;
+  let nowBlank=0; for(const src of placed.keys()) if(isBlank(src)) nowBlank++;
+  $("fname").textContent=name||"loaded";
+  renderAll();
+  setStatus(`Refreshed glyphs from ${name}. ${assign.size} mapping(s) kept`+
+    (nowBlank?` · ${nowBlank} mapped glyph(s) now blank.`:"."));
+}
+// Identity automap: place every reachable, non-blank glyph on the key that
+// produces its own tile code. Non-destructive — fills empty slots only.
+function automap(){
+  if(!loaded) return;
+  let added=0;
+  for(const d of openDestSet()){
+    if(assign.has(d) || placed.has(d) || isBlank(d)) continue;
+    assign.set(d,d); placed.set(d,d); added++;
+  }
+  selected=null; renderAll();
+  setStatus(added ? `Automapped ${added} glyph(s) to their natural key positions.`
+                  : "Automap: every reachable glyph is already placed or blank.");
+}
+function countSources(){ let n=0; for(let t=0;t<256;t++) if(isSource(t)&&!isBlank(t)) n++; return n; }
+
+function buildExportChr(){
+  const chr=loaded.chr.slice();                 // preserve every bank/plane, palette, ASCII, cursor
+  const b0=0*BANK, b1=1*BANK;
+  // 1) blank every reachable arrangeable tile so stale/moved art is cleared
+  //    (mode1 $80–$DE + mode2 $E0–$F7 + $00–$1F; $80/$E0 too, since space no longer occupies them)
+  const blankSet=new Set();
+  for(let t=0x80;t<=0xDE;t++) blankSet.add(t);
+  for(let t=0xE0;t<=0xF7;t++) blankSet.add(t);
+  for(let t=0x00;t<=0x1F;t++) blankSet.add(t);
+  for(const d of blankSet){ for(let y=0;y<8;y++){ chr[b0+d*8+y]=0; chr[b1+d*8+y]=0; } }
+  // 2) place assigned glyphs — move bank0 art AND bank1 reverse together
+  for(const [dest,src] of assign){
+    for(let y=0;y<8;y++){ chr[b0+dest*8+y]=loaded.chr[b0+src*8+y]; chr[b1+dest*8+y]=loaded.chr[b1+src*8+y]; }
+  }
+  return chr;
+}
+function exportMtb(){
+  if(!loaded) return;
+  const chr=buildExportChr();
+  const total=32+CHR_TOTAL+PAL_BANKS*PAL_COLORS*2;
+  const buf=new Uint8Array(total), dv=new DataView(buf.buffer);
+  buf.set(MAGIC2,0); buf[4]=2; buf[5]=NBANKS; buf[6]=1;
+  for(let b=0;b<NBANKS;b++){ buf[8+b]=loaded.bankBpp[b]; buf[16+b]=loaded.bankPlane[b]; }
+  buf.set(chr,32);
+  let o=32+CHR_TOTAL; for(let i=0;i<loaded.pal.length;i++){ dv.setUint16(o,loaded.pal[i],true); o+=2; }
+  download(buf, loaded.name+"-keymap.mtb");
+  const total_s=+$("fTotal").textContent, done=+$("fPlaced").textContent;
+  setStatus(`Saved ${loaded.name}-keymap.mtb — ${done}/${total_s} placed`+(done<total_s?` (${total_s-done} unplaced → blank).`:"."));
+}
+function saveMap(){
+  if(!loaded) return;
+  const obj={tool:"clementina-keymap",version:1,source:loaded.name,assignments:[...assign].map(([dest,src])=>({dest,src}))};
+  const blob=new Blob([JSON.stringify(obj,null,1)],{type:"application/json"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=loaded.name+"-keymap.json"; a.click(); URL.revokeObjectURL(a.href);
+  setStatus("Saved assignment map.");
+}
+function loadMap(text){
+  if(!loaded){ alert("Load a .mtb first."); return; }
+  let obj; try{ obj=JSON.parse(text); }catch(e){ alert("Bad JSON."); return; }
+  if(!obj.assignments){ alert("Not a key-map file."); return; }
+  assign=new Map(); placed=new Map();
+  for(const {dest,src} of obj.assignments){ if(isSource(src)&&slotKind(dest,dest>=0x80?1:2)==="open"){ assign.set(dest,src); placed.set(src,dest); } }
+  selected=null; renderAll(); setStatus(`Loaded map: ${assign.size} assignments.`);
+}
+
+// ===== misc =====
+function download(bytes,name){ const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([bytes],{type:"application/octet-stream"})); a.download=name; a.click(); URL.revokeObjectURL(a.href); }
+function readFile(f,cb,asText){ const r=new FileReader(); r.onload=()=>cb(r.result); asText?r.readAsText(f):r.readAsArrayBuffer(f); }
+function setStatus(s){ $("status").textContent=s; }
+function renderAll(){ renderBag(); buildLegend(); renderBoard(); renderSelbar(); updateFooter(); updateEditor(); requestAnimationFrame(applyFlash); }
+
+// ===== wiring =====
+$("openInput").onchange=e=>{ const f=e.target.files[0]; if(f) readFile(f,b=>openMtb(b,f.name)); e.target.value=""; };
+$("refreshBtn").onclick=()=>$("refreshInput").click();
+$("refreshInput").onchange=e=>{ const f=e.target.files[0]; if(f) readFile(f,b=>refreshGlyphs(b,f.name)); e.target.value=""; };
+$("automapBtn").onclick=automap;
+$("edUndoBtn").onclick=edDoUndo; $("edRedoBtn").onclick=edDoRedo;
+document.querySelectorAll(".edtools button").forEach(b=>b.onclick=()=>edTransform(b.dataset.edop));
+(function(){ const cv=$("edcanvas");
+  cv.addEventListener("pointerdown",e=>{ if(selected===null) return; e.preventDefault();
+    const [x,y]=edXY(e); if(x<0||x>=8||y<0||y>=8) return;
+    cv.setPointerCapture(e.pointerId); edPainting=true; edStrokeBefore=edGetTile(selected);
+    edPaintVal=(e.button===2)?0:1; edSet(selected,x,y,edPaintVal); edLive(); });
+  cv.addEventListener("pointermove",e=>{ if(!edPainting) return;
+    const [x,y]=edXY(e); if(x<0||x>=8||y<0||y>=8) return;
+    if(edGet(selected,x,y)!==edPaintVal){ edSet(selected,x,y,edPaintVal); edLive(); } });
+  cv.addEventListener("pointerup",endEdStroke); cv.addEventListener("pointercancel",endEdStroke);
+  cv.addEventListener("contextmenu",e=>e.preventDefault());
+})();
+$("mapInput").onchange=e=>{ const f=e.target.files[0]; if(f) readFile(f,t=>loadMap(t),true); e.target.value=""; };
+$("loadMapBtn").onclick=()=>$("mapInput").click();
+$("saveMapBtn").onclick=saveMap;
+$("exportBtn").onclick=exportMtb;
+$("clearAllBtn").onclick=()=>{ if(assign.size&&confirm("Clear all key assignments?")){ assign=new Map(); placed=new Map(); selected=null; renderAll(); setStatus("Cleared all assignments."); } };
+$("hideBlank").onchange=e=>{ hideBlank=e.target.checked; renderBag(); };
+$("claLabels").onchange=e=>{ claLabels=e.target.checked; renderBag(); buildLegend(); renderSelbar(); };
+document.querySelectorAll(".modebtn").forEach(b=>b.onclick=()=>{ mode=+b.dataset.m; document.querySelectorAll(".modebtn").forEach(x=>x.classList.toggle("on",x===b)); renderBoard(); });
+$("bag").addEventListener("click",e=>{ const g=e.target.closest(".g"); if(g) selectGlyph(+g.dataset.t); });
+$("board").addEventListener("click",e=>{ const s=e.target.closest(".slot"); if(s&&s.dataset.dest!==undefined) clickSlot(+s.dataset.dest); });
+$("board").addEventListener("contextmenu",e=>{ const s=e.target.closest(".slot"); if(s&&s.classList.contains("filled")){ e.preventDefault(); freeDest(+s.dataset.dest); renderAll(); } });
+window.addEventListener("keydown",e=>{
+  if(selected!==null && (e.ctrlKey||e.metaKey)){
+    const k=e.key.toLowerCase();
+    if(k==="z"){ e.preventDefault(); e.shiftKey?edDoRedo():edDoUndo(); return; }
+    if(k==="y"){ e.preventDefault(); edDoRedo(); return; }
+  }
+  if(e.key==="Escape"&&selected!==null){ selected=null; renderAll(); }
+});
+window.addEventListener("dragover",e=>e.preventDefault());
+window.addEventListener("drop",e=>{ e.preventDefault(); const f=e.dataTransfer.files[0]; if(!f) return;
+  if(f.name.endsWith(".json")) readFile(f,t=>loadMap(t),true); else readFile(f,b=>openMtb(b,f.name)); });
+</script>
+</body>
+</html>
