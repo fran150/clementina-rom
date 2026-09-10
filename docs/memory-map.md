@@ -70,7 +70,8 @@ Defined in the `ZEROPAGE` segment of [`src/kernel/kernel.s`](../src/kernel/kerne
 | `$F2` | `KTMP` | 2 | Scratch. Holds the computed overlay offset `P = CURSOR_Y*40 + CURSOR_X`, then the 24-bit overlay address low/mid. |
 | `$F4` | `KCNT` | 2 | 16-bit loop counter for screen fills. |
 | `$F6` | `KCHR` | 1 | Scratch copy of the byte passed to `CHROUT`, so the routine can preserve A/X/Y while still repositioning MIA indexes. |
-| `$F7–$FB` | — | 5 | Reserved for the kernel. |
+| `$F7` | `KJIFFY` | 2 | Free-running 16-bit LE tick counter, `+1` per VIA Timer 1 IRQ (≈160 Hz at 1 MHz PHI2, scales with PHI2). Wraps silently. Published in `kernel.inc`; read-only for clients. BASIC `PLAY` times notes off it. |
+| `$F9–$FB` | — | 3 | Reserved for the kernel. |
 
 > Allocation rule: BASIC must not extend past `$EF`; the kernel must not use
 > below `$F0`. If BASIC needs more, shrink the kernel block, not the other way.
@@ -131,7 +132,7 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 | `$03D0` | `EDIT_MODE` | 1 | Phase 5 glyph mode (`0..2`), used by the editor to map typed `$20-$7E` to alternate tile ranges. |
 | `$03D1` | `EDIT_PAINT` | 1 | Nonzero while Paint mode is active. |
 | `$03D2` | `EDIT_CMD_PENDING` | 1 | Nonzero between `ESC` and its command key. |
-| `$03D3–$03FC` | `STYLE_SIDE_BUF` | 42 | BASIC tokenizer scratch for Phase 6 styled program-literal sidecars. Captures compact literal attribute records before appending them to the stored program line. `$03D3–$03D4` are also reused as a transient LIST line-pointer save. |
+| `$03D3–$03FC` | `STYLE_SIDE_BUF` | 42 | BASIC tokenizer scratch for Phase 6 styled program-literal sidecars. Captures compact literal attribute records before appending them to the stored program line. `$03D3–$03D4` are also reused as a transient LIST line-pointer save, and `$03D3–$03DE` as `PLAY`'s parser state at RUN time (tokenizer and `PLAY` never run at the same moment). |
 | `$03FD` | `BASIC_DEFAULT_ATTR` | 1 | BASIC default output attribute set by `COLOR`, `FLIPX`, `FLIPY`, and `ALT`. |
 | `$03FE` | `BASIC_STYLE_MASK` | 1 | BASIC style override mask set by `STYLE n`, stored in overlay-attribute bit form (`$0F`, `$10`, `$20`, `$80`). |
 | `$03FF` | `STYLE_BASE_LEN` | 1 | BASIC tokenizer scratch: tokenized line length before any style sidecar is appended. |

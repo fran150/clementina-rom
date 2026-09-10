@@ -31,6 +31,10 @@ KPTR:   .res 2          ; general 16-bit pointer (PRSTR source, etc.)
 KTMP:   .res 2          ; scratch: computed overlay offset / address bytes
 KCNT:   .res 2          ; 16-bit loop counter (fills / copies)
 KCHR:   .res 1          ; character being printed by CHROUT
+_KJIFFY_STORAGE: .res 2 ; free-running 16-bit tick counter; +1 per VIA Timer-1
+                        ; IRQ. Addressed as KJIFFY (fixed $00F7, kernel.inc) so
+                        ; BASIC PLAY can reach it; this just reserves the space.
+.assert _KJIFFY_STORAGE = KJIFFY, error, "KZEROPAGE grew into KJIFFY ($00F7)"
 
 ; ============================================================================
 ; Jump table - must land exactly on the KERN_* addresses from kernel.inc.

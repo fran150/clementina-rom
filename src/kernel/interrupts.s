@@ -72,6 +72,11 @@ irq_handler:
         beq @done
         lda VIA_T1CL            ; clear the Timer 1 IFR bit
 
+        inc KJIFFY              ; free-running tick counter (BASIC PLAY, timeouts)
+        bne @jiffy_ok
+        inc KJIFFY+1
+@jiffy_ok:
+
         lda CURSOR_BLINK_ACTIVE
         beq @done
         dec CURSOR_BLINK_COUNT

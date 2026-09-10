@@ -22,3 +22,5 @@ BASIC `READY.` prompt without clearing the current program.
 
 - [docs/memory-map.md](docs/memory-map.md) — *Mapping the Clementina*, a living,
   location-by-location map of the address space and the kernel ABI.
+- [docs/basic-sound.md](docs/basic-sound.md) — BASIC sound statements (`SNDON`,
+  `VOL`, `WAVE`, `NOTE`, `FREQ`, `GATE`, `ADSR`, `PULSE`, `PAN`) for MIA's PSG.

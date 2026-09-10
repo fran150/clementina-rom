@@ -64,10 +64,12 @@ VIA_ACR_T1_FREE_RUN = %01000000 ; Timer 1 free-runs, PB7 output disabled
 VIA_IFR_T1          = %01000000
 VIA_IER_SET         = %10000000
 
-; At 1 MHz PHI2, 62500 cycles gives a 62.5 ms tick; eight ticks gives a
-; classic half-second cursor blink. If PHI2 changes, the blink follows it.
-VIA_T1_RELOAD       = 62500
-CURSOR_BLINK_TICKS  = 8
+; At 1 MHz PHI2, 6250 cycles gives a 6.25 ms tick (~160 Hz); 80 ticks gives a
+; classic half-second cursor blink. If PHI2 changes, both follow it. The tick is
+; deliberately fine so KJIFFY-based timing (BASIC PLAY) has low quantization
+; error; the IRQ is short, so ~160 Hz costs well under 1% of the CPU.
+VIA_T1_RELOAD       = 6250
+CURSOR_BLINK_TICKS  = 80
 
 ; ----------------------------------------------------------------------------
 ; MIA configuration field ids (CFG_SELECT values).
@@ -220,6 +222,17 @@ KERN_EDITKEY       = KERN_BASE + $24   ; screen editor: next char of edited line
 KERN_CHROUT_GLYPH  = KERN_BASE + $27   ; A = tile -> console as a raw glyph (no ctrl)
 KERN_WOZMON        = KERN_BASE + $2A   ; enter the WOZ monitor (see src/monitor)
 KERN_SET_BACKDROP  = KERN_BASE + $2D   ; A = backdrop selector -> VIDX_BACKDROP_COLOR
+
+; ----------------------------------------------------------------------------
+; Kernel zero page ($00F0-$00FF, see clementina.cfg KZP). Clients touch only
+; what is published here; the rest is private kernel scratch.
+; ----------------------------------------------------------------------------
+KJIFFY             = $00F7   ; free-running 16-bit LE tick counter, +1 per VIA
+                             ; Timer-1 IRQ (~6250 PHI2 cycles; ~160 Hz at 1 MHz
+                             ; PHI2, and it scales with PHI2). Wraps silently.
+                             ; Read-only for clients. Read it high/low/high (retry
+                             ; on high-byte change); the IRQ can carry mid-read.
+                             ; Used by BASIC PLAY timing.
 
 ; ----------------------------------------------------------------------------
 ; Kernel variable page ($0300-$03FF). See docs/memory-map.md.

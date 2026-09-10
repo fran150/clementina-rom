@@ -212,5 +212,21 @@ MATHTBL:
 ; ----------------------------------------------------------------------------
         init_ext_token_tables
         ext_keyword_rts "BCOLOR", BASIC_BCOLOR
+        ; Sound: MIA 4-voice PSG control (see clementina-mia docs/audio.md and
+        ; src/basic/CLEMENTINA.md). None of these names is a prefix of another,
+        ; so table order is free; TOKENIZE_EXT runs before the primary table so
+        ; NOTE/FREQ/WAVE do not collide with NOT/FRE/WAIT.
+        ext_keyword_rts "SNDON",  BASIC_SNDON
+        ext_keyword_rts "SNDOFF", BASIC_SNDOFF
+        ext_keyword_rts "SNDCLR", BASIC_SNDCLR
+        ext_keyword_rts "VOL",    BASIC_VOL
+        ext_keyword_rts "WAVE",   BASIC_WAVE
+        ext_keyword_rts "NOTE",   BASIC_NOTE
+        ext_keyword_rts "FREQ",   BASIC_FREQ
+        ext_keyword_rts "GATE",   BASIC_GATE
+        ext_keyword_rts "ADSR",   BASIC_ADSR
+        ext_keyword_rts "PULSE",  BASIC_PULSE
+        ext_keyword_rts "PAN",    BASIC_PAN
+        ext_keyword_rts "PLAY",   BASIC_PLAY
         end_ext_token_tables
 .endif
