@@ -111,20 +111,28 @@ STYLE_SIDE_MAGIC1   := $FF
 ; memory layout
 ; BASIC program/variable workspace starts safely above the combined
 ; kernel+BASIC image. Keep this in sync with Makefile's MAX_KERNEL_BYTES guard:
-; MIA loads the image at $0400, so with MAX_KERNEL_BYTES=$4000 the loaded image
-; (kernel + BASIC + WOZ monitor) must fit below $4400. Background-PLAY's fixed
-; control block occupies $4400-$448F (BGP_* in clementina_extra.s, not part of
-; the loaded image - equates only, like KVARS), leaving RAMSTART2=$4500 as
+; MIA loads the image at $0400, so with MAX_KERNEL_BYTES=$4800 the loaded image
+; (kernel + BASIC + WOZ monitor) must fit below $4C00. Background-PLAY's fixed
+; control block occupies $4C00-$4C8F (BGP_* in clementina_extra.s, not part of
+; the loaded image - equates only, like KVARS), leaving RAMSTART2=$4D00 as
 ; BASIC's free-RAM floor. BASIC continues through Extended RAM bank 0 at
 ; $8000-$BFFF and uses $C000 as its exclusive memory ceiling, giving it a
-; ~30,975-byte workspace after the initial empty-program marker. Bump
+; ~28,927-byte workspace after the initial empty-program marker (2048 bytes
+; less than before this bump, still ample for BASIC programs). Bump
 ; MAX_KERNEL_BYTES/RAMSTART2/BGP_* together as more commands land.
+;
+; Raised from $4500 to $4D00 (2026-09) for the video bulk-load commands
+; (BGLOAD/CHRLOAD/PALLOAD) plus BGCHAR and the single-field sprite setters -
+; deliberate headroom (not just enough to fit) after landing OAMLOAD/SPRITE
+; exactly at the previous $4400 ceiling took three rounds of cutting features
+; to fit. See docs/basic-video.md.
 ;
 ; AVOID TXTTAB in ~[$39FE, $3AC0]: a pre-existing latent bug (reproduces on stock
 ; baseline, unrelated to the extension tokens) makes INPUT misread its buffer and
 ; re-prompt "??" when the program text starts in that ~200-byte window. $3600 and
-; $3B00+ are fine; $4500 clears it with margin. See the note in docs/memory-map.md.
-RAMSTART2        := $4500
+; $3B00+ are fine; $4D00 clears it with even more margin than $4500 did. See the
+; note in docs/memory-map.md.
+RAMSTART2        := $4D00
 
 ; storage: route the LOAD/SAVE tokens to the kernel jump table (stubs today).
 KERN_LOAD := $041E

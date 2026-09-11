@@ -228,6 +228,38 @@ MATHTBL:
         ext_keyword_rts "PULSE",  BASIC_PULSE
         ext_keyword_rts "PAN",    BASIC_PAN
         ext_keyword_rts "PLAY",   BASIC_PLAY
+        ; Video Phase 1 (see docs/basic-video.md): background/sprite layer,
+        ; CHR bank, and palette control. Direct register wrappers, same shape
+        ; as BCOLOR/the sound statements above; handlers in clementina_extra.s.
+        ext_keyword_rts "BGON",     BASIC_BGON
+        ext_keyword_rts "BGOFF",    BASIC_BGOFF
+        ext_keyword_rts "BGMODE",   BASIC_BGMODE
+        ext_keyword_rts "BGSET",    BASIC_BGSET
+        ext_keyword_rts "SCROLL",   BASIC_SCROLL
+        ext_keyword_rts "BGBANK",   BASIC_BGBANK
+        ext_keyword_rts "BGALT",    BASIC_BGALT
+        ext_keyword_rts "SPRON",    BASIC_SPRON
+        ext_keyword_rts "SPROFF",   BASIC_SPROFF
+        ext_keyword_rts "SPRCOUNT", BASIC_SPRCOUNT
+        ext_keyword_rts "SPRBANK",  BASIC_SPRBANK
+        ext_keyword_rts "CHRMODE",  BASIC_CHRMODE
+        ext_keyword_rts "CHRPLANE", BASIC_CHRPLANE
+        ext_keyword_rts "PALETTE",  BASIC_PALETTE
+        ext_keyword_rts "VIDON",    BASIC_VIDON
+        ext_keyword_rts "VIDOFF",   BASIC_VIDOFF
+        ; Video Phase 2: bulk loading from DATA + full sprite setup.
+        ext_keyword_rts "BGCHAR",   BASIC_BGCHAR
+        ext_keyword_rts "BGLOAD",   BASIC_BGLOAD
+        ext_keyword_rts "CHRLOAD",  BASIC_CHRLOAD
+        ext_keyword_rts "PALLOAD",  BASIC_PALLOAD
+        ext_keyword_rts "OAMLOAD",  BASIC_OAMLOAD
+        ext_keyword_rts "SPRITE",   BASIC_SPRITE
+        ext_keyword_rts "SPRTILE",  BASIC_SPRTILE
+        ext_keyword_rts "SPRX",     BASIC_SPRX
+        ext_keyword_rts "SPRY",     BASIC_SPRY
+        ext_keyword_rts "SPRCOLOR", BASIC_SPRCOLOR
+        ext_keyword_rts "SPRFLIP",  BASIC_SPRFLIP
+        ext_keyword_rts "SPRPRI",   BASIC_SPRPRI
         end_ext_token_tables
 
 ; ----------------------------------------------------------------------------

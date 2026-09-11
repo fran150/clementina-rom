@@ -136,6 +136,32 @@ VIDX_BACKDROP_COLOR = $87      ; 1 byte: palette/color selector
 VIDX_PALETTE_0      = $90      ; first of 16 palette-bank indexes
 VIDX_OVERLAY_NT     = $B8      ; overlay nametable, 1000 bytes @ $10080
 VIDX_OVERLAY_ATTR   = $B9      ; overlay attributes, 1000 bytes @ $10468
+VIDX_BG_NT_0        = $A8      ; first of 8 raw BG nametable indexes, 1000 bytes each
+VIDX_BG_ATTR_0      = $B0      ; first of 8 raw BG attribute-table indexes, 1000 bytes each
+VIDX_CHR_BANK_0     = $A0      ; first of 8 raw CHR bank indexes, 6144 bytes each
+VIDX_OAM_0          = $C0      ; first of 32 direct OAM-entry indexes, 5 bytes each
+
+; Render control page ($00020-$0003F) field addresses, as the low byte of a
+; 24-bit MIA RAM address (mid/high are always $00 - the whole page fits in one
+; byte). Reach any of them by binding VIDX_RENDER_CONTROL to window A and
+; overriding its current address via CFG_IDXA_ADDR_L/M/H (see vid_seek in
+; clementina_extra.s), same trick snd_seek uses for the audio block.
+RC_LAYER_ENABLE     = $21      ; 1 byte: LAYER_BACKGROUND/LAYER_OVERLAY/LAYER_SPRITE
+RC_BG_VIEWPORT_MODE = $22      ; 1 byte: 0-5, canvas layout for the BG layer
+RC_BG_ACTIVE_SET    = $23      ; 1 byte: 0/1, selects BG table set (+4 offset)
+RC_SCROLL_X_L       = $24      ; 2 bytes LE: BG scroll X, pixels
+RC_SCROLL_X_H       = $25
+RC_SCROLL_Y_L       = $26      ; 2 bytes LE: BG scroll Y, pixels
+RC_SCROLL_Y_H       = $27
+RC_BG_CHR_BANK      = $28      ; 1 byte: CHR bank 0-7 the BG layer draws from
+RC_BG_ALT_CHR_BANK  = $29      ; 1 byte: CHR bank used where a cell sets CHR_ALT
+RC_OVERLAY_CHR_BANK = $2A
+RC_OVERLAY_ALT_CHR  = $2B
+RC_SPRITE_CHR_BANK  = $2C      ; 1 byte: CHR bank sprites draw from
+RC_CHR_1BPP_MASK    = $2D      ; 1 byte: bit n set -> CHR bank n decodes as 1bpp
+RC_CHR_1BPP_PLANES  = $2E      ; 1 byte: bg[1:0] spr[3:2] overlay[5:4] plane select
+RC_BACKDROP_COLOR   = $2F      ; 1 byte: also reachable via VIDX_BACKDROP_COLOR
+RC_OAM_LAST_INDEX   = $30      ; 1 byte: highest OAM index the renderer scans
 
 ; Overlay nametable base, as a 24-bit MIA RAM address ($10080)
 OVNT_ADDR_L         = $80

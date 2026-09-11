@@ -46,6 +46,57 @@ CFG_IDXB_ADDR_L   = $10    ; CFG field ids that set window B's 24-bit address
 CFG_IDXB_ADDR_M   = $11
 CFG_IDXB_ADDR_H   = $12
 
+; ----------------------------------------------------------------------------
+; MIA register subset used by the video statements (Phase 1, see
+; docs/basic-video.md). These go through window A (shared with the console
+; cursor - see vid_seek/vid_layer_set above), not window B. Keep in sync with
+; src/kernel/kernel.inc.
+; ----------------------------------------------------------------------------
+IDXA_PORT           = $FFE0
+IDXA_SELECT         = $FFE1
+
+CFG_IDXA_ADDR_L     = $00  ; CFG field ids that set window A's 24-bit address
+CFG_IDXA_ADDR_M     = $01
+CFG_IDXA_ADDR_H     = $02
+
+VIDX_RENDER_CONTROL = $80  ; streams the 32-byte render control page ($20..)
+VIDX_LAYER_ENABLE   = $81  ; 1 byte: background/overlay/sprite enables
+VIDX_PALETTE_0      = $90  ; first of 16 palette-bank indexes
+
+CMD_VIDEO_SET_MODE  = $43
+
+; LAYER_ENABLE bits (bit0 background, bit1 overlay, bit2 sprite)
+LAYER_BACKGROUND    = %00000001
+LAYER_SPRITE         = %00000100
+
+; VIDEO_MODE: bit0 = video enable.
+VIDEO_MODE_ENABLE   = %00000001
+
+; Render control page ($00020-$0003F) field addresses - see vid_seek. Mid/high
+; address bytes are always $00: the whole page fits in page 0 of MIA RAM.
+RC_BG_VIEWPORT_MODE = $22
+RC_BG_ACTIVE_SET    = $23
+RC_SCROLL_X_L       = $24  ; +1 = high byte
+RC_SCROLL_Y_L       = $26  ; +1 = high byte
+RC_BG_CHR_BANK      = $28
+RC_BG_ALT_CHR_BANK  = $29
+RC_SPRITE_CHR_BANK  = $2C
+RC_CHR_1BPP_MASK    = $2D
+RC_CHR_1BPP_PLANES  = $2E
+RC_OAM_LAST_INDEX   = $30
+
+; Bulk regions' base addresses (24-bit MIA RAM address, L/M/H) - see vid_seek_abs
+; (Phase 2). Bank/table strides are added at runtime.
+MIA_CHR_BASE_L      = $00  ; CHR banks: $00200, 6144 bytes/bank
+MIA_CHR_BASE_M      = $02
+MIA_BG_NT_BASE_L    = $00  ; BG nametables: $0C200, 1000 bytes/table
+MIA_BG_NT_BASE_M    = $C2
+MIA_BG_ATTR_BASE_L  = $40  ; BG attributes: $0E140, 1000 bytes/table
+MIA_BG_ATTR_BASE_M  = $E1
+MIA_OAM_BASE_L      = $50  ; OAM: $10850, 5 bytes/entry
+MIA_OAM_BASE_M      = $08
+MIA_OAM_BASE_H      = $01
+
 ; MIA audio (PWM PSG), layout version 2. State block $12000-$1204F: a 16-byte
 ; header then four 16-byte voice records. See clementina-mia docs/audio.md.
 CMD_AUDIO_ENABLE  = $60
@@ -188,6 +239,1331 @@ BASIC_BCOLOR:
         jmp     KERN_SET_BACKDROP       ; tail call; kernel does the IRQ-safe write
 @iq:
         jmp     IQERR
+
+; ----------------------------------------------------------------------------
+; Background/sprite/CHR/palette/video-mode control - Phase 1 (see
+; docs/basic-video.md). These are all direct register wrappers, same shape as
+; BCOLOR above: parse args (GETBYT/COMBYTE, IQERR on out-of-range), write the
+; MIA render-control page. Phase 2 (BGCHAR/BGLOAD/BGALOAD/OAMLOAD/CHRLOAD/
+; SPRITE and friends) needs a DATA-stream bulk-read primitive and mode-aware
+; cell addressing and lands separately.
+;
+; Shared helpers:
+;   vid_seek A=page offset  - bind window A to VIDX_RENDER_CONTROL and position
+;     its current address at render-control page offset A (mid/high byte are
+;     always $00 - the whole 32-byte page sits in page 0 of MIA RAM). Must be
+;     called inside an sei fence: it walks CFG_SELECT/CFG_PORT and window A is
+;     shared with the console cursor, which the cursor-blink IRQ repositions.
+;     Same trick snd_seek (below) uses for the audio block. Clobbers A.
+;   vid_wr1 A=page offset, X=value - sei-fenced single-byte write via vid_seek.
+;   vid_layer_set/vid_layer_clear A=mask - OR/AND-NOT mask into LAYER_ENABLE via
+;     its own dedicated 1-byte index (VIDX_LAYER_ENABLE): a 1-byte window wraps
+;     back to itself after each access, so read-modify-write needs no
+;     reposition between the read and the write, unlike the shared 32-byte
+;     render-control window used for everything else here.
+; ----------------------------------------------------------------------------
+vid_seek:
+        pha
+        lda     #VIDX_RENDER_CONTROL
+        sta     IDXA_SELECT
+        lda     #CFG_IDXA_ADDR_H
+        sta     CFG_SELECT
+        lda     #$00
+        sta     CFG_PORT
+        lda     #CFG_IDXA_ADDR_M
+        sta     CFG_SELECT
+        lda     #$00
+        sta     CFG_PORT
+        lda     #CFG_IDXA_ADDR_L
+        sta     CFG_SELECT
+        pla                             ; page offset -> current address low byte
+        sta     CFG_PORT
+        rts
+
+vid_wr1:
+        php
+        sei
+        jsr     vid_seek
+        stx     IDXA_PORT
+        plp
+        rts
+
+vid_layer_set:
+        sta     TEMP1
+        php
+        sei
+        lda     #VIDX_LAYER_ENABLE
+        sta     IDXA_SELECT
+        lda     IDXA_PORT
+        ora     TEMP1
+        sta     IDXA_PORT
+        plp
+        rts
+
+vid_layer_clear:
+        eor     #$FF
+        sta     TEMP1
+        php
+        sei
+        lda     #VIDX_LAYER_ENABLE
+        sta     IDXA_SELECT
+        lda     IDXA_PORT
+        and     TEMP1
+        sta     IDXA_PORT
+        plp
+        rts
+
+CHR_BIT_TABLE:
+        .byte   $01,$02,$04,$08,$10,$20,$40,$80
+
+; BGON / BGOFF - background layer on/off (LAYER_ENABLE bit 0).
+BASIC_BGON:
+        lda     #LAYER_BACKGROUND
+        jmp     vid_layer_set
+BASIC_BGOFF:
+        lda     #LAYER_BACKGROUND
+        jmp     vid_layer_clear
+
+; SPRON / SPROFF - sprite layer on/off (LAYER_ENABLE bit 2). Per-sprite
+; show/hide is a field of the SPRITE statement (Phase 2), not a separate verb -
+; this pair is only the whole-layer switch.
+BASIC_SPRON:
+        lda     #LAYER_SPRITE
+        jmp     vid_layer_set
+BASIC_SPROFF:
+        lda     #LAYER_SPRITE
+        jmp     vid_layer_clear
+
+; VIDON / VIDOFF - whole video output on/off (VIDEO_MODE bit 0). Goes through
+; CMD_VIDEO_SET_MODE (a queued MIA command, like SNDON/SNDOFF's CMD_AUDIO_*),
+; not a plain index write.
+BASIC_VIDON:
+        lda     #VIDEO_MODE_ENABLE
+        bne     vid_mode_cmd            ; immediate operand is nonzero: always taken
+BASIC_VIDOFF:
+        lda     #$00
+vid_mode_cmd:
+        sta     CMD_PARAM1
+        php
+        sei
+        lda     #$00
+        sta     CMD_PARAM2
+        sta     CMD_PARAM3
+        lda     #CMD_VIDEO_SET_MODE
+        sta     CMD_TRIGGER
+        plp
+        rts
+
+; BGMODE n : BG viewport mode 0-5 - how the BG layer's up-to-8 raw 40x25 tables
+; tile together into one scrollable canvas (see docs/basic-video.md).
+BASIC_BGMODE:
+        jsr     GETBYT                  ; X = mode 0-5
+        cpx     #$06
+        jcs     snd_iqerr
+        lda     #RC_BG_VIEWPORT_MODE
+        jmp     vid_wr1
+
+; BGSET n : 0/1, selects which of the two BG table sets (+4 to every raw table
+; index) the current BGMODE arrangement is drawn from.
+BASIC_BGSET:
+        jsr     GETBYT                  ; X = 0 or 1
+        cpx     #$02
+        jcs     snd_iqerr
+        lda     #RC_BG_ACTIVE_SET
+        jmp     vid_wr1
+
+; BGBANK n / BGALT n : CHR bank 0-7 the BG layer draws from normally / where a
+; cell's CHR_ALT attribute bit is set.
+BASIC_BGBANK:
+        jsr     GETBYT                  ; X = bank 0-7
+        cpx     #$08
+        jcs     snd_iqerr
+        lda     #RC_BG_CHR_BANK
+        jmp     vid_wr1
+
+BASIC_BGALT:
+        jsr     GETBYT                  ; X = bank 0-7
+        cpx     #$08
+        jcs     snd_iqerr
+        lda     #RC_BG_ALT_CHR_BANK
+        jmp     vid_wr1
+
+; SPRBANK n : CHR bank 0-7 sprites draw from.
+BASIC_SPRBANK:
+        jsr     GETBYT                  ; X = bank 0-7
+        cpx     #$08
+        jcs     snd_iqerr
+        lda     #RC_SPRITE_CHR_BANK
+        jmp     vid_wr1
+
+; SPRCOUNT n : highest OAM index (0-255) the renderer scans each frame. Any
+; byte value is valid - no range check.
+BASIC_SPRCOUNT:
+        jsr     GETBYT                  ; X = last OAM index to scan
+        lda     #RC_OAM_LAST_INDEX
+        jmp     vid_wr1
+
+; SCROLL x,y : BG layer pixel scroll, two 16-bit values (0-65535; wraps per the
+; current BGMODE's canvas size in hardware). Word args parsed like FREQ's hz.
+BASIC_SCROLL:
+        jsr     FRMNUM
+        jsr     GETADR                  ; x -> LINNUM/LINNUM+1
+        php
+        sei
+        lda     #RC_SCROLL_X_L
+        jsr     vid_seek
+        lda     LINNUM
+        sta     IDXA_PORT
+        lda     LINNUM+1
+        sta     IDXA_PORT
+        plp
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR                  ; y -> LINNUM/LINNUM+1
+        php
+        sei
+        lda     #RC_SCROLL_Y_L
+        jsr     vid_seek
+        lda     LINNUM
+        sta     IDXA_PORT
+        lda     LINNUM+1
+        sta     IDXA_PORT
+        plp
+        rts
+
+; CHRMODE bank,flag : mark CHR bank 0-7 as 1bpp (flag<>0) or 3bpp (flag=0) -
+; read-modify-write of CHR_1BPP_MASK's bit `bank`. Re-seeks between the read
+; and the write: the 32-byte render-control window steps past the target byte
+; on the read, unlike the dedicated 1-byte LAYER_ENABLE index above.
+BASIC_CHRMODE:
+        jsr     GETBYT                  ; X = bank 0-7
+        cpx     #$08
+        jcs     snd_iqerr
+        txa
+        pha
+        jsr     COMBYTE                 ; X = flag (0 = off, nonzero = on)
+        pla                             ; A = bank
+        tay
+        lda     CHR_BIT_TABLE,y         ; A = 1 << bank
+        sta     TEMP1
+        cpx     #$00
+        beq     @clr
+        php
+        sei
+        lda     #RC_CHR_1BPP_MASK
+        jsr     vid_seek
+        lda     IDXA_PORT
+        ora     TEMP1
+        tax
+        lda     #RC_CHR_1BPP_MASK
+        jsr     vid_seek
+        stx     IDXA_PORT
+        plp
+        rts
+@clr:
+        lda     TEMP1
+        eor     #$FF
+        sta     TEMP1
+        php
+        sei
+        lda     #RC_CHR_1BPP_MASK
+        jsr     vid_seek
+        lda     IDXA_PORT
+        and     TEMP1
+        tax
+        lda     #RC_CHR_1BPP_MASK
+        jsr     vid_seek
+        stx     IDXA_PORT
+        plp
+        rts
+
+; CHRPLANE bg,spr,ovl : which of a 1bpp CHR bank's 3 planes each layer decodes
+; (0-3 each; only matters for banks CHRMODE marked 1bpp). Packs bg | (spr<<2) |
+; (ovl<<4) and overwrites the whole CHR_1BPP_PLANES byte in one shot.
+BASIC_CHRPLANE:
+        jsr     GETBYT                  ; X = bg plane 0-3
+        cpx     #$04
+        jcs     snd_iqerr
+        txa
+        pha
+        jsr     COMBYTE                 ; X = sprite plane 0-3
+        cpx     #$04
+        jcs     snd_iqerr
+        txa
+        asl     a
+        asl     a                       ; sprite plane << 2
+        sta     TEMP1
+        pla                             ; A = bg plane
+        ora     TEMP1
+        pha
+        jsr     COMBYTE                 ; X = overlay plane 0-3
+        cpx     #$04
+        jcs     snd_iqerr
+        txa
+        asl     a
+        asl     a
+        asl     a
+        asl     a                       ; overlay plane << 4
+        sta     TEMP1
+        pla                             ; A = bg | (sprite<<2)
+        ora     TEMP1
+        tax
+        lda     #RC_CHR_1BPP_PLANES
+        jmp     vid_wr1
+
+; PALETTE bank,index,r,g,b : write one palette RGB565 entry. bank 0-15, index
+; 0-7 (one of that bank's 8 colors), r 0-31, g 0-63, b 0-31.
+;
+; Target address = $100 + bank*16 + index*2 (max $100+240+14 = $1FE), so the
+; +$100 base lands entirely in the address's middle byte (always $01) and
+; bank*16+index*2 (max 254) is the whole low byte - no 16-bit carry to track.
+; bank recovers from that low byte as (bank*16+index*2)>>4, since index*2 < 16
+; never carries into the bank*16 nibble; selecting VIDX_PALETTE_0+bank (rather
+; than any fixed bank index) keeps the CFG-forced address within that
+; descriptor's own declared 16-byte range.
+BASIC_PALETTE:
+        jsr     GETBYT                  ; X = bank 0-15
+        cpx     #$10
+        jcs     snd_iqerr
+        txa
+        asl     a
+        asl     a
+        asl     a
+        asl     a                       ; bank << 4
+        sta     TEMP1
+        jsr     COMBYTE                 ; X = index 0-7
+        cpx     #$08
+        jcs     snd_iqerr
+        txa
+        asl     a                       ; index << 1
+        clc
+        adc     TEMP1
+        sta     TEMP1                   ; TEMP1 = bank*16 + index*2
+        jsr     COMBYTE                 ; X = r 0-31
+        cpx     #$20
+        jcs     snd_iqerr
+        txa
+        asl     a
+        asl     a
+        asl     a                       ; r << 3 -> high byte bits 7-3
+        sta     TEMP2
+        jsr     COMBYTE                 ; X = g 0-63
+        cpx     #$40
+        jcs     snd_iqerr
+        txa
+        pha
+        lsr     a
+        lsr     a
+        lsr     a                       ; g >> 3 -> high byte bits 2-0
+        ora     TEMP2
+        sta     TEMP2                   ; TEMP2 = high byte = (r<<3)|(g>>3)
+        pla
+        and     #$07
+        asl     a
+        asl     a
+        asl     a
+        asl     a
+        asl     a                       ; (g&7) << 5 -> low byte bits 7-5
+        sta     TEMP3
+        jsr     COMBYTE                 ; X = b 0-31
+        cpx     #$20
+        jcs     snd_iqerr
+        txa
+        ora     TEMP3
+        sta     TEMP3                   ; TEMP3 = low byte = ((g&7)<<5)|b
+
+        php
+        sei
+        lda     TEMP1
+        lsr     a
+        lsr     a
+        lsr     a
+        lsr     a                       ; bank back out of TEMP1 (index*2 < 16)
+        clc
+        adc     #VIDX_PALETTE_0
+        sta     IDXA_SELECT
+        lda     #CFG_IDXA_ADDR_H
+        sta     CFG_SELECT
+        lda     #$00
+        sta     CFG_PORT
+        lda     #CFG_IDXA_ADDR_M
+        sta     CFG_SELECT
+        lda     #$01
+        sta     CFG_PORT
+        lda     #CFG_IDXA_ADDR_L
+        sta     CFG_SELECT
+        lda     TEMP1
+        sta     CFG_PORT
+        lda     TEMP3                   ; low byte first: the target address's
+        sta     IDXA_PORT               ; first (lower) byte is the RGB565 low
+        lda     TEMP2                   ; byte per the renderer's LE read
+        sta     IDXA_PORT
+        plp
+        rts
+
+; ----------------------------------------------------------------------------
+; Background/sprite/CHR/palette bulk loading - Phase 2 (see docs/basic-video.md).
+;
+; Two shared primitives make these possible:
+;
+;   vid_seek_abs/vid_wr_abs - like vid_seek/vid_wr1, but for an arbitrary 24-bit
+;     MIA RAM address (VID_ADDR/VID_ADDR2) instead of a render-control page
+;     offset: CFG overrides window A's current address directly regardless of
+;     which index is selected as the anchor, and a write always lands at that
+;     exact byte (limit/wrap only affects the *next* auto-step, which nothing
+;     here relies on - every access re-seeks first). VID_ADDR2/vid_wr_abs2 is
+;     a second, independent stream for BGLOAD's two parallel writes
+;     (nametable + attribute).
+;
+;   vid_data_byte - pulls one value out of the current DATA position, exactly
+;     as READ would (including a real ?OUT OF DATA error when the program runs
+;     out), without hand-duplicating BASIC's cross-line DATA search. It works
+;     by borrowing the real READ statement and GETBYT against a reserved
+;     scratch variable, Z9: point TXTPTR at "Z9" and jsr READ (Z9 = next DATA
+;     value, DATPTR advances correctly), then point TXTPTR at "Z9" again and
+;     jsr GETBYT (X = Z9 as a byte 0-255, same range check GETBYT always
+;     applies). vid_data_begin/vid_data_end save/restore Z9's prior value
+;     around the whole bulk command so nothing user-visible changes except
+;     that a variable named Z9 exists after the first bulk-load call.
+;
+; Both primitives clobber TXTPTR; callers save the real TXTPTR once before
+; their loop and restore it once before returning - not per item.
+; ----------------------------------------------------------------------------
+VID_ADDR:
+        .res    3                       ; running 24-bit address
+VID_ADDR2:
+        .res    3                       ; second stream (BGLOAD's attribute half)
+VID_COUNT:
+        .res    2                       ; 16-bit down-counter, private to the
+                                         ; bulk-load loops (LINNUM/TEMP1-3 are
+                                         ; not safe to hold a value in across a
+                                         ; jsr READ/FRMNUM/PTRGET - those use
+                                         ; them as their own scratch)
+VID_STRIDE:
+        .res    1                       ; fields per item (1: CHRLOAD/PALLOAD;
+                                         ; 2: BGLOAD; 5: OAMLOAD)
+VID_STREAM2:
+        .res    1                       ; bitmask: field i of each item writes
+                                         ; through vid_wr_abs2/VID_ADDR2 instead
+                                         ; of vid_wr_abs/VID_ADDR (BGLOAD only)
+VID_FIELD:
+        .res    1                       ; vid_bulk_run's field-within-item
+                                         ; index (see vid_bulk_run - not Y,
+                                         ; which vid_data_byte clobbers)
+
+VID_DATA_VARNAME:
+        .byte   "Z9",$00
+VID_DATA_SAVE:
+        .res    BYTES_FP
+
+; vid_seek_abs: X = stream (0 -> VID_ADDR, 3 -> VID_ADDR2 - declared back to
+; back, so indexing by X reaches either). Must be called inside an sei fence
+; (shares window A with the console cursor).
+vid_seek_abs:
+        lda     #VIDX_RENDER_CONTROL
+        sta     IDXA_SELECT
+        lda     #CFG_IDXA_ADDR_H
+        sta     CFG_SELECT
+        lda     VID_ADDR+2,x
+        sta     CFG_PORT
+        lda     #CFG_IDXA_ADDR_M
+        sta     CFG_SELECT
+        lda     VID_ADDR+1,x
+        sta     CFG_PORT
+        lda     #CFG_IDXA_ADDR_L
+        sta     CFG_SELECT
+        lda     VID_ADDR,x
+        sta     CFG_PORT
+        rts
+
+; vid_wr_abs/vid_wr_abs2: X = value, written at VID_ADDR/VID_ADDR2. sei-fenced;
+; increments the 24-bit address afterward. The stream offset (0/3) is carried
+; through TEMP2, not Y or X - callers (SPRITE's own write loop, vid_bulk_run's
+; field loop) use Y as their own loop counter across this call and must see it
+; come back unchanged; X is needed for the value, then for vid_seek_abs's own
+; indexing, then again for the final indexed increment, so it can't carry
+; anything across those either.
+vid_wr_abs:
+        lda     #0
+        sta     TEMP2
+        jmp     vid_wr_common
+vid_wr_abs2:
+        lda     #3
+        sta     TEMP2
+vid_wr_common:
+        stx     TEMP3
+        php
+        sei
+        ldx     TEMP2
+        jsr     vid_seek_abs
+        ldx     TEMP3
+        stx     IDXA_PORT
+        plp
+        ldx     TEMP2
+        inc     VID_ADDR,x
+        bne     @wrdone
+        inc     VID_ADDR+1,x
+        bne     @wrdone
+        inc     VID_ADDR+2,x
+@wrdone:
+        rts
+
+; vid_addr_add16/vid_addr_add16_2: add LINNUM/LINNUM+1 into VID_ADDR/VID_ADDR2
+; (24-bit). Clobbers A. Call immediately after GETADR, before anything else
+; can reuse LINNUM.
+vid_addr_add16:
+        lda     VID_ADDR
+        clc
+        adc     LINNUM
+        sta     VID_ADDR
+        lda     VID_ADDR+1
+        adc     LINNUM+1
+        sta     VID_ADDR+1
+        bcc     @done
+        inc     VID_ADDR+2
+@done:
+        rts
+
+vid_addr_add16_2:
+        lda     VID_ADDR2
+        clc
+        adc     LINNUM
+        sta     VID_ADDR2
+        lda     VID_ADDR2+1
+        adc     LINNUM+1
+        sta     VID_ADDR2+1
+        bcc     @done
+        inc     VID_ADDR2+2
+@done:
+        rts
+
+; vid_data_begin/vid_data_end: save/restore Z9's value around a bulk-load
+; command (see banner above). Mirror images of each other, so both are thin
+; entry points into one shared body; A on entry to the body (via X) tells it
+; which direction to copy.
+vid_data_begin:
+        ldx     #0
+        jmp     vid_data_swap
+vid_data_end:
+        ldx     #1
+vid_data_swap:
+        stx     TEMP3
+        lda     #<VID_DATA_VARNAME
+        ldy     #>VID_DATA_VARNAME
+        sta     TXTPTR
+        sty     TXTPTR+1
+        jsr     PTRGET                  ; A,Y -> pointer to Z9's value bytes
+        sta     TEMP1
+        sty     TEMP2
+        ldy     #BYTES_FP-1
+        lda     TEMP3
+        bne     @restore
+@save:
+        lda     (TEMP1),y
+        sta     VID_DATA_SAVE,y
+        dey
+        bpl     @save
+        rts
+@restore:
+        lda     VID_DATA_SAVE,y
+        sta     (TEMP1),y
+        dey
+        bpl     @restore
+        rts
+
+vid_data_byte:
+        lda     #<VID_DATA_VARNAME
+        ldy     #>VID_DATA_VARNAME
+        sta     TXTPTR
+        sty     TXTPTR+1
+        jsr     READ                    ; Z9 = next DATA value; DATPTR advances
+        lda     #<VID_DATA_VARNAME
+        ldy     #>VID_DATA_VARNAME
+        sta     TXTPTR
+        sty     TXTPTR+1
+        jmp     GETBYT                  ; X = Z9 as a byte 0-255 (tail call)
+
+; mul_table_1000: A = table/bank index (0-7) -> TEMP2/TEMP3 = index*1000
+; (16-bit). Self-contained (no nested BASIC calls), so TEMP1-3 are safe here.
+mul_table_1000:
+        tax
+        lda     #$00
+        sta     TEMP2
+        sta     TEMP3
+        cpx     #$00
+        beq     @done
+@loop:
+        lda     TEMP2
+        clc
+        adc     #<1000
+        sta     TEMP2
+        lda     TEMP3
+        adc     #>1000
+        sta     TEMP3
+        dex
+        bne     @loop
+@done:
+        rts
+
+; mul_bank_6144: A = CHR bank (0-7) -> TEMP2/TEMP3 = bank*6144 (16-bit).
+mul_bank_6144:
+        tax
+        lda     #$00
+        sta     TEMP2
+        sta     TEMP3
+        cpx     #$00
+        beq     @done
+@loop:
+        lda     TEMP2
+        clc
+        adc     #<6144
+        sta     TEMP2
+        lda     TEMP3
+        adc     #>6144
+        sta     TEMP3
+        dex
+        bne     @loop
+@done:
+        rts
+
+; bg_seek_nt/bg_seek_attr: A = raw BG table (0-7). Sets VID_ADDR/VID_ADDR2 to
+; that table's nametable/attribute base ($0C200/$0E140 + table*1000).
+bg_seek_nt:
+        jsr     mul_table_1000
+        lda     #MIA_BG_NT_BASE_L
+        clc
+        adc     TEMP2
+        sta     VID_ADDR
+        lda     #MIA_BG_NT_BASE_M
+        adc     TEMP3
+        sta     VID_ADDR+1
+        lda     #$00
+        adc     #$00
+        sta     VID_ADDR+2
+        rts
+
+bg_seek_attr:
+        jsr     mul_table_1000
+        lda     #MIA_BG_ATTR_BASE_L
+        clc
+        adc     TEMP2
+        sta     VID_ADDR2
+        lda     #MIA_BG_ATTR_BASE_M
+        adc     TEMP3
+        sta     VID_ADDR2+1
+        lda     #$00
+        adc     #$00
+        sta     VID_ADDR2+2
+        rts
+
+; chr_seek: A = CHR bank (0-7). Sets VID_ADDR to that bank's base ($00200 +
+; bank*6144).
+chr_seek:
+        jsr     mul_bank_6144
+        lda     #MIA_CHR_BASE_L
+        clc
+        adc     TEMP2
+        sta     VID_ADDR
+        lda     #MIA_CHR_BASE_M
+        adc     TEMP3
+        sta     VID_ADDR+1
+        lda     #$00
+        adc     #$00
+        sta     VID_ADDR+2
+        rts
+
+; oam_seek_n: A = OAM index n (0-255). Sets VID_ADDR = $10850 + n*5, via
+; n*5 = (n<<2)+n.
+oam_seek_n:
+        sta     TEMP1
+        sta     TEMP2
+        lda     #$00
+        sta     TEMP3
+        lda     TEMP1
+        asl     a
+        rol     TEMP3
+        asl     a
+        rol     TEMP3                   ; A,TEMP3 = n<<2 (16-bit)
+        clc
+        adc     TEMP2                   ; + n (low byte)
+        sta     TEMP2
+        lda     TEMP3
+        adc     #$00
+        sta     TEMP3                   ; TEMP2/TEMP3 = n*5 (16-bit)
+        lda     #MIA_OAM_BASE_L
+        clc
+        adc     TEMP2
+        sta     VID_ADDR
+        lda     #MIA_OAM_BASE_M
+        adc     TEMP3
+        sta     VID_ADDR+1
+        lda     #MIA_OAM_BASE_H
+        adc     #$00
+        sta     VID_ADDR+2
+        rts
+
+; vid_addr_add_small: A = a small (0-4) offset to add to VID_ADDR (24-bit).
+; Used by the single-field sprite setters to nudge VID_ADDR from oam_seek_n's
+; base (the tile byte) to whichever OAM field they touch.
+vid_addr_add_small:
+        clc
+        adc     VID_ADDR
+        sta     VID_ADDR
+        bcc     @done
+        inc     VID_ADDR+1
+        bne     @done
+        inc     VID_ADDR+2
+@done:
+        rts
+
+; vid_rmw_abs: read-modify-write one byte at VID_ADDR (stream 0 - not used by
+; BGLOAD). A = AND-mask (bits to clear), X = OR-value (already shifted into
+; position) to combine in. VID_ADDR is left unchanged (no auto-advance) -
+; callers position it themselves (oam_seek_n + vid_addr_add_small) first.
+vid_rmw_abs:
+        sta     TEMP1
+        stx     TEMP2
+        php
+        sei
+        ldx     #0
+        jsr     vid_seek_abs
+        lda     IDXA_PORT
+        and     TEMP1
+        ora     TEMP2
+        sta     TEMP3
+        ldx     #0
+        jsr     vid_seek_abs            ; re-seek: the read above stepped it
+        lda     TEMP3
+        sta     IDXA_PORT
+        plp
+        rts
+
+; vid_bulk_run: the loop shared by BGLOAD/CHRLOAD/PALLOAD/OAMLOAD. Callers set
+; VID_ADDR (+ VID_ADDR2 for BGLOAD), VID_COUNT (number of *items*, not fields),
+; VID_STRIDE (fields per item) and VID_STREAM2 (bitmask - bit i set means
+; field i of each item writes through vid_wr_abs2/VID_ADDR2 instead of
+; vid_wr_abs/VID_ADDR; only BGLOAD uses this), then tail-call this.
+; Saves/restores the real TXTPTR and Z9 (via vid_data_begin/vid_data_end)
+; around the whole operation.
+vid_bulk_run:
+        lda     TXTPTR                  ; save the real program position - the
+        ldy     TXTPTR+1                ; DATA-pulling below repositions TXTPTR
+        pha
+        tya
+        pha
+        jsr     vid_data_begin
+@item:
+        lda     VID_COUNT
+        ora     VID_COUNT+1
+        beq     @done
+        lda     #$00
+        sta     VID_FIELD               ; field index lives in memory, not Y -
+                                         ; vid_data_byte clobbers Y internally
+                                         ; (it calls into READ/GETBYT), so Y
+                                         ; can't survive across that call
+@field:
+        jsr     vid_data_byte
+        ldy     VID_FIELD               ; reload Y fresh for this one use
+        lda     VID_STREAM2
+        and     CHR_BIT_TABLE,y
+        beq     @s1
+        jsr     vid_wr_abs2
+        jmp     @nextfield
+@s1:
+        jsr     vid_wr_abs
+@nextfield:
+        inc     VID_FIELD
+        lda     VID_FIELD
+        cmp     VID_STRIDE
+        bne     @field
+        lda     VID_COUNT
+        bne     @dec
+        dec     VID_COUNT+1
+@dec:
+        dec     VID_COUNT
+        jmp     @item
+@done:
+        jsr     vid_data_end
+        pla
+        tay
+        pla
+        sta     TXTPTR
+        sty     TXTPTR+1
+        rts
+
+; divmod40/divmod25: A = value -> A = value/divisor (quotient), X = value MOD
+; divisor (remainder). Repeated subtraction: value is always a validated
+; small coordinate (col < 160, row < 100 - see BASIC_BGCHAR below), so this
+; never loops more than 3-4 times. CMP sets carry exactly the way SBC needs it
+; (no explicit SEC), since neither loop touches carry in between.
+divmod40:
+        ldx     #0
+@loop:
+        cmp     #40
+        jcc     @done
+        sbc     #40
+        inx
+        jmp     @loop
+@done:
+        rts
+
+divmod25:
+        ldx     #0
+@loop:
+        cmp     #25
+        jcc     @done
+        sbc     #25
+        inx
+        jmp     @loop
+@done:
+        rts
+
+; BGCHAR col,row,tile,attr : write one BG nametable+attribute cell, mode-aware
+; - resolves which of the up-to-8 raw 40x25 tables (see docs/basic-video.md's
+; BGMODE diagram) and where in it, replaying the renderer's bgTableAndLocal
+; (clementina-video-client internal/render/renderer.go) in 6502. col/row are
+; *map-relative* coordinates for the CURRENT BGMODE (0..planeCols-1 /
+; 0..planeRows-1 - e.g. for BGMODE 3, col is 0-159), not screen-relative -
+; out-of-range raises ILLEGAL QUANTITY rather than wrapping, unlike the
+; renderer's own positiveMod (a typo here should not silently write the wrong
+; cell).
+BGC_COL:
+        .res    1
+BGC_ROW:
+        .res    1
+BGC_TILE:
+        .res    1
+BGC_ATTR:
+        .res    1
+BGC_MODE:
+        .res    1
+BGC_ASET:
+        .res    1
+BGC_LOCALX:
+        .res    1
+BGC_LOCALY:
+        .res    1
+BGC_QCOL:
+        .res    1
+BGC_QROW:
+        .res    1
+BGC_TABLE:
+        .res    1
+
+BASIC_BGCHAR:
+        jsr     GETBYT                  ; X = col
+        stx     BGC_COL
+        jsr     COMBYTE                 ; X = row
+        stx     BGC_ROW
+        jsr     COMBYTE                 ; X = tile
+        stx     BGC_TILE
+        jsr     COMBYTE                 ; X = attr
+        stx     BGC_ATTR
+
+        php
+        sei
+        lda     #RC_BG_VIEWPORT_MODE
+        jsr     vid_seek
+        lda     IDXA_PORT               ; mode (this read auto-steps to the
+        sta     BGC_MODE                ; next render-control byte)
+        lda     IDXA_PORT               ; active_set
+        sta     BGC_ASET
+        plp
+
+        lda     BGC_MODE
+        cmp     #6
+        jcs     snd_iqerr               ; mode is always 0-5 if only BGMODE
+                                         ; ever wrote it, but a raw POKE could
+                                         ; have set anything - check anyway
+        cmp     #1
+        beq     @m1
+        cmp     #2
+        beq     @m2
+        cmp     #3
+        beq     @m3
+        cmp     #4
+        beq     @m4
+        cmp     #5
+        beq     @m5
+        ; mode 0: 40x25, single table
+        lda     #40
+        jsr     bgc_check_col
+        lda     #25
+        jsr     bgc_check_row
+        jmp     @divide
+@m1:                                    ; 80x25
+        lda     #80
+        jsr     bgc_check_col
+        lda     #25
+        jsr     bgc_check_row
+        jmp     @divide
+@m2:                                    ; 40x50
+        lda     #40
+        jsr     bgc_check_col
+        lda     #50
+        jsr     bgc_check_row
+        jmp     @divide
+@m3:                                    ; 160x25
+        lda     #160
+        jsr     bgc_check_col
+        lda     #25
+        jsr     bgc_check_row
+        jmp     @divide
+@m4:                                    ; 40x100
+        lda     #40
+        jsr     bgc_check_col
+        lda     #100
+        jsr     bgc_check_row
+        jmp     @divide
+@m5:                                    ; 80x50
+        lda     #80
+        jsr     bgc_check_col
+        lda     #50
+        jsr     bgc_check_row
+
+@divide:
+        lda     BGC_COL
+        jsr     divmod40                ; A = localX, X = col/40
+        sta     BGC_LOCALX
+        stx     BGC_QCOL
+        lda     BGC_ROW
+        jsr     divmod25                ; A = localY, X = row/25
+        sta     BGC_LOCALY
+        stx     BGC_QROW
+
+        ; table = mode's tableForCell(qCol,qRow), then + active_set*4
+        lda     BGC_MODE
+        cmp     #1
+        beq     @t_qcol
+        cmp     #2
+        beq     @t_qrow2
+        cmp     #3
+        beq     @t_qcol
+        cmp     #4
+        beq     @t_qrow
+        cmp     #5
+        beq     @t_5
+        lda     #0                      ; mode 0
+        jmp     @tdone
+@t_qcol:
+        lda     BGC_QCOL
+        jmp     @tdone
+@t_qrow2:
+        lda     BGC_QROW
+        asl     a
+        jmp     @tdone
+@t_qrow:
+        lda     BGC_QROW
+        jmp     @tdone
+@t_5:
+        lda     BGC_QROW
+        asl     a
+        clc
+        adc     BGC_QCOL
+@tdone:
+        ldx     BGC_ASET
+        beq     @noaset
+        clc
+        adc     #4
+@noaset:
+        sta     BGC_TABLE
+
+        ; cell = localY*40 + localX (0-999, 16-bit) - straight into
+        ; LINNUM/LINNUM+1 (what vid_addr_add16/_2 read), computed BEFORE
+        ; bg_seek_nt/bg_seek_attr since those reuse TEMP2/TEMP3 (mul_table_1000
+        ; scratch) for their own table*1000 multiply.
+        lda     BGC_LOCALY
+        sta     TEMP1
+        lda     #0
+        sta     LINNUM
+        sta     LINNUM+1
+        lda     TEMP1
+        beq     @celldone
+@cellloop:
+        lda     LINNUM
+        clc
+        adc     #40
+        sta     LINNUM
+        lda     LINNUM+1
+        adc     #0
+        sta     LINNUM+1
+        dec     TEMP1
+        bne     @cellloop
+@celldone:
+        lda     LINNUM
+        clc
+        adc     BGC_LOCALX
+        sta     LINNUM
+        lda     LINNUM+1
+        adc     #0
+        sta     LINNUM+1
+
+        lda     BGC_TABLE
+        pha
+        jsr     bg_seek_nt              ; VID_ADDR = nametable base + table*1000
+        jsr     vid_addr_add16          ; + cell
+        pla
+        jsr     bg_seek_attr            ; VID_ADDR2 = attr base + table*1000
+        jsr     vid_addr_add16_2        ; + cell
+
+        ldx     BGC_TILE
+        jsr     vid_wr_abs
+        ldx     BGC_ATTR
+        jmp     vid_wr_abs2
+
+; bgc_check_col/bgc_check_row: A = this mode's planeCols/planeRows. Errors via
+; ILLEGAL QUANTITY unless BGC_COL/BGC_ROW is strictly less than A.
+bgc_check_col:
+        cmp     BGC_COL
+        jcc     snd_iqerr               ; A < BGC_COL -> col > planeCols, invalid
+        jeq     snd_iqerr               ; A == BGC_COL -> col == planeCols, invalid
+        rts
+
+bgc_check_row:
+        cmp     BGC_ROW
+        jcc     snd_iqerr
+        jeq     snd_iqerr
+        rts
+
+; BGLOAD table,cell,count : bulk-load `count` (tile,attr) pairs from the
+; current DATA position into raw BG table `table` (0-7), starting at cell
+; `cell` (0-999). Writes the nametable and attribute planes in lockstep -
+; author DATA as tile0,attr0,tile1,attr1,...
+BASIC_BGLOAD:
+        jsr     GETBYT                  ; X = table 0-7
+        cpx     #$08
+        jcs     snd_iqerr
+        txa
+        pha
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR                  ; cell -> LINNUM/LINNUM+1
+        lda     LINNUM                  ; cell must be < 1000 ($03E8)
+        cmp     #<1000
+        lda     LINNUM+1
+        sbc     #>1000
+        jcs     snd_iqerr
+        pla                             ; A = table
+        pha
+        jsr     bg_seek_nt              ; VID_ADDR = nametable base + table*1000
+        jsr     vid_addr_add16          ; + cell
+        pla
+        jsr     bg_seek_attr            ; VID_ADDR2 = attr base + table*1000
+        jsr     vid_addr_add16_2        ; + cell
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR                  ; count -> LINNUM/LINNUM+1
+        lda     LINNUM
+        sta     VID_COUNT
+        lda     LINNUM+1
+        sta     VID_COUNT+1
+        lda     #2
+        sta     VID_STRIDE
+        lda     #%00000010
+        sta     VID_STREAM2
+        jmp     vid_bulk_run
+
+; CHRLOAD bank,offset,count : bulk-load `count` raw tile/graphics bytes from
+; the current DATA position into CHR bank `bank` (0-7), starting at byte
+; `offset` (0-6143).
+BASIC_CHRLOAD:
+        jsr     GETBYT                  ; X = bank 0-7
+        cpx     #$08
+        jcs     snd_iqerr
+        txa
+        pha
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR                  ; offset -> LINNUM/LINNUM+1
+        lda     LINNUM
+        cmp     #<6144
+        lda     LINNUM+1
+        sbc     #>6144
+        jcs     snd_iqerr               ; offset must be < 6144
+        pla                             ; A = bank
+        jsr     chr_seek
+        jsr     vid_addr_add16
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR                  ; count -> LINNUM/LINNUM+1
+        lda     LINNUM
+        sta     VID_COUNT
+        lda     LINNUM+1
+        sta     VID_COUNT+1
+        lda     #1
+        sta     VID_STRIDE
+        lda     #0
+        sta     VID_STREAM2
+        jmp     vid_bulk_run
+
+; PALLOAD bank,offset,count : bulk-load `count` raw palette bytes from the
+; current DATA position, starting `offset` bytes into palette bank `bank`
+; (each bank is 16 bytes: 8 colors x RGB565).
+BASIC_PALLOAD:
+        jsr     GETBYT                  ; X = bank 0-15
+        cpx     #$10
+        jcs     snd_iqerr
+        txa
+        asl     a
+        asl     a
+        asl     a
+        asl     a                       ; bank << 4
+        sta     TEMP2
+        jsr     COMBYTE                 ; X = offset 0-15
+        cpx     #$10
+        jcs     snd_iqerr
+        txa
+        clc
+        adc     TEMP2                   ; bank*16 + offset (max 255, fits a byte)
+        sta     VID_ADDR
+        lda     #$01                    ; palette base $00100: mid byte always
+        sta     VID_ADDR+1              ; $01 (see BASIC_PALETTE above), high $00
+        lda     #$00
+        sta     VID_ADDR+2
+        jsr     COMBYTE                 ; X = count
+        stx     VID_COUNT
+        lda     #$00
+        sta     VID_COUNT+1
+        lda     #1
+        sta     VID_STRIDE
+        lda     #0
+        sta     VID_STREAM2
+        jmp     vid_bulk_run
+
+; OAMLOAD n,count : bulk-load `count` sprites' raw 5-byte OAM records
+; (tile,xlo,ylo,attr,ext - see docs/basic-video.md for the attr/ext bit
+; layout) from the current DATA position, starting at OAM index `n` (0-255).
+BASIC_OAMLOAD:
+        jsr     GETBYT                  ; X = n
+        txa
+        jsr     oam_seek_n
+        jsr     COMBYTE                 ; X = count (of sprites), 0-255 - OAM
+        stx     VID_COUNT               ; only has 256 slots total, so a byte
+        lda     #0                      ; is never actually a limitation here
+        sta     VID_COUNT+1
+        lda     #5
+        sta     VID_STRIDE
+        lda     #0
+        sta     VID_STREAM2
+        jmp     vid_bulk_run
+
+; SPRITE n,tile,x,y,pal,flags : full OAM entry setup in one call. n 0-255
+; (OAM index), tile 0-255, x -512..511, y -256..255, pal 0-15, flags: bit0
+; disable, bit1 priority, bit2 flip-X, bit3 flip-Y (see docs/basic-video.md
+; for how these map onto the hardware attr/ext bytes).
+; Declared in OAM field order (tile,xlo,ylo,attr,ext) and contiguous, so the
+; final write sequence in BASIC_SPRITE can loop over them indexed by Y instead
+; of five unrolled ldx/jsr pairs.
+SPR_TILE:
+        .res    1
+SPR_XLO:
+        .res    1
+SPR_YLO:
+        .res    1
+SPR_ATTR:
+        .res    1
+SPR_EXT:
+        .res    1
+
+BASIC_SPRITE:
+        jsr     GETBYT                  ; X = n
+        txa
+        jsr     oam_seek_n              ; A clobbered by oam_seek_n; do this
+        jsr     COMBYTE                 ; first - X = tile next
+        stx     SPR_TILE
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     AYINT                   ; x -> FAC_LAST-1 (hi) / FAC_LAST (lo)
+        lda     FAC_LAST-1
+        bmi     @xneg
+        cmp     #$02
+        jcs     snd_iqerr
+        jmp     @xok
+@xneg:
+        cmp     #$FE
+        jcc     snd_iqerr
+@xok:
+        and     #$03
+        sta     SPR_EXT                 ; ext bits 0-1 = x hi
+        lda     FAC_LAST
+        sta     SPR_XLO
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     AYINT                   ; y -> FAC_LAST-1/FAC_LAST
+        lda     FAC_LAST-1
+        beq     @yok
+        cmp     #$FF
+        jne     snd_iqerr
+@yok:
+        and     #$01
+        asl     a
+        asl     a                       ; -> ext bit 2 = y hi
+        ora     SPR_EXT
+        sta     SPR_EXT
+        lda     FAC_LAST
+        sta     SPR_YLO
+        jsr     COMBYTE                 ; X = pal 0-15
+        cpx     #$10
+        jcs     snd_iqerr
+        stx     SPR_ATTR
+        jsr     COMBYTE                 ; X = flags
+        txa
+        sta     TEMP1
+        and     #$01
+        asl     a
+        asl     a
+        asl     a                       ; disable -> ext bit 3
+        ora     SPR_EXT
+        sta     SPR_EXT
+        lda     TEMP1
+        and     #$0E                    ; priority/flipX/flipY (bits 1-3)
+        asl     a
+        asl     a
+        asl     a                       ; -> attr bits 4-6
+        ora     SPR_ATTR
+        sta     SPR_ATTR
+
+        ldy     #0
+@wr:
+        ldx     SPR_TILE,y
+        jsr     vid_wr_abs
+        iny
+        cpy     #5
+        bne     @wr
+        rts
+
+; SPRTILE n,t : change one sprite's tile/frame index without respecifying
+; every other SPRITE field (cheap per-frame animation update).
+BASIC_SPRTILE:
+        jsr     GETBYT                  ; X = n
+        txa
+        jsr     oam_seek_n              ; VID_ADDR = base+0 (tile)
+        jsr     COMBYTE                 ; X = tile
+        jmp     vid_wr_abs
+
+; SPRX n,x / SPRY n,y : change one sprite's position without respecifying
+; every other SPRITE field. Same signed range/encoding as SPRITE's x/y.
+BASIC_SPRX:
+        jsr     GETBYT                  ; X = n
+        txa
+        jsr     oam_seek_n              ; VID_ADDR = base+0
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     AYINT                   ; x -> FAC_LAST-1 (hi) / FAC_LAST (lo)
+        lda     FAC_LAST-1
+        bmi     @xneg
+        cmp     #$02
+        jcs     snd_iqerr
+        jmp     @xok
+@xneg:
+        cmp     #$FE
+        jcc     snd_iqerr
+@xok:
+        and     #$03
+        sta     TEMP1                   ; TEMP1 = new ext xhi bits (0-1)
+        lda     FAC_LAST
+        tax                             ; X = xlo
+        lda     #1
+        jsr     vid_addr_add_small      ; VID_ADDR = base+1 (xlo)
+        jsr     vid_wr_abs              ; write xlo; VID_ADDR now base+2
+        lda     #2
+        jsr     vid_addr_add_small      ; VID_ADDR = base+4 (ext)
+        lda     #%11111100              ; clear ext bits 0-1
+        ldx     TEMP1
+        jmp     vid_rmw_abs
+
+BASIC_SPRY:
+        jsr     GETBYT                  ; X = n
+        txa
+        jsr     oam_seek_n              ; VID_ADDR = base+0
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     AYINT                   ; y -> FAC_LAST-1/FAC_LAST
+        lda     FAC_LAST-1
+        beq     @yok
+        cmp     #$FF
+        jne     snd_iqerr
+@yok:
+        and     #$01
+        asl     a
+        asl     a                       ; -> ext bit 2
+        sta     TEMP1
+        lda     FAC_LAST
+        tax                             ; X = ylo
+        lda     #2
+        jsr     vid_addr_add_small      ; VID_ADDR = base+2 (ylo)
+        jsr     vid_wr_abs              ; write ylo; VID_ADDR now base+3
+        lda     #1
+        jsr     vid_addr_add_small      ; VID_ADDR = base+4 (ext)
+        lda     #%11111011              ; clear ext bit 2
+        ldx     TEMP1
+        jmp     vid_rmw_abs
+
+; SPRCOLOR n,pal : change one sprite's palette (attr bits 0-3) without
+; touching its priority/flip bits.
+BASIC_SPRCOLOR:
+        jsr     GETBYT                  ; X = n
+        txa
+        jsr     oam_seek_n              ; VID_ADDR = base+0
+        jsr     COMBYTE                 ; X = pal 0-15
+        cpx     #$10
+        jcs     snd_iqerr
+        stx     TEMP1
+        lda     #3
+        jsr     vid_addr_add_small      ; VID_ADDR = base+3 (attr)
+        lda     #%11110000              ; clear the palette nibble
+        ldx     TEMP1
+        jmp     vid_rmw_abs
+
+; SPRFLIP n,fx,fy : change one sprite's flip-X/flip-Y (attr bits 5-6) without
+; touching its palette/priority bits.
+BASIC_SPRFLIP:
+        jsr     GETBYT                  ; X = n
+        txa
+        jsr     oam_seek_n              ; VID_ADDR = base+0
+        jsr     COMBYTE                 ; X = fx (0/nonzero)
+        cpx     #$00
+        beq     @fx0
+        lda     #%00100000
+        jmp     @fxset
+@fx0:
+        lda     #$00
+@fxset:
+        sta     TEMP1
+        jsr     COMBYTE                 ; X = fy (0/nonzero)
+        cpx     #$00
+        beq     @fy0
+        lda     #%01000000
+        jmp     @fyset
+@fy0:
+        lda     #$00
+@fyset:
+        ora     TEMP1
+        tax
+        lda     #3
+        jsr     vid_addr_add_small      ; VID_ADDR = base+3 (attr)
+        lda     #%10011111              ; clear bits 5-6
+        jmp     vid_rmw_abs
+
+; SPRPRI n,p : change one sprite's priority (attr bit 4) without touching its
+; palette/flip bits.
+BASIC_SPRPRI:
+        jsr     GETBYT                  ; X = n
+        txa
+        jsr     oam_seek_n              ; VID_ADDR = base+0
+        jsr     COMBYTE                 ; X = p (0/nonzero)
+        cpx     #$00
+        beq     @p0
+        lda     #%00010000
+        jmp     @pset
+@p0:
+        lda     #$00
+@pset:
+        tax
+        lda     #3
+        jsr     vid_addr_add_small      ; VID_ADDR = base+3 (attr)
+        lda     #%11101111              ; clear bit 4
+        jmp     vid_rmw_abs
 
 ; ----------------------------------------------------------------------------
 ; BASIC sound statements - MIA 4-voice PWM PSG. See src/basic/CLEMENTINA.md and
@@ -1283,7 +2659,7 @@ styled_outc:
 .endif
 
 ; ============================================================================
-; Background PLAY - fixed RAM control block, below RAMSTART2 ($4500). Plain
+; Background PLAY - fixed RAM control block, below RAMSTART2 ($4D00). Plain
 ; equates, never part of the loaded image (same pattern as KVARS/KJIFFY) - see
 ; Makefile MAX_KERNEL_BYTES and defines_clementina.s RAMSTART2. Persists across
 ; arbitrary BASIC execution between IRQ calls, so unlike blocking PLAY's
@@ -1295,7 +2671,7 @@ styled_outc:
 ; addressing (bg_peek) - (ptr),y indirect addressing (like INDEX in blocking
 ; PLAY) only works for zero-page pointers, and BGP_BUF is deliberately NOT in
 ; zero page (see the block header comment above).
-BGP_BASE        = $4400
+BGP_BASE        = $4C00
 BGP_FLAGS       = BGP_BASE + $00       ; bit0: background player active
 BGP_IDX         = BGP_BASE + $01       ; read cursor into BGP_BUF (0-127)
 BGP_LEN         = BGP_BASE + $02       ; valid bytes in BGP_BUF

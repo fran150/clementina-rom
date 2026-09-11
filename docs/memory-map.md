@@ -206,7 +206,7 @@ combined kernel+BASIC image is ~11.4 KiB. Notable internal routines:
 
 ---
 
-## 7.5. Background-PLAY control block (`$4400–$448F`)
+## 7.5. Background-PLAY control block (`$4C00–$4C8F`)
 
 Fixed RAM between the loaded image and `RAMSTART2`, defined as plain equates
 in `src/basic/clementina_extra.s` (`BGP_*`) exactly like `KVARS`/`KJIFFY` —
@@ -239,27 +239,39 @@ string just stops the player. See `docs/basic-sound.md`.
 
 ---
 
-## 8. BASIC free workspace (`$4501 … $BFFF`)
+## 8. BASIC free workspace (`$4D01 … $BFFF`)
 
 At runtime BASIC's program text, variables, arrays, and strings live between
-`TXTTAB` and `MEMSIZ`. Clementina currently sets `RAMSTART2 = $4500`, above
-both the combined kernel+BASIC+monitor image (capped at `$4400` by
-`MAX_KERNEL_BYTES`) and the background-PLAY control block above (`$4400–$448F`).
+`TXTTAB` and `MEMSIZ`. Clementina currently sets `RAMSTART2 = $4D00`, above
+both the combined kernel+BASIC+monitor image (capped at `$4C00` by
+`MAX_KERNEL_BYTES`) and the background-PLAY control block above (`$4C00–$4C8F`).
 Cold start selects Extended RAM bank 0 and caps `MEMSIZ` at `$C000`,
 immediately before the I/O region. The empty program marker advances `TXTTAB`
-to `$4501`, giving BASIC ~30,975 bytes. `make` fails if `build/kernel.bin`
-grows past the `$4400` boundary, because BASIC's cold-start RAM probe writes
+to `$4D01`, giving BASIC ~29,439 bytes. `make` fails if `build/kernel.bin`
+grows past the `$4C00` boundary, because BASIC's cold-start RAM probe writes
 from `RAMSTART2` upward. (`RAMSTART2` was raised from `$3600` to make room for
-the extension-token command set, then from `$4000` to `$4500` for the
-background-PLAY control block; raise it further, in lockstep with
-`MAX_KERNEL_BYTES`, as more commands are added.)
+the extension-token command set, then to `$4000`, then to `$4500` for the
+background-PLAY control block, then to `$4D00` (2026-09) for the video
+bulk-load commands and `BGCHAR`/sprite single-field setters — see
+`docs/basic-video.md`; raise it further, in lockstep with `MAX_KERNEL_BYTES`
+and `BGP_BASE`, as more commands are added. This is a self-imposed software
+convention, not a 6502/65C02 hardware limit — the CPU addresses a full 64K and
+the linker's own `MAIN` region allows the combined image up to 31 KiB; nothing
+stops raising this further.)
+
+Two other repos mirror this boundary in test code and need the same bump
+whenever it moves again: `clementina-6502`
+`pkg/computers/clementina/background_play_test.go` (`addrBGPFlags`, `BGP_FLAGS`'s
+address) and `guessing_game_test.go` (a CPU-runaway sanity check's upper
+bound) — grep both for the old hex value before changing `RAMSTART2` again.
 
 > **Known landmine — avoid `TXTTAB` in ~`[$39FE, $3AC0]`.** A pre-existing latent
 > bug (present on the stock baseline, independent of the extension tokens) makes
 > `INPUT` misread its buffer and re-prompt `??` when the program text begins in
-> that ~200-byte window. `$3600` and `$3B00`+ are unaffected; `$4500` clears it
-> with margin. Root cause not yet diagnosed; keep `RAMSTART2` clear of that window
-> when choosing future values (`$5000`, `$6000`, … are all fine).
+> that ~200-byte window. `$3600` and `$3B00`+ are unaffected; `$4D00` clears it
+> with even more margin than `$4500` did. Root cause not yet diagnosed; keep
+> `RAMSTART2` clear of that window when choosing future values (`$5000`, `$6000`,
+> … are all fine).
 
 Bank 0 must remain selected while BASIC is active: changing PA0-PA4 would replace
 the portion of its live workspace at `$8000-$BFFF`. Kernel warm start therefore
