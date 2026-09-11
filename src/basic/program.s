@@ -19,6 +19,18 @@ MEMERR:
 ; (CURLIN+1) = $FF IF IN DIRECT MODE
 ; ----------------------------------------------------------------------------
 ERROR:
+.ifdef CLEMENTINA
+        ; Any runtime error (any statement, anywhere) funnels through here
+        ; before STKINI resets the stack - stop any background PLAY and
+        ; release its voices before the message prints. X (the error-message
+        ; table offset) is the only significant input; preserve it across the
+        ; call via A (msbasic.s targets plain 6502 here - no phx/plx).
+        txa
+        pha
+        jsr     bg_play_stop
+        pla
+        tax
+.endif
         lsr     Z14
 .ifdef CONFIG_FILE
         lda     CURDVC    ; output
@@ -722,6 +734,8 @@ LC49E:
 .ifdef CLEMENTINA
         jsr     TOKENIZE_MON
         bcs     L24AC
+        jsr     TOKENIZE_EXTFN  ; extension functions -> TOKEN_EXTFN + subtoken
+        jcs     L246C           ; matched: TOKENIZE_EXTFN already stored both bytes
         jsr     TOKENIZE_EXT    ; extension keywords -> TOKEN_EXT + subtoken
         jcs     L246C           ; matched: TOKENIZE_EXT already stored both bytes
 .endif
@@ -959,6 +973,59 @@ TOKENIZE_EXT:
         lda     INPUTBUFFERX,x  ; A = current char, for the caller's cmp #$30
         clc
         rts
+
+; ----------------------------------------------------------------------------
+; TOKENIZE_EXTFN - identical to TOKENIZE_EXT above, but matches against
+; EXTFN_NAME_TABLE and crunches to TOKEN_EXTFN + subtoken. Called first (see
+; the crunch loop above), so an extension function name is never truncated by
+; a shorter extension statement name that is one of its prefixes (e.g.
+; "PLAYING" vs the "PLAY" statement).
+; ----------------------------------------------------------------------------
+TOKENIZE_EXTFN:
+        sty     STRNG2
+        ldy     #$00
+        sty     EOLPNTR
+        dey
+        stx     TXTPTR
+        dex
+@advance:
+        iny
+@nextin:
+        inx
+@compare:
+        lda     INPUTBUFFERX,x
+        jsr     TOKEN_UPPER
+        sec
+        sbc     EXTFN_NAME_TABLE,y
+        beq     @advance
+        cmp     #$80
+        bne     @nextkw
+        ora     EOLPNTR
+        ldy     STRNG2
+        iny
+        pha
+        lda     #TOKEN_EXTFN
+        sta     INPUTBUFFER-5,y
+        pla
+        iny
+        sta     INPUTBUFFER-5,y
+        inx
+        sec
+        rts
+@nextkw:
+        ldx     TXTPTR
+        inc     EOLPNTR
+@skip:
+        iny
+        lda     EXTFN_NAME_TABLE-1,y
+        bpl     @skip
+        lda     EXTFN_NAME_TABLE,y
+        bne     @compare
+        ldx     TXTPTR
+        ldy     STRNG2
+        lda     INPUTBUFFERX,x
+        clc
+        rts
 .endif
 
 ; ----------------------------------------------------------------------------
@@ -1038,6 +1105,9 @@ L2520:
 NEW:
         bne     L2520
 SCRTCH:
+.ifdef CLEMENTINA
+        jsr     bg_play_stop    ; starting fresh - stop any background PLAY and release its voices
+.endif
         lda     #$00
         tay
         sta     (TXTTAB),y
@@ -1338,6 +1408,32 @@ L25E5a:
         lda     #'N'
         jmp     L25CA
 @not_mon_token:
+        cmp     #TOKEN_EXTFN
+        bne     @not_extfn_token
+        ; Extension function: the next program byte is the subtoken ($80|index).
+        ; Detokenize it from EXTFN_NAME_TABLE, mirroring the extension scan below.
+        iny
+        lda     (LOWTRX),y      ; A = subtoken
+        sty     FORPNT          ; resume the list loop after the subtoken byte
+        sec
+        sbc     #$7F            ; index+1 (subtoken $80 -> 1)
+        tax
+        ldy     #$FF
+@extfn_l1:
+        dex
+        beq     @extfn_l3
+@extfn_l2:
+        iny
+        lda     EXTFN_NAME_TABLE,y
+        bpl     @extfn_l2
+        bmi     @extfn_l1
+@extfn_l3:
+        iny
+        lda     EXTFN_NAME_TABLE,y
+        jmi     L25CA           ; final char (high bit) -> mask, output, continue
+        jsr     OUTDO
+        bne     @extfn_l3       ; always (name chars are nonzero)
+@not_extfn_token:
         cmp     #TOKEN_EXT
         bne     @not_ext_token
         ; Extension keyword: the next program byte is the subtoken ($80|index).
@@ -1360,7 +1456,7 @@ L25E5a:
 @ext_l3:
         iny
         lda     EXT_NAME_TABLE,y
-        bmi     L25CA           ; final char (high bit) -> mask, output, continue
+        jmi     L25CA           ; final char (high bit) -> mask, output, continue
         jsr     OUTDO
         bne     @ext_l3         ; always (name chars are nonzero)
 @not_ext_token:
@@ -1387,6 +1483,6 @@ L25F5:
 L25FD:
         iny
         lda     TOKEN_NAME_TABLE,y
-        bmi     L25CA
+        jmi     L25CA
         jsr     OUTDO
         bne     L25FD	; always

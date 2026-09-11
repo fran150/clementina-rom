@@ -229,4 +229,16 @@ MATHTBL:
         ext_keyword_rts "PAN",    BASIC_PAN
         ext_keyword_rts "PLAY",   BASIC_PLAY
         end_ext_token_tables
+
+; ----------------------------------------------------------------------------
+; Extension FUNCTION keyword table (two-byte tokens: TOKEN_EXTFN + subtoken).
+; The primary function table (UNFNC above) has no room left (256-byte budget,
+; ~1 byte free before this), so background-PLAY's status function lives here
+; instead - it costs nothing in the primary table. TOKENIZE_EXTFN runs before
+; TOKENIZE_EXT (program.s) so "PLAYING" is not truncated to the "PLAY"
+; statement + leftover "ING".
+; ----------------------------------------------------------------------------
+        init_extfn_token_tables
+        extfn_keyword_addr "PLAYING", BASIC_PLAYING
+        end_extfn_token_tables
 .endif

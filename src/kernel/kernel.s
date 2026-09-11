@@ -22,6 +22,7 @@
 .import BASIC_COLD_START
 .import BASIC_WARM_START
 .import WOZMON
+.import bg_play_tick    ; background-PLAY IRQ sequencer (clementina_extra.s)
 
 ; ----------------------------------------------------------------------------
 ; Kernel zero page ($00F0-, see clementina.cfg)

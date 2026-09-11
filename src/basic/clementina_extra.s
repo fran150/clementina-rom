@@ -8,6 +8,7 @@
 
 .segment "EXTRA"
 .export BASIC_COLD_START, BASIC_WARM_START, MONRDKEY, MONRDKEY_NB, MONCOUT, MONRDLINE
+.export bg_play_tick
 
 KERN_CHROUT       = $0406
 KERN_CHRIN        = $0409
@@ -552,10 +553,39 @@ PLAY_TGT        = STYLE_SIDE_BUF + 7    ; delay target tick value (16-bit) [7..8
 PLAY_SEMI       = STYLE_SIDE_BUF + 9    ; scratch: semitone in octave (signed -1..12)
 PLAY_TMP        = STYLE_SIDE_BUF + 10   ; general 16-bit scratch [10..11]
 
+; BASIC_PLAY: "PLAY" with no argument (end of statement/line) stops the
+; background player. "PLAY s$" blocks, as before. "PLAY s$,n" with n<>0
+; starts s$ playing in the background (tail-jumps to bg_play_start with
+; INDEX/PLAY_LEN already set from FRESTR); n=0 is the same as no comma at
+; all - blocks. A holds the entry character (see the @ext dispatch comment
+; above); CHRGOT re-reads it after FRESTR repurposes A for the length.
 BASIC_PLAY:
+        cmp     #$00
+        jeq     @stop
+        cmp     #':'
+        jeq     @stop
         jsr     FRMEVL                  ; evaluate the argument expression
         jsr     FRESTR                  ; A = length, INDEX -> string character bytes
         sta     PLAY_LEN
+        jsr     CHRGOT                  ; re-read the current char (A now := length)
+        cmp     #','
+        bne     @blocking
+        ; COMBYTE/GETBYT/FRMNUM parse the flag number and, like most of the
+        ; interpreter's numeric-parse path, are free to reuse INDEX as their
+        ; own scratch - save/restore it around the call so the string pointer
+        ; FRESTR just set (needed below, blocking or not) survives intact.
+        lda     INDEX
+        pha
+        lda     INDEX+1
+        pha
+        jsr     COMBYTE                 ; consume ',' -> X = background flag
+        pla
+        sta     INDEX+1
+        pla
+        sta     INDEX
+        cpx     #$00
+        jne     bg_play_start           ; n<>0 -> background (tail; INDEX/PLAY_LEN valid)
+@blocking:
         lda     #$10
         sta     PLAY_BASE               ; voice 0
         lda     #PLAY_OCT_DEF
@@ -602,6 +632,8 @@ BASIC_PLAY:
 @done:
         jsr     play_all_off
         rts
+@stop:
+        jmp     bg_play_stop            ; bare PLAY -> stop the background player (tail)
 
 @rest:
         jsr     play_do_rest
@@ -1249,3 +1281,589 @@ styled_outc:
 @suppressed:
         rts
 .endif
+
+; ============================================================================
+; Background PLAY - fixed RAM control block, below RAMSTART2 ($4500). Plain
+; equates, never part of the loaded image (same pattern as KVARS/KJIFFY) - see
+; Makefile MAX_KERNEL_BYTES and defines_clementina.s RAMSTART2. Persists across
+; arbitrary BASIC execution between IRQ calls, so unlike blocking PLAY's
+; STYLE_SIDE_BUF-based state, this can never be time-shared with the tokenizer
+; or anything else. See docs/memory-map.md.
+; ============================================================================
+; BGP_IDX/BGP_LEN are a byte cursor/length into BGP_BUF, not a pointer pair,
+; because BGP_BUF is a fixed compile-time address read with absolute,X/Y
+; addressing (bg_peek) - (ptr),y indirect addressing (like INDEX in blocking
+; PLAY) only works for zero-page pointers, and BGP_BUF is deliberately NOT in
+; zero page (see the block header comment above).
+BGP_BASE        = $4400
+BGP_FLAGS       = BGP_BASE + $00       ; bit0: background player active
+BGP_IDX         = BGP_BASE + $01       ; read cursor into BGP_BUF (0-127)
+BGP_LEN         = BGP_BASE + $02       ; valid bytes in BGP_BUF
+BGP_TICKS       = BGP_BASE + $03       ; [2] ticks left on the current note/rest
+BGP_VOICE       = BGP_BASE + $05       ; current voice record base ($10/$20/$30/$40)
+BGP_OCTAVE      = BGP_BASE + $06
+BGP_TEMPO       = BGP_BASE + $07
+BGP_LDEF        = BGP_BASE + $08
+BGP_SEMI        = BGP_BASE + $09       ; scratch: semitone in octave (signed -1..12)
+BGP_FREQ        = BGP_BASE + $0A       ; [2] bg_note_freq result (private - NOT LINNUM,
+                                        ; which arbitrary interrupted foreground code
+                                        ; (POKE args, expressions) also uses as scratch)
+BGP_TMP         = BGP_BASE + $0C       ; [2] bg parser scratch (digits / dotted-length)
+BGP_SP          = BGP_BASE + $0E       ; saved 6502 stack pointer - see bg_next_event
+BGP_BUF         = BGP_BASE + $0F       ; [128] copied MML text
+BGP_BUF_SIZE    = 128
+
+BGP_FLAG_PLAYING = $01
+
+; ----------------------------------------------------------------------------
+; EXTFN_DISPATCH - TOKEN_EXTFN two-byte function dispatch, mirrors
+; EXECUTE_STATEMENT1's @ext (flow1.s) but for functions and reached from
+; eval.s's primary-expression dispatch instead of the statement dispatcher.
+; Entered with A = TOKEN_EXTFN (just fetched, TXTPTR past it). Reads the
+; subtoken, evaluates the mandatory "(expr)" via PARCHK exactly like every
+; primary function (UNARY, eval.s) does, then jsr's the looked-up body and
+; falls into the same CHKNUM tail UNARY uses, so the function's result (left
+; in FAC1, e.g. by SNGFLT) is validated like any other numeric factor.
+; ----------------------------------------------------------------------------
+EXTFN_DISPATCH:
+        jsr     CHRGET                  ; A = subtoken ($80|index)
+        sec
+        sbc     #$80
+        cmp     #NUM_EXTFN_TOKENS
+        bcs     @synerr                 ; unknown subtoken -> SYNTAX ERROR
+        pha
+        jsr     CHRGET                  ; step past the subtoken -> A = the char after it
+        jsr     PARCHK                  ; consume "(expr)": CHKOPN+FRMEVL+CHKCLS
+        pla
+        asl     a
+        tay
+        lda     EXTFN_ADDRESS_TABLE+1,y
+        sta     JMPADRS+2
+        lda     EXTFN_ADDRESS_TABLE,y
+        sta     JMPADRS+1
+        jsr     JMPADRS
+        jmp     CHKNUM
+@synerr:
+        jmp     SYNERR
+
+; ----------------------------------------------------------------------------
+; PLAYING(0) - background PLAY status, 0 or 1. Dummy argument required: it is
+; registered in the EXTFN_NAME_TABLE / EXTFN_ADDRESS_TABLE (token.s) and
+; dispatched via TOKEN_EXTFN + EXTFN_DISPATCH above, which - like UNARY does
+; for every primary function - has already evaluated (and discarded) "(expr)"
+; by the time this body runs. Same idiom as classic MS BASIC's FRE(0); there
+; is no bare/niladic function form in this interpreter.
+; ----------------------------------------------------------------------------
+BASIC_PLAYING:
+        ldy     #$00
+        lda     BGP_FLAGS
+        and     #BGP_FLAG_PLAYING
+        beq     @done
+        iny
+@done:
+        jmp     SNGFLT
+
+; ----------------------------------------------------------------------------
+; bg_play_start: PLAY s$,n (n<>0) tail-jumps here with INDEX -> string bytes
+; and PLAY_LEN = length (both set by FRESTR in BASIC_PLAY). Silences whatever
+; was playing (foreground or background - a stuck orphaned note from a
+; replaced background song must not survive), copies the string into
+; BGP_BUF (truncating to BGP_BUF_SIZE), resets the parser state to the PLAY
+; defaults, and starts the sequencer. BGP_FLAGS is cleared first and set last
+; so bg_play_tick (not yet wired - lands in a later step) never sees a
+; half-written buffer.
+; ----------------------------------------------------------------------------
+bg_play_start:
+        lda     #$00
+        sta     BGP_FLAGS
+        jsr     play_all_off
+        lda     PLAY_LEN
+        cmp     #BGP_BUF_SIZE+1
+        bcc     @lenok
+        lda     #BGP_BUF_SIZE           ; truncate an over-long string
+@lenok:
+        sta     BGP_TMP                 ; byte count to copy (temp use before playback starts)
+        ldy     #$00
+@copy:
+        cpy     BGP_TMP
+        beq     @copied
+        lda     (INDEX),y
+        sta     BGP_BUF,y
+        iny
+        bne     @copy
+@copied:
+        sty     BGP_LEN                 ; Y = count copied
+        lda     #$00
+        sta     BGP_IDX
+        lda     #PLAY_OCT_DEF
+        sta     BGP_OCTAVE
+        lda     #PLAY_TEMPO_DEF
+        sta     BGP_TEMPO
+        lda     #PLAY_LDEF_DEF
+        sta     BGP_LDEF
+        lda     #$10
+        sta     BGP_VOICE               ; voice 0
+        lda     #$00
+        sta     BGP_TICKS
+        sta     BGP_TICKS+1             ; 0 ticks left -> the first IRQ tick advances at once
+        lda     #BGP_FLAG_PLAYING
+        sta     BGP_FLAGS
+        rts
+
+; ----------------------------------------------------------------------------
+; bg_play_stop: stop the background player and release its voices. Callable
+; from foreground (bare PLAY) or from a teardown hook (STOP/END/Ctrl-C, ERROR,
+; NEW - added in a later step).
+; ----------------------------------------------------------------------------
+bg_play_stop:
+        lda     #$00
+        sta     BGP_FLAGS
+        jmp     play_all_off            ; tail: silence all 4 voices, then rts
+
+; ============================================================================
+; Background PLAY sequencer - called from the Timer-1 IRQ (interrupts.s), once
+; per tick, after KJIFFY is bumped. Mirrors BASIC_PLAY's parser/emitter
+; (@loop, play_do_note, play_do_rest, play_note_on, play_len_to_dur,
+; play_maybe_dot, play_num/peek/adv/getc, play_len_ok, note_freq) but as
+; standalone bg_* routines over BGP_PTR/BGP_END/BGP_BUF instead of
+; INDEX/PLAY_LEN/STYLE_SIDE_BUF, because this runs with interrupts masked and
+; can be "between" arbitrary interrupted foreground code:
+;   - STYLE_SIDE_BUF-based PLAY_* state is safe only because blocking PLAY
+;     monopolizes execution; this needs its own dedicated RAM (BGP_*).
+;   - note_freq writes LINNUM/LINNUM+1, which interrupted foreground code
+;     (a POKE argument, an expression) may be mid-use of - bg_note_freq
+;     writes BGP_FREQ instead.
+;   - snd_seek/snd_wr1 ARE reused unchanged: every foreground burst that
+;     touches MIA index window B is already php/sei/plp-fenced, so it can
+;     never be mid-burst when this IRQ runs.
+;   - play_iq/play_syn (SYNTAX ERROR/ILLEGAL QUANTITY) must never run here -
+;     they call STKINI, which resets the 6502 stack and jumps back into the
+;     interpreter, abandoning this IRQ's own return address (never RTI's).
+;     A bad token or number here just stops the player instead of erroring.
+; ============================================================================
+
+; bg_play_tick: advance the background player by one kernel tick. If a
+; note/rest is still counting down, decrement BGP_TICKS (16-bit) and return;
+; at zero, parse the next event via bg_next_event. No-op if not playing.
+bg_play_tick:
+        lda     BGP_FLAGS
+        beq     @out
+        lda     BGP_TICKS
+        ora     BGP_TICKS+1
+        beq     @advance
+        lda     BGP_TICKS
+        bne     @decok
+        dec     BGP_TICKS+1
+@decok:
+        dec     BGP_TICKS
+        rts
+@advance:
+        jsr     bg_next_event
+@out:
+        rts
+
+; bg_next_event: parse and act on MML tokens starting at BGP_PTR until a
+; note/rest is emitted (sets BGP_TICKS; the caller above then lets the IRQ
+; count it down over later ticks) or the string ends. O/</>/L/T/V/W apply
+; immediately and the loop continues within this same call - they consume no
+; time.
+;
+; Sub-parsers (bg_num_req, bg_len_ok, ...) are called with jsr and abort a bad
+; token/number by jumping to bg_next_event_bad rather than returning - on
+; purpose, so a single bad token stops everything instead of unwinding one
+; jsr at a time. But that jmp does not pop the return address its own jsr
+; pushed, and callers can be nested several deep (e.g. bg_do_note -> bg_num ->
+; bg_len_ok), so left alone each abort leaks one stack slot per jsr level -
+; corrupting the very next rts (observed: it returned into the middle of the
+; aborted command instead of back to bg_play_tick, replaying the rest of the
+; string). Fix: snapshot S once here, on entry - constant across the O/L/T/V/W
+; loop-back below, since that only ever jmps - and reload it in
+; bg_next_event_bad/_done before the final rts, discarding whatever the
+; abort left on the stack no matter how deep it happened.
+bg_next_event:
+        tsx
+        stx     BGP_SP
+        jsr     bg_getc
+        jcc     bg_next_event_done      ; end of string
+        jsr     TOKEN_UPPER             ; keywords are case-insensitive
+        cmp     #' '
+        beq     bg_next_event
+        cmp     #','
+        beq     bg_next_event
+        cmp     #'A'
+        bcc     @sym
+        cmp     #'G'+1
+        bcs     @sym
+        jmp     bg_do_note              ; A = 'A'..'G'; sets BGP_TICKS and returns
+@sym:
+        cmp     #'R'
+        beq     @rest
+        cmp     #'P'
+        beq     @rest
+        cmp     #'<'
+        beq     @octdn
+        cmp     #'>'
+        beq     @octup
+        cmp     #'O'
+        beq     @oct
+        cmp     #'L'
+        beq     @ldef
+        cmp     #'T'
+        beq     @tempo
+        cmp     #'V'
+        beq     @voice
+        cmp     #'W'
+        beq     @wave
+        jmp     bg_next_event_bad       ; unknown token
+@rest:
+        jmp     bg_do_rest              ; sets BGP_TICKS and returns
+@octdn:
+        lda     BGP_OCTAVE
+        beq     bg_next_event
+        dec     BGP_OCTAVE
+        jmp     bg_next_event
+@octup:
+        lda     BGP_OCTAVE
+        cmp     #7
+        bcs     bg_next_event
+        inc     BGP_OCTAVE
+        jmp     bg_next_event
+@oct:
+        jsr     bg_num_req              ; X = value
+        cpx     #8
+        bcs     bg_next_event_bad
+        stx     BGP_OCTAVE
+        jmp     bg_next_event
+@tempo:
+        jsr     bg_num_req
+        cpx     #$00
+        bne     :+
+        ldx     #$01                    ; T0 -> 1
+:       stx     BGP_TEMPO
+        jmp     bg_next_event
+@voice:
+        jsr     bg_num_req
+        cpx     #4
+        bcs     bg_next_event_bad
+        txa
+        asl     a
+        asl     a
+        asl     a
+        asl     a
+        clc
+        adc     #$10                    ; -> $10/$20/$30/$40
+        sta     BGP_VOICE
+        jmp     bg_next_event
+@wave:
+        jsr     bg_num_req
+        cpx     #5
+        bcs     bg_next_event_bad
+        lda     BGP_VOICE
+        clc
+        adc     #AUDV_WAVEFORM
+        jsr     snd_wr1                 ; A = offset, X = value
+        jmp     bg_next_event
+@ldef:
+        jsr     bg_num_req
+        jsr     bg_len_ok
+        stx     BGP_LDEF
+        jmp     bg_next_event
+
+; End of string, or a malformed token/number: unlike blocking PLAY neither
+; case can raise an error here (see the header note above) - both just stop
+; the player and silence every voice. Reload S from the bg_next_event-entry
+; snapshot first - discards any stack slots left by a jsr'd sub-parser that
+; aborted here mid-nesting (see the comment on bg_next_event above), so the
+; jmp below returns cleanly to bg_play_tick regardless of how deep this was
+; reached from.
+bg_next_event_done:
+bg_next_event_bad:
+        ldx     BGP_SP
+        txs
+        jmp     bg_play_stop
+
+; --- bg PLAY note / rest -----------------------------------------------------
+; bg_do_note: A = 'A'..'G'. Emits FREQ + gate-on for one note and sets
+; BGP_TICKS to its duration. Mirrors play_do_note (clementina_extra.s).
+bg_do_note:
+        sec
+        sbc     #'A'
+        tax
+        lda     play_note_semi,x
+        sta     BGP_SEMI
+        jsr     bg_peek
+        bcc     @len
+        cmp     #'#'
+        beq     @sharp
+        cmp     #'+'
+        beq     @sharp
+        cmp     #'-'
+        beq     @flat
+        jmp     @len
+@sharp:
+        jsr     bg_adv
+        inc     BGP_SEMI
+        jmp     @len
+@flat:
+        jsr     bg_adv
+        dec     BGP_SEMI
+@len:
+        jsr     bg_num                  ; C=1 & X=code if length digits present
+        bcs     @havelen
+        ldx     BGP_LDEF
+@havelen:
+        jsr     bg_len_ok
+        jsr     bg_len_to_dur
+        jsr     bg_maybe_dot
+        ldx     BGP_OCTAVE
+        lda     play_oct12,x
+        clc
+        adc     BGP_SEMI                ; octave base + semitone (signed)
+        cmp     #96
+        bcc     @emit
+        cmp     #$80
+        bcs     @zero                   ; wrapped negative -> clamp low
+        lda     #95
+        bne     @emit
+@zero:
+        lda     #$00
+@emit:
+        jmp     bg_note_on              ; tail: sets FREQ/gate, rts's to bg_play_tick
+
+; bg_do_rest: gate the current voice off; BGP_TICKS already holds one length.
+bg_do_rest:
+        jsr     bg_num
+        bcs     @havelen
+        ldx     BGP_LDEF
+@havelen:
+        jsr     bg_len_ok
+        jsr     bg_len_to_dur
+        jsr     bg_maybe_dot
+        lda     BGP_VOICE
+        clc
+        adc     #AUDV_CONTROL
+        ldx     #$00
+        jmp     snd_wr1                 ; tail: CONTROL = 0 -> release, rts
+
+; bg_note_on: A = absolute semitone 0-95 -> release the current voice, set
+; FREQ_L/H, then gate on with RESET_PHASE. Mirrors play_note_on, minus the
+; php/sei/plp fence: this already runs with interrupts masked (it IS the
+; IRQ), so nothing else can interleave a partial MIA index-window B burst.
+bg_note_on:
+        jsr     bg_note_freq            ; BGP_FREQ = Hz * 16
+        lda     BGP_VOICE
+        tax
+        txa
+        clc
+        adc     #AUDV_CONTROL
+        jsr     snd_seek                ; base + AUDV_CONTROL
+        lda     #$00
+        sta     IDXB_PORT               ; CONTROL = 0: release any sounding note
+        txa
+        jsr     snd_seek                ; base + AUDV_FREQ_L ($00)
+        lda     BGP_FREQ
+        sta     IDXB_PORT
+        lda     BGP_FREQ+1
+        sta     IDXB_PORT
+        txa
+        clc
+        adc     #AUDV_CONTROL
+        jsr     snd_seek
+        lda     #AUD_GATE_RETRIG
+        sta     IDXB_PORT               ; CONTROL = GATE|RESET_PHASE: re-attack
+        rts
+
+; bg_note_freq: A = semitone 0-95 -> BGP_FREQ/BGP_FREQ+1 = Hz*16. Private
+; twin of note_freq (clementina_extra.s), which must not run here - it uses
+; LINNUM, shared with interrupted foreground expression evaluation. Shares
+; note_freq_tbl (pure RODATA, no mutable state).
+bg_note_freq:
+        sec
+        ldx     #$FF
+@div:
+        inx
+        sbc     #12
+        bcs     @div
+        adc     #12
+        asl     a
+        tay
+        lda     note_freq_tbl,y
+        sta     BGP_FREQ
+        lda     note_freq_tbl+1,y
+        sta     BGP_FREQ+1
+@shift:
+        cpx     #$00
+        beq     @done
+        asl     BGP_FREQ
+        rol     BGP_FREQ+1
+        dex
+        bne     @shift
+@done:
+        rts
+
+; --- bg PLAY length -> duration ----------------------------------------------
+; bg_len_ok: X in {1,2,4,8,16,32} -> return; else stop the player (no error -
+; see the header note above).
+bg_len_ok:
+        cpx     #1
+        beq     @ok
+        cpx     #2
+        beq     @ok
+        cpx     #4
+        beq     @ok
+        cpx     #8
+        beq     @ok
+        cpx     #16
+        beq     @ok
+        cpx     #32
+        beq     @ok
+        jmp     bg_next_event_bad
+@ok:
+        rts
+
+; bg_len_to_dur: X = valid length code -> BGP_TICKS (16-bit), from BGP_TEMPO.
+; Mirrors play_len_to_dur.
+bg_len_to_dur:
+        lda     BGP_TEMPO
+        sta     BGP_TICKS
+        lda     #$00
+        sta     BGP_TICKS+1
+        cpx     #4
+        beq     @min
+        bcs     @right
+        cpx     #1
+        bne     @one
+        jsr     @shl                    ; k=1: two left shifts
+@one:
+        jsr     @shl                    ; k=1 or k=2: one more
+        jmp     @min
+@right:
+        jsr     @shr
+        cpx     #8
+        beq     @min
+        jsr     @shr
+        cpx     #16
+        beq     @min
+        jsr     @shr
+@min:
+        lda     BGP_TICKS
+        ora     BGP_TICKS+1
+        bne     @ret
+        lda     #$01
+        sta     BGP_TICKS
+@ret:
+        rts
+@shl:
+        asl     BGP_TICKS
+        rol     BGP_TICKS+1
+        rts
+@shr:
+        lsr     BGP_TICKS+1
+        ror     BGP_TICKS
+        rts
+
+; bg_maybe_dot: if the next char is '.', consume it and BGP_TICKS += BGP_TICKS/2.
+bg_maybe_dot:
+        jsr     bg_peek
+        bcc     @no
+        cmp     #'.'
+        bne     @no
+        jsr     bg_adv
+        lda     BGP_TICKS+1
+        lsr     a
+        sta     BGP_TMP+1
+        lda     BGP_TICKS
+        ror     a
+        sta     BGP_TMP
+        lda     BGP_TICKS
+        clc
+        adc     BGP_TMP
+        sta     BGP_TICKS
+        lda     BGP_TICKS+1
+        adc     BGP_TMP+1
+        sta     BGP_TICKS+1
+@no:
+        rts
+
+; --- bg PLAY string cursor ---------------------------------------------------
+; bg_peek: C=0 at end (BGP_IDX = BGP_LEN); else C=1 and A = next char. BGP_BUF
+; is a fixed address, so this is plain absolute,X addressing - no zero-page
+; pointer needed (see the BGP_IDX/BGP_LEN comment above the control block).
+bg_peek:
+        ldx     BGP_IDX
+        cpx     BGP_LEN
+        bcs     @end
+        lda     BGP_BUF,x
+        sec
+        rts
+@end:
+        clc
+        rts
+
+; bg_adv: consume one char (after a kept peek).
+bg_adv:
+        inc     BGP_IDX
+        rts
+
+; bg_getc: C=0 at end; else C=1 and A = char (consumed).
+bg_getc:
+        jsr     bg_peek
+        bcc     @e
+        pha
+        jsr     bg_adv
+        pla
+        sec
+        rts
+@e:
+        clc
+        rts
+
+; --- bg PLAY number scan -----------------------------------------------------
+; bg_num: read a run of decimal digits. Returns X = value (mod 256), C=1 if
+; >= 1 digit was read, else C=0. Uses BGP_TMP.
+bg_num:
+        lda     #$00
+        sta     BGP_TMP
+        sta     BGP_TMP+1
+@l:
+        jsr     bg_peek
+        bcc     @end
+        cmp     #'0'
+        bcc     @end
+        cmp     #'9'+1
+        bcs     @end
+        jsr     bg_adv
+        and     #$0F
+        pha
+        lda     BGP_TMP
+        asl     a
+        pha
+        asl     a
+        asl     a
+        sta     BGP_TMP
+        pla
+        clc
+        adc     BGP_TMP
+        sta     BGP_TMP
+        pla
+        clc
+        adc     BGP_TMP
+        sta     BGP_TMP
+        lda     #$01
+        sta     BGP_TMP+1
+        jmp     @l
+@end:
+        ldx     BGP_TMP
+        lda     BGP_TMP+1
+        beq     @none
+        sec
+        rts
+@none:
+        clc
+        rts
+
+; bg_num_req: bg_num, but stop the player (no error) if no digits were read.
+bg_num_req:
+        jsr     bg_num
+        jcc     bg_next_event_bad
+        rts

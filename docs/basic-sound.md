@@ -34,11 +34,14 @@ programmer's reference.
 | `PULSE v,pw` | `pw` 0–255 | Pulse duty. `128` ≈ square. Affects the pulse waveform only. |
 | `PAN v,p` | `p` −64..63 | Stereo position. `-64` hard left, `0` centre, `63` hard right. |
 | `PLAY s$` | music string | Play a sequence of notes described by `s$`. Blocks until the string finishes. See **PLAY** below. |
+| `PLAY s$,n` | `n` background flag | `n<>0` plays `s$` in the **background** and returns immediately; `n=0` is the same as `PLAY s$`. See **Background PLAY** below. |
+| `PLAY` | — | Stop the background player and silence its voices. |
+| `PLAYING(0)` | — (function) | `1` while a background `PLAY` is still going, else `0`. The `(0)` is a required dummy argument. |
 
 Out‑of‑range arguments raise `ILLEGAL QUANTITY`, exactly like `COLOR`.
 
-`SNDON`/`SNDOFF`/`SNDCLR`, the ten command words above, and `PLAY` are reserved —
-you cannot use them as variable names.
+`SNDON`/`SNDOFF`/`SNDCLR`, the ten command words above, `PLAY`, and `PLAYING`
+are reserved — you cannot use them as variable names.
 
 ## Envelope, volume and gate
 
@@ -111,6 +114,45 @@ from your own loop. Because `PLAY` blocks, it also swallows keystrokes while it
 runs (except **Ctrl‑C**, which stops the music and returns to `READY`). An
 unknown command raises `SYNTAX ERROR`; a bad number raises `ILLEGAL QUANTITY`;
 either way every voice is silenced first.
+
+## Background PLAY
+
+`PLAY s$, n` (`n` any non‑zero value) plays `s$` **in the background** and
+returns immediately — the rest of your program keeps running, including a
+blocking `INPUT` or a tight `FOR/NEXT` loop, because the string is timed off
+the same Timer‑1 interrupt as `KJIFFY`, not the foreground interpreter.
+
+```basic
+10 SNDON : WAVE 0,1 : ADSR 0,0,8,12,7
+20 PLAY "T80 L8 O4 C D E F G4 G4 A A A A G2 F F F F E2",1
+30 PRINT "the tune keeps playing while this runs"
+40 INPUT "your name"; N$
+```
+
+- `PLAY s$` (no comma) and `PLAY s$,0` both still **block**, exactly as
+  above — unchanged, back‑compatible.
+- `PLAY` with **no argument at all** stops the background player and
+  silences its voices.
+- `PLAYING(0)` returns `1` while a background string is still playing, `0`
+  once it finishes (or after you stop it). The `(0)` is a required dummy
+  argument — every function in this BASIC is called as `NAME(expr)`, the same
+  as classic `FRE(0)`; there is no bare/niladic function form.
+- Starting a new background `PLAY` **replaces** whatever was already
+  playing in the background (silencing it first — no orphaned notes).
+- Ctrl‑C, `STOP`, `END`, `NEW`, and any runtime error all stop the
+  background player too. `RUN` and `CLEAR` currently do **not** — a
+  background tune from a previous run keeps playing across a `RUN` unless
+  the new program itself issues a `PLAY`.
+- A malformed background string (bad token or number) **does not** raise
+  `SYNTAX ERROR`/`ILLEGAL QUANTITY` the way blocking `PLAY` does — it can't;
+  the string is parsed one token at a time from inside an interrupt, and an
+  interrupt can never safely enter BASIC's error handler. It just stops
+  playing and silences its voice(s), silently. Get the string right with a
+  blocking `PLAY` first if you're unsure.
+- Only one background string plays at a time (monophonic per voice, serial,
+  same as blocking `PLAY`). A voice driven by a background `PLAY` and by your
+  own foreground `NOTE`/`FREQ`/`GATE` at the same time will fight each other —
+  pick one owner per voice.
 
 A scale, then the same idea split across two voices as call‑and‑response:
 

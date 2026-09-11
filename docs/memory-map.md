@@ -206,22 +206,58 @@ combined kernel+BASIC image is ~11.4 KiB. Notable internal routines:
 
 ---
 
-## 8. BASIC free workspace (`$4001 … $BFFF`)
+## 7.5. Background-PLAY control block (`$4400–$448F`)
+
+Fixed RAM between the loaded image and `RAMSTART2`, defined as plain equates
+in `src/basic/clementina_extra.s` (`BGP_*`) exactly like `KVARS`/`KJIFFY` —
+never part of the loaded image, so it costs no ROM bytes. Holds the state
+the Timer-1 IRQ needs to run `PLAY s$,n`'s background sequencer (`bg_play_tick`
+et al.) independently of whatever the foreground interpreter is doing:
+
+| Offset | Name | Size | Description |
+| --- | --- | --- | --- |
+| `+$00` | `BGP_FLAGS` | 1 | Bit 0: background player active. |
+| `+$01` | `BGP_IDX` | 1 | Read cursor into `BGP_BUF` (0–127). Plain index, not a pointer — `(ptr),y` indirect addressing only works in zero page, and this block deliberately isn't. |
+| `+$02` | `BGP_LEN` | 1 | Valid bytes in `BGP_BUF`. |
+| `+$03` | `BGP_TICKS` | 2 | Ticks left on the current note/rest. |
+| `+$05` | `BGP_VOICE` | 1 | Current voice record base (`$10/$20/$30/$40`). |
+| `+$06` | `BGP_OCTAVE` | 1 | Current octave 0–7. |
+| `+$07` | `BGP_TEMPO` | 1 | Ticks per quarter note. |
+| `+$08` | `BGP_LDEF` | 1 | Default note length code. |
+| `+$09` | `BGP_SEMI` | 1 | Scratch: semitone within the octave. |
+| `+$0A` | `BGP_FREQ` | 2 | `bg_note_freq` result — private, not `LINNUM` (which interrupted foreground code may be mid-use of). |
+| `+$0C` | `BGP_TMP` | 2 | General parser scratch (digit accumulation, dotted-length halving). |
+| `+$0E` | `BGP_BUF` | 128 | The background MML string, copied here from BASIC's string heap at `PLAY s$,n` time so it survives independently of GC/reassignment/`CLR`. |
+
+`PLAY s$,n` (`n<>0`) copies `s$` in here and sets `BGP_FLAGS`; `bg_play_tick`
+(called from `irq_handler` right after the `KJIFFY` bump) counts `BGP_TICKS`
+down and, at zero, parses the next MML token via a private mirror of blocking
+`PLAY`'s parser (`bg_next_event`, `bg_do_note`, …) that never touches
+`STYLE_SIDE_BUF`/`INDEX`/`LINNUM` and never raises `SYNTAX ERROR`/`ILLEGAL
+QUANTITY` (an ISR can't safely enter `STKINI`) — a malformed background
+string just stops the player. See `docs/basic-sound.md`.
+
+---
+
+## 8. BASIC free workspace (`$4501 … $BFFF`)
 
 At runtime BASIC's program text, variables, arrays, and strings live between
-`TXTTAB` and `MEMSIZ`. Clementina currently sets `RAMSTART2 = $4000`, safely
-above the combined kernel+BASIC+monitor image. Cold start selects Extended RAM
-bank 0 and caps `MEMSIZ` at `$C000`, immediately before the I/O region. The empty
-program marker advances `TXTTAB` to `$4001`, giving BASIC ~32,767 bytes. `make`
-fails if `build/kernel.bin` grows past the `$4000` boundary, because BASIC's
-cold-start RAM probe writes from `RAMSTART2` upward. (`RAMSTART2` was raised from
-`$3600` to make room for the extension-token command set; raise it further, in
-lockstep with `MAX_KERNEL_BYTES`, as more commands are added.)
+`TXTTAB` and `MEMSIZ`. Clementina currently sets `RAMSTART2 = $4500`, above
+both the combined kernel+BASIC+monitor image (capped at `$4400` by
+`MAX_KERNEL_BYTES`) and the background-PLAY control block above (`$4400–$448F`).
+Cold start selects Extended RAM bank 0 and caps `MEMSIZ` at `$C000`,
+immediately before the I/O region. The empty program marker advances `TXTTAB`
+to `$4501`, giving BASIC ~30,975 bytes. `make` fails if `build/kernel.bin`
+grows past the `$4400` boundary, because BASIC's cold-start RAM probe writes
+from `RAMSTART2` upward. (`RAMSTART2` was raised from `$3600` to make room for
+the extension-token command set, then from `$4000` to `$4500` for the
+background-PLAY control block; raise it further, in lockstep with
+`MAX_KERNEL_BYTES`, as more commands are added.)
 
 > **Known landmine — avoid `TXTTAB` in ~`[$39FE, $3AC0]`.** A pre-existing latent
 > bug (present on the stock baseline, independent of the extension tokens) makes
 > `INPUT` misread its buffer and re-prompt `??` when the program text begins in
-> that ~200-byte window. `$3600` and `$3B00`+ are unaffected; `$4000` clears it
+> that ~200-byte window. `$3600` and `$3B00`+ are unaffected; `$4500` clears it
 > with margin. Root cause not yet diagnosed; keep `RAMSTART2` clear of that window
 > when choosing future values (`$5000`, `$6000`, … are all fine).
 

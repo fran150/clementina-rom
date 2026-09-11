@@ -77,6 +77,8 @@ irq_handler:
         inc KJIFFY+1
 @jiffy_ok:
 
+        jsr bg_play_tick        ; background PLAY sequencer (clementina_extra.s)
+
         lda CURSOR_BLINK_ACTIVE
         beq @done
         dec CURSOR_BLINK_COUNT

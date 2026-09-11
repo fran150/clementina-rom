@@ -408,6 +408,12 @@ LCC91:
         bne     L2D7B
         jmp     L31F3
 L2D7B:
+.ifdef CLEMENTINA
+        cmp     #TOKEN_EXTFN
+        bne     L2D7B_NOT_EXTFN
+        jmp     EXTFN_DISPATCH  ; A = TOKEN_EXTFN; see clementina_extra.s
+L2D7B_NOT_EXTFN:
+.endif
         cmp     #TOKEN_SGN
         bcc     PARCHK
         jmp     UNARY

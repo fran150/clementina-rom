@@ -21,9 +21,11 @@ KERNEL_BIN  := $(BUILD_DIR)/kernel.bin
 BASIC_SRC   := $(BASIC_DIR)/msbasic.s
 # WOZ monitor, linked into the image and reachable via KERN_WOZMON ($042A).
 MONITOR_SRC := $(MONITOR_DIR)/wozmon-clementina.s
-# MIA loads the image at $0400 and BASIC RAM starts at RAMSTART2=$4000
-# (src/basic/defines_clementina.s), so the binary must fit below $4000.
-MAX_KERNEL_BYTES := 15360
+# MIA loads the image at $0400 and BASIC RAM starts at RAMSTART2=$4500
+# (src/basic/defines_clementina.s), so the binary must fit below $4400 - the
+# background-PLAY control block occupies $4400-$448F, fixed RAM below RAMSTART2
+# (see clementina_extra.s BGP_* equates), not part of the loaded image.
+MAX_KERNEL_BYTES := 16384
 
 # Destinations for the kernel image. Override on the command line if your
 # checkouts live elsewhere, e.g.  make install MIA_DIR=... EMU_DIR=...
@@ -44,7 +46,7 @@ $(KERNEL_BIN): $(KERNEL_DIR)/*.s $(KERNEL_DIR)/kernel.inc $(KERNEL_CFG) $(BASIC_
 	$(CA65) --cpu $(CPU) -g -l $(BUILD_DIR)/wozmon.lst -o $(BUILD_DIR)/wozmon.o $(MONITOR_SRC)
 	$(LD65) -C $(KERNEL_CFG) -m $(BUILD_DIR)/kernel.map -Ln $(BUILD_DIR)/kernel.lbl -o $@ $(BUILD_DIR)/kernel.o $(BUILD_DIR)/basic.o $(BUILD_DIR)/wozmon.o
 	@if [ $$(wc -c < $@) -gt $(MAX_KERNEL_BYTES) ]; then \
-		echo "ERROR: $@ overlaps BASIC RAMSTART2=\$$4000 ($$(wc -c < $@) > $(MAX_KERNEL_BYTES) bytes)"; \
+		echo "ERROR: $@ overlaps the background-PLAY control block at \$$4400 ($$(wc -c < $@) > $(MAX_KERNEL_BYTES) bytes)"; \
 		exit 1; \
 	fi
 	@echo "Built $@ ($$(wc -c < $@) bytes), loads at \$$0400"

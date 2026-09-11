@@ -92,6 +92,39 @@ EXT_ADDRESS_TABLE_END:
 		.assert (EXT_ADDRESS_TABLE_END - EXT_ADDRESS_TABLE) <= 256, error, "extension address table exceeds 128 entries"
 .endmacro
 
+; ----------------------------------------------------------------------------
+; Extension FUNCTION keyword tables (two-byte tokens: TOKEN_EXTFN prefix +
+; subtoken). Same shape as the extension statement tables above, but the
+; address table holds a plain .addr (like keyword_addr/UNFNC), not an RTS-style
+; vec-1, because dispatch (EXTFN_DISPATCH in clementina_extra.s) calls it with a
+; plain jsr, mirroring how UNARY calls primary functions. See TOKENIZE_EXTFN
+; (program.s), the LIST detokenizer (program.s), and eval.s's dispatch hook.
+; ----------------------------------------------------------------------------
+.macro init_extfn_token_tables
+        .segment "EXTFNVEC"
+EXTFN_ADDRESS_TABLE:
+        .segment "EXTFNKEYW"
+EXTFN_NAME_TABLE:
+.endmacro
+
+.macro extfn_keyword_addr key, vec
+        .segment "EXTFNVEC"
+		.addr	vec
+        .segment "EXTFNKEYW"
+		htasc	key
+.endmacro
+
+.macro end_extfn_token_tables
+        .segment "EXTFNKEYW"
+		.byte	0                       ; name-table terminator
+EXTFN_NAME_TABLE_END:
+        .segment "EXTFNVEC"
+EXTFN_ADDRESS_TABLE_END:
+		NUM_EXTFN_TOKENS = <((EXTFN_ADDRESS_TABLE_END - EXTFN_ADDRESS_TABLE) / 2)
+		.assert (EXTFN_NAME_TABLE_END - EXTFN_NAME_TABLE) <= 256, error, "extension function keyword name table exceeds 256 bytes"
+		.assert (EXTFN_ADDRESS_TABLE_END - EXTFN_ADDRESS_TABLE) <= 256, error, "extension function address table exceeds 128 entries"
+.endmacro
+
 .macro init_error_table
         .segment "ERROR"
 ERROR_MESSAGES:

@@ -54,6 +54,15 @@ TOKEN_MON        := $FE
 ; table. $FF is free in this build (the CBM/DATAFLG uses of $FF are inactive).
 TOKEN_EXT        := $FF
 
+; Extension-FUNCTION-token prefix. Same idea as TOKEN_EXT but for functions
+; (PLAYING(0) and friends): a two-byte token TOKEN_EXTFN + subtoken ($80|index),
+; recognized in eval.s's primary-expression dispatch (mirrors UNARY), so a
+; function can be added without touching the primary function table (also
+; full - see PLAYING's history in token.s). $FD is free: it sits well above
+; every primary token (~110 active for clementina, starting at $80) and below
+; TOKEN_MON ($FE) / TOKEN_EXT ($FF).
+TOKEN_EXTFN      := $FD
+
 ; ----------------------------------------------------------------------------
 ; Styled strings (see docs/styled-strings.md)
 ; ----------------------------------------------------------------------------
@@ -102,18 +111,20 @@ STYLE_SIDE_MAGIC1   := $FF
 ; memory layout
 ; BASIC program/variable workspace starts safely above the combined
 ; kernel+BASIC image. Keep this in sync with Makefile's MAX_KERNEL_BYTES guard:
-; MIA loads the image at $0400, so RAMSTART2=$4000 allows up to $3C00 bytes of
-; loaded image (kernel + BASIC + WOZ monitor). BASIC continues through Extended
-; RAM bank 0 at $8000-$BFFF and uses $C000 as its exclusive memory ceiling,
-; giving it a ~32,767-byte workspace after the initial empty-program marker.
-; Raised from $3600 to make room for the extension-token command set (sprites,
-; sound, ...); bump it further (with MAX_KERNEL_BYTES) as more commands land.
+; MIA loads the image at $0400, so with MAX_KERNEL_BYTES=$4000 the loaded image
+; (kernel + BASIC + WOZ monitor) must fit below $4400. Background-PLAY's fixed
+; control block occupies $4400-$448F (BGP_* in clementina_extra.s, not part of
+; the loaded image - equates only, like KVARS), leaving RAMSTART2=$4500 as
+; BASIC's free-RAM floor. BASIC continues through Extended RAM bank 0 at
+; $8000-$BFFF and uses $C000 as its exclusive memory ceiling, giving it a
+; ~30,975-byte workspace after the initial empty-program marker. Bump
+; MAX_KERNEL_BYTES/RAMSTART2/BGP_* together as more commands land.
 ;
 ; AVOID TXTTAB in ~[$39FE, $3AC0]: a pre-existing latent bug (reproduces on stock
 ; baseline, unrelated to the extension tokens) makes INPUT misread its buffer and
 ; re-prompt "??" when the program text starts in that ~200-byte window. $3600 and
-; $3B00+ are fine; $4000 clears it with margin. See the note in docs/memory-map.md.
-RAMSTART2        := $4000
+; $3B00+ are fine; $4500 clears it with margin. See the note in docs/memory-map.md.
+RAMSTART2        := $4500
 
 ; storage: route the LOAD/SAVE tokens to the kernel jump table (stubs today).
 KERN_LOAD := $041E
