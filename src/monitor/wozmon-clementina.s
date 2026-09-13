@@ -10,17 +10,18 @@
 ; primitives translate to/from the kernel's plain-ASCII console.
 ;
 ; Linked into the combined image and reached through the kernel jump table at
-; KERN_WOZMON ($042A); enter with `JMP WOZMON` (or BASIC `MON`/`USR`). Quit back
-; to BASIC by typing `Q` (or run the warm-start vector manually with `403R`).
-; See docs/memory-map.md.
+; KERN_WOZMON ($BFFA); enter with `JMP WOZMON` (or BASIC `MON`/`USR`). Quit back
+; to BASIC by typing `Q` (or run the warm-start vector manually with `BFD3R`).
+; The jump table is top-anchored at KERN_BASE=$BFD0 (2026-09 RAM/ROM reorg) -
+; see docs/memory-map.md.
 ; ============================================================================
 
 .setcpu "65C02"
 
 ; Kernel jump table (keep in sync with ../kernel/kernel.inc).
-KERN_WARMSTART  = $0403
-KERN_CHROUT     = $0406
-KERN_CHRIN      = $0409
+KERN_WARMSTART  = $BFD3
+KERN_CHROUT     = $BFD6
+KERN_CHRIN      = $BFD9
 
 ; Page 0 variables (overlap BASIC's zero page; only one is active at a time).
 XAML            = $24           ; Last "opened" location Low

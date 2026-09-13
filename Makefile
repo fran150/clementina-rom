@@ -1,9 +1,18 @@
 # ============================================================================
 # Clementina ROM - top-level build
 # ----------------------------------------------------------------------------
-# Builds the kernel+BASIC image (kernel.bin) that MIA loads into base RAM at the
-# load base ($0400). The kernel owns reset/video/console; MS BASIC owns the
-# foreground after cold start.
+# Builds the kernel+BASIC image (kernel.bin) that MIA loads into base RAM.
+# The kernel owns reset/video/console; MS BASIC owns the foreground after
+# cold start.
+#
+# 2026-09 RAM/ROM reorg: the image is top-anchored, ending exactly at $BFFF
+# (immediately below I/O), instead of starting at a fixed low load base.
+# Since the image's own size determines where it *starts*, and the linker
+# needs concrete addresses at link time, this is a two-pass build: pass 1
+# links with a throwaway placement just to measure the image's total size,
+# then pass 2 relinks with the region's start computed as $C000 - <that
+# size>, so the image's last byte always lands on $BFFF with no wasted
+# address space. See src/kernel/clementina.cfg and docs/memory-map.md.
 # ============================================================================
 
 CA65    ?= ca65
@@ -19,20 +28,14 @@ KERNEL_SRC  := $(KERNEL_DIR)/kernel.s
 KERNEL_CFG  := $(KERNEL_DIR)/clementina.cfg
 KERNEL_BIN  := $(BUILD_DIR)/kernel.bin
 BASIC_SRC   := $(BASIC_DIR)/msbasic.s
-# WOZ monitor, linked into the image and reachable via KERN_WOZMON ($042A).
+# WOZ monitor, linked into the image and reachable via KERN_WOZMON ($BFFA).
 MONITOR_SRC := $(MONITOR_DIR)/wozmon-clementina.s
-# MIA loads the image at $0400 and BASIC RAM starts at RAMSTART2=$5D00
-# (src/basic/defines_clementina.s), so the binary must fit below $5C00 - the
-# background-PLAY control block occupies $5C00-$5C8F, fixed RAM below RAMSTART2
-# (see clementina_extra.s BGP_* equates), not part of the loaded image.
-# Raised from $4400 (16384) to $4C00 (18432) for the video bulk-load commands
-# (BGLOAD/CHRLOAD/PALLOAD) and BGCHAR/sprite single-field setters; raised again
-# to $5800 (22528) for file I/O (OPEN/CLOSE/BGET#/BPUT#), the generic MIA RAM
-# loader (MIALOAD/MIASAVE), and the video/audio asset family's *READ/*LOAD/
-# *SAVE split (see docs/basic-file.md) - deliberate headroom (not just enough
-# to fit) for the still-remaining file-management commands (DIR/CD/MKDIR/etc).
-# Bump MAX_KERNEL_BYTES/RAMSTART2/BGP_* together as more commands land.
-MAX_KERNEL_BYTES := 22528
+
+# BASIC's heap floor (RAMSTART2, src/basic/defines_clementina.s) - a small,
+# stable constant now that the image no longer sits between working RAM and
+# the heap. The two-pass link below fails loudly if a future image ever grows
+# large enough to reach down into it.
+RAMSTART2 := 0x04B7
 
 # Destinations for the kernel image. Override on the command line if your
 # checkouts live elsewhere, e.g.  make install MIA_DIR=... EMU_DIR=...
@@ -51,12 +54,24 @@ $(KERNEL_BIN): $(KERNEL_DIR)/*.s $(KERNEL_DIR)/kernel.inc $(KERNEL_CFG) $(BASIC_
 	$(CA65) --cpu $(CPU) -g -l $(BUILD_DIR)/kernel.lst -o $(BUILD_DIR)/kernel.o $(KERNEL_SRC)
 	$(CA65) --cpu $(CPU) -D clementina -g -l $(BUILD_DIR)/basic.lst -o $(BUILD_DIR)/basic.o $(BASIC_SRC)
 	$(CA65) --cpu $(CPU) -g -l $(BUILD_DIR)/wozmon.lst -o $(BUILD_DIR)/wozmon.o $(MONITOR_SRC)
-	$(LD65) -C $(KERNEL_CFG) -m $(BUILD_DIR)/kernel.map -Ln $(BUILD_DIR)/kernel.lbl -o $@ $(BUILD_DIR)/kernel.o $(BUILD_DIR)/basic.o $(BUILD_DIR)/wozmon.o
-	@if [ $$(wc -c < $@) -gt $(MAX_KERNEL_BYTES) ]; then \
-		echo "ERROR: $@ overlaps the background-PLAY control block at \$$4400 ($$(wc -c < $@) > $(MAX_KERNEL_BYTES) bytes)"; \
+	@# Pass 1: link with a throwaway placement, just to measure the image's
+	@# total size (kernel + WozMon + BASIC + jump table).
+	$(LD65) -C $(KERNEL_CFG) -D __CODE_START__=0x0400 -D __CODE_SIZE__=0x7C00 \
+		-o $(BUILD_DIR)/kernel_measure.bin \
+		$(BUILD_DIR)/kernel.o $(BUILD_DIR)/wozmon.o $(BUILD_DIR)/basic.o
+	@SIZE=$$(wc -c < $(BUILD_DIR)/kernel_measure.bin | tr -d ' '); \
+	START=$$(( 0xC000 - SIZE )); \
+	if [ $$START -le $$(( $(RAMSTART2) )) ]; then \
+		echo "ERROR: image ($$SIZE bytes) would start at $$(printf '0x%04X' $$START)," \
+			"at or below RAMSTART2 ($(RAMSTART2)) - it would overlap BASIC's heap floor"; \
 		exit 1; \
-	fi
-	@echo "Built $@ ($$(wc -c < $@) bytes), loads at \$$0400"
+	fi; \
+	START_HEX=$$(printf '0x%04X' $$START); \
+	$(LD65) -C $(KERNEL_CFG) -D __CODE_START__=$$START_HEX -D __CODE_SIZE__=$$SIZE \
+		-m $(BUILD_DIR)/kernel.map -Ln $(BUILD_DIR)/kernel.lbl -o $(KERNEL_BIN) \
+		$(BUILD_DIR)/kernel.o $(BUILD_DIR)/wozmon.o $(BUILD_DIR)/basic.o; \
+	echo "Built $(KERNEL_BIN) ($$SIZE bytes): image $$START_HEX-\$$BFFF," \
+		"heap $(shell printf '0x%04X' $$(( $(RAMSTART2) )))-$$(printf '0x%04X' $$(( START - 1 )))"
 
 $(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)
@@ -66,13 +81,13 @@ $(BUILD_DIR):
 install-emulator: $(KERNEL_BIN)
 	cp $(KERNEL_BIN) $(EMU_KERNEL)
 	@echo "Copied kernel.bin -> $(EMU_KERNEL)"
-	@echo "NOTE: emulator must have miaKernelTargetAddress = 0x0400 (registers.go)"
+	@echo "NOTE: emulator must have miaKernelTargetAddress=0xBFD0, miaKernelLoadTopAddress=0xBFFF (registers.go)"
 
 # Copy the image into the firmware tree (CMake turns it into kernel_data.c).
 install-firmware: $(KERNEL_BIN)
 	cp $(KERNEL_BIN) $(MIA_KERNEL)
 	@echo "Copied kernel.bin -> $(MIA_KERNEL)"
-	@echo "NOTE: firmware must have kernel_target_address = 0x0400 (mia.c)"
+	@echo "NOTE: firmware must have kernel_target_address=0xBFD0, kernel_load_top_address=0xBFFF (mia.c)"
 
 install: install-emulator
 
@@ -87,5 +102,7 @@ help:
 	@echo "  make install-firmware  Copy kernel.bin into the MIA firmware tree"
 	@echo "  make clean      Remove build artifacts"
 	@echo
-	@echo "Booting at \$$0400 needs kernel_target_address = 0x0400 in both the"
-	@echo "MIA firmware (mia.c) and the emulator (registers.go). See docs/memory-map.md."
+	@echo "The image is top-anchored: it always ends at \$$BFFF, loaded by a"
+	@echo "descending MIA bootstrap. Needs kernel_target_address=0xBFD0 and"
+	@echo "kernel_load_top_address=0xBFFF in both the MIA firmware (mia.c) and"
+	@echo "the emulator (registers.go). See docs/memory-map.md."

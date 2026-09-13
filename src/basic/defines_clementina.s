@@ -115,38 +115,37 @@ STYLE_SIDE_MAGIC0   := $CE
 STYLE_SIDE_MAGIC1   := $FF
 
 ; memory layout
-; BASIC program/variable workspace starts safely above the combined
-; kernel+BASIC image. Keep this in sync with Makefile's MAX_KERNEL_BYTES guard:
-; MIA loads the image at $0400, so with MAX_KERNEL_BYTES=$5800 the loaded image
-; (kernel + BASIC + WOZ monitor) must fit below $5C00. Background-PLAY's fixed
-; control block occupies $5C00-$5C8F (BGP_* in clementina_extra.s, not part of
-; the loaded image - equates only, like KVARS), leaving RAMSTART2=$5D00 as
-; BASIC's free-RAM floor. BASIC continues through Extended RAM bank 0 at
-; $8000-$BFFF and uses $C000 as its exclusive memory ceiling. Bump
-; MAX_KERNEL_BYTES/RAMSTART2/BGP_* together as more commands land.
+; ----------------------------------------------------------------------------
+; 2026-09 RAM/ROM reorg: the loaded kernel+BASIC+WozMon image no longer sits
+; between working RAM and the heap. It now lives at the *top* of the flat
+; address space, ending exactly at $BFFF (immediately below I/O), placed there
+; by clementina.cfg's MAIN region (start = __CODE_START__, computed by the
+; Makefile's two-pass link so the image's last byte always lands on $BFFF) and
+; loaded by a *descending* MIA bootstrap (kernel_target_address/
+; kernel_load_top_address in clementina-mia's mia.c and the mirrored constants
+; in clementina-6502's registers.go - both fixed at $BFD0/$BFFF forever,
+; regardless of how large the image grows).
 ;
-; Raised from $4D00 to $5D00 (2026-09) for file I/O (OPEN/CLOSE/BGET#/BPUT#),
-; the generic MIA RAM loader (MIALOAD/MIASAVE), and the video/audio asset
-; family's *READ/*LOAD/*SAVE split (see docs/basic-file.md) - deliberate
-; headroom for the still-remaining file-management commands (DIR/CD/MKDIR/
-; etc), not just enough to fit today. This also needed a second extension
-; token table (TOKEN_EXT2 in defines_clementina.s/macros.s/token.s): the
-; first table's 256-byte keyword-name budget filled up.
-;
-; AVOID TXTTAB in ~[$39FE, $3AC0]: a pre-existing latent bug (reproduces on stock
-; baseline, unrelated to the extension tokens) makes INPUT misread its buffer and
-; re-prompt "??" when the program text starts in that ~200-byte window. $3600 and
-; $3B00+ are fine; $5D00 clears it with even more margin than $4D00 did. See the
-; note in docs/memory-map.md.
-RAMSTART2        := $5D00
+; Working RAM is now one contiguous block at the bottom: zero page, stack,
+; line buffer, KVARS, then the BGP_* control block and DIR_NAME_BUF
+; (clementina_extra.s - relocated here from their old $5C00 spot; nothing
+; requires them to be anywhere specific, they're plain equates). RAMSTART2 is
+; a small, stable constant - it no longer needs bumping as the image grows,
+; since the image lives at the *other* end of the map now. BASIC's heap fills
+; everything in between, up to wherever the image currently starts
+; (__MAIN_START__, read directly by init.s - no runtime RAM probe into that
+; region, since it holds live running code). See docs/memory-map.md.
+RAMSTART2        := $04B7
 
 ; LOAD/SAVE: a BASIC program's own tokenized text to/from an SD file - see
 ; BASIC_LOAD/BASIC_SAVE in clementina_extra.s and docs/basic-file.md. Used to
 ; route to the kernel jump table below (a permanent stub - KERN_LOAD/
 ; KERN_SAVE are plain RTS, so "LOAD"/"SAVE" alone did nothing, and
 ; "LOAD "file"" left the filename unconsumed, always a ?SYNTAX ERROR).
-KERN_LOAD := $041E
-KERN_SAVE := $0421
+; KERN_BASE is now $BFD0 (top-anchored, see kernel.inc) - keep these two in
+; sync with it; BASIC deliberately does not .include kernel.inc.
+KERN_LOAD := $BFEE
+KERN_SAVE := $BFF1
 SAVE:
         jmp BASIC_SAVE
 LOAD:

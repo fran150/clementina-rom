@@ -1,3 +1,7 @@
+.ifdef CLEMENTINA
+.import __MAIN_START__ ; clementina.cfg - start of the top-anchored image region
+.endif
+
 .segment "INIT"
 
 .ifdef KBD
@@ -223,6 +227,19 @@ L4098:
   .endif
         tay
         bne     L40EE
+.endif
+.ifdef CLEMENTINA
+; Clementina (2026-09 RAM/ROM reorg): skip the byte-probe below entirely.
+; The image (kernel+BASIC+WozMon) now lives immediately above the heap,
+; ending at $BFFF - probing into it byte-by-byte like the generic RAM probe
+; does would scribble test patterns into live, running code. __MAIN_START__
+; is the linker-computed start of that region (clementina.cfg); MEMSIZ/FRETOP
+; are set to it directly, with no RAM probe involved.
+        lda     #<__MAIN_START__
+        ldy     #>__MAIN_START__
+        sta     LINNUM
+        sty     LINNUM+1
+        jmp     L40FA
 .endif
 .ifndef CBM2
         lda     #<RAMSTART2

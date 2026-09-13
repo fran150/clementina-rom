@@ -1,9 +1,11 @@
 ; ============================================================================
 ; kernel.s - Clementina kernel
 ; ----------------------------------------------------------------------------
-; Loaded by MIA into base RAM at the load base ($0400) and entered via the
-; MIA-backed RESET vector. Provides the console (overlay text + input FIFO),
-; a stable jump-table ABI, and (later) storage and BASIC/WozMon hand-off.
+; Loaded by MIA into base RAM, placed by clementina.cfg so the image (kernel +
+; BASIC + WozMon) ends exactly at $BFFF, and entered via the MIA-backed RESET
+; vector, which points at the jump table's fixed top-anchored address
+; (KERN_BASE=$BFD0, kernel.inc). Provides the console (overlay text + input
+; FIFO), a stable jump-table ABI, and (later) storage and BASIC/WozMon hand-off.
 ;
 ; Cold start enables the overlay text layer, clears the screen, prints the
 ; banner, then enters BASIC through the fixed kernel jump table.
@@ -40,9 +42,15 @@ _KJIFFY_STORAGE: .res 2 ; free-running 16-bit tick counter; +1 per VIA Timer-1
 ; ============================================================================
 ; Jump table - must land exactly on the KERN_* addresses from kernel.inc.
 ; The purpose of the jump table is to keep kernel address fixed even if the
-; code changes in size.
+; code changes in size. Placed LAST in clementina.cfg's SEGMENTS list, so it
+; always lands on the top KERN_JUMPTAB_SIZE bytes of the image, ending at
+; $BFFF - that placement is what clementina.cfg/the two-pass Makefile build
+; guarantee, not this file; the assert below only checks the table's own
+; *size* (relative to its own start), since during the Makefile's first
+; (measurement) link pass this segment is not yet at its final address.
 ; ============================================================================
 .segment "JUMPTAB"
+jumptab_start:
         jmp coldstart           ; KERN_COLDSTART
         jmp warmstart           ; KERN_WARMSTART
         jmp chrout              ; KERN_CHROUT
@@ -60,8 +68,10 @@ _KJIFFY_STORAGE: .res 2 ; free-running 16-bit tick counter; +1 per VIA Timer-1
         jmp WOZMON              ; KERN_WOZMON
         jmp set_backdrop        ; KERN_SET_BACKDROP
 
-; Compile-time guard: confirm the table lines up with the published ABI.
-.assert (* = KERN_BASE + $30), error, "kernel jump table size/layout mismatch"
+; Compile-time guard: confirm the table is exactly KERN_JUMPTAB_SIZE bytes
+; (kernel.inc) - a relative check, independent of where the linker ends up
+; placing this segment (see header comment above).
+.assert (* - jumptab_start = KERN_JUMPTAB_SIZE), error, "kernel jump table size/layout mismatch"
 
 ; ============================================================================
 ; Code

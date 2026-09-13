@@ -228,10 +228,18 @@ CHR_DEL_FWD         = $7F      ; editor: delete the char at the cursor (close ga
 CHR_INSERT          = $94      ; editor: open a gap at the cursor (insert space)
 
 ; ----------------------------------------------------------------------------
-; Kernel jump table - the stable ABI. Anchored at the load base ($0400).
+; Kernel jump table - the stable ABI. As of the 2026-09 RAM/ROM reorg, the
+; loaded image (kernel+BASIC+WozMon) lives at the *top* of the flat address
+; space, ending exactly at $BFFF, and the jump table is placed LAST in
+; clementina.cfg's SEGMENTS list - so it always lands on the top 48 bytes of
+; the image, $BFD0-$BFFF, no matter how much kernel/BASIC/WozMon code exists
+; below it. KERN_BASE is therefore a true fixed constant ($C000 minus the
+; table's own fixed size), unlike the image's *start*, which varies build to
+; build and is never referenced by address - only through this table.
 ; Callers JSR these; internal routine addresses may move freely.
 ; ----------------------------------------------------------------------------
-KERN_BASE          = $0400
+KERN_JUMPTAB_SIZE  = $30       ; 16 entries x 3 bytes - keep in sync with kernel.s
+KERN_BASE          = $C000 - KERN_JUMPTAB_SIZE  ; = $BFD0
 KERN_COLDSTART     = KERN_BASE + $00   ; reset entry (MIA points RESET here)
 KERN_WARMSTART     = KERN_BASE + $03   ; re-enter the system
 KERN_CHROUT        = KERN_BASE + $06   ; A = char -> console

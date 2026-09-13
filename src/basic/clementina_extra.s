@@ -2,7 +2,10 @@
 ; clementina_extra.s - Clementina BASIC console glue (EXTRA segment)
 ; ----------------------------------------------------------------------------
 ; Thin thunks from BASIC's console contract into the Clementina kernel jump
-; table. In the combined image the kernel lives at $0400 and owns the console.
+; table. As of the 2026-09 RAM/ROM reorg the jump table is top-anchored at
+; KERN_BASE=$BFD0 (see src/kernel/kernel.inc) instead of the old load-base
+; $0400 - it's placed last in clementina.cfg so it always lands on the top 48
+; bytes of the image, $BFD0-$BFFF, regardless of image size.
 ; Keep these addresses in sync with src/kernel/kernel.inc / docs/memory-map.md.
 ; ============================================================================
 
@@ -10,13 +13,13 @@
 .export BASIC_COLD_START, BASIC_WARM_START, MONRDKEY, MONRDKEY_NB, MONCOUT, MONRDLINE
 .export bg_play_tick
 
-KERN_CHROUT       = $0406
-KERN_CHRIN        = $0409
-KERN_GETKEY_NB    = $040C
-KERN_EDITKEY      = $0424
-KERN_CHROUT_GLYPH = $0427
-KERN_WOZMON       = $042A
-KERN_SET_BACKDROP = $042D
+KERN_CHROUT       = $BFD6
+KERN_CHRIN        = $BFD9
+KERN_GETKEY_NB    = $BFDC
+KERN_EDITKEY      = $BFF4
+KERN_CHROUT_GLYPH = $BFF7
+KERN_WOZMON       = $BFFA
+KERN_SET_BACKDROP = $BFFD
 
 ; Console control codes (CHROUT interprets these) and overlay geometry. Keep in
 ; sync with src/kernel/kernel.inc.
@@ -2866,10 +2869,28 @@ STRPRT_STYLED:
         ldy     INDEX+1
         cpy     DEST+1          ; DEST = FRETOP snapshot from STRPRT (pre-FREFAC)
         bcc     @lit
-        bne     @heap
+        bne     @check_ceiling
         ldy     INDEX
         cpy     DEST
         bcc     @lit
+@check_ceiling:
+        ; 2026-09 RAM/ROM reorg: the loaded image (and its ROM string tables,
+        ; e.g. QT_BYTES_FREE/QT_WRITTEN_BY) now live at/above MEMSIZ instead
+        ; of below it - "INDEX >= FRETOP" alone used to be sufficient to mean
+        ; "heap" (nothing valid was ever >= MEMSIZ=$C000), but now ROM
+        ; addresses are >= FRETOP too, at boot when FRETOP==MEMSIZ. Require
+        ; INDEX < MEMSIZ as well: genuine heap strings are always < MEMSIZ by
+        ; construction, so this never misclassifies real heap data - it only
+        ; excludes the image/ROM region, which must print through @lit so
+        ; CHROUT still interprets its embedded CR/LF formatting.
+        ldy     INDEX+1
+        cpy     MEMSIZ+1
+        bcc     @heap
+        bne     @lit
+        ldy     INDEX
+        cpy     MEMSIZ
+        bcc     @heap
+        jmp     @lit
 @heap:
         pla                     ; A = N
         pha
@@ -2970,19 +2991,20 @@ styled_outc:
 .endif
 
 ; ============================================================================
-; Background PLAY - fixed RAM control block, below RAMSTART2 ($5D00). Plain
-; equates, never part of the loaded image (same pattern as KVARS/KJIFFY) - see
-; Makefile MAX_KERNEL_BYTES and defines_clementina.s RAMSTART2. Persists across
-; arbitrary BASIC execution between IRQ calls, so unlike blocking PLAY's
-; STYLE_SIDE_BUF-based state, this can never be time-shared with the tokenizer
-; or anything else. See docs/memory-map.md.
+; Background PLAY - fixed RAM control block, part of the working-RAM block at
+; the bottom of the map (right after KVARS, below RAMSTART2 - see
+; defines_clementina.s). Plain equates, never part of the loaded image (same
+; pattern as KVARS/KJIFFY). Persists across arbitrary BASIC execution between
+; IRQ calls, so unlike blocking PLAY's STYLE_SIDE_BUF-based state, this can
+; never be time-shared with the tokenizer or anything else. See
+; docs/memory-map.md.
 ; ============================================================================
 ; BGP_IDX/BGP_LEN are a byte cursor/length into BGP_BUF, not a pointer pair,
 ; because BGP_BUF is a fixed compile-time address read with absolute,X/Y
 ; addressing (bg_peek) - (ptr),y indirect addressing (like INDEX in blocking
 ; PLAY) only works for zero-page pointers, and BGP_BUF is deliberately NOT in
 ; zero page (see the block header comment above).
-BGP_BASE        = $5C00
+BGP_BASE        = $0400
 BGP_FLAGS       = BGP_BASE + $00       ; bit0: background player active
 BGP_IDX         = BGP_BASE + $01       ; read cursor into BGP_BUF (0-127)
 BGP_LEN         = BGP_BASE + $02       ; valid bytes in BGP_BUF
@@ -3000,7 +3022,7 @@ BGP_SP          = BGP_BASE + $0E       ; saved 6502 stack pointer - see bg_next_
 BGP_BUF         = BGP_BASE + $0F       ; [128] copied MML text
 BGP_BUF_SIZE    = 128
 
-; DIR's own scratch, in the free space between BGP_BUF and RAMSTART2 ($5D00) -
+; DIR's own scratch, in the free space between BGP_BUF and RAMSTART2 ($04B7) -
 ; a name must be fully read out of the MIA dir-entry window into CPU RAM
 ; before any of it is printed. MONCOUT (kernel CHROUT) draws to the screen
 ; through MIA's own indexed-RAM window mechanism (the same IDXA_SELECT/
