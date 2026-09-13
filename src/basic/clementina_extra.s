@@ -3603,6 +3603,7 @@ MIA_CMD_FS_CHDIR      = $88
 ; SD/FS control block field offsets (relative to selecting MIA_SD_INDEX_CONTROL).
 SD_LAST_ERROR         = $02
 SD_REQUEST_LEN_L      = $08
+SD_RESULT_LEN_L       = $0A    ; 16-bit actual byte count from the last FS_READ/FS_WRITE
 SD_DEST_ADDR_L        = $0C    ; 24-bit MIA RAM address for the LOAD_MIA/SAVE_MIA jobs
 SD_OPEN_MODE          = $10
 SD_EOF                = $11
@@ -4110,6 +4111,229 @@ BASIC_BPUT:
         jsr     mia_sd_cmd
         jne     mia_fileerr
         rts
+
+; LOADSAVE_HANDLE: the file-handle slot LOAD/SAVE use internally, streaming
+; BASIC's own program text (a plain byte range, TXTTAB..VARTAB, in ordinary
+; 6502-addressed RAM - not MIA RAM, so MIALOAD/MIASAVE's zero-CPU-touching
+; job cannot be used here) through the same OPEN/BGET#/BPUT#/CLOSE machinery
+; a BASIC program itself would use. Slot 15 is BASIC file #16 - picked simply
+; because low-numbered handles are the likeliest ones a program has open;
+; LOAD/SAVE make no attempt to coexist with a program's own use of this same
+; slot, and fail with the ordinary "already open" FILE I/O error if it is.
+LOADSAVE_HANDLE = 15
+LOADSAVE_CHUNK  = 128
+
+; ----------------------------------------------------------------------------
+; SAVE "path" : write the current program's tokenized text (TXTTAB..VARTAB)
+; to a file, LOADSAVE_CHUNK bytes at a time through the transfer buffer.
+; ----------------------------------------------------------------------------
+BASIC_SAVE:
+        jsr     FRMEVL                  ; evaluate the filename expression
+        bit     VALTYP
+        jpl     mia_typerr              ; must be a string
+        jsr     FREFAC                  ; A = length, INDEX = pointer
+        jsr     mia_sd_write_path
+        ldx     #LOADSAVE_HANDLE
+        jsr     mia_sd_select_handle
+        lda     #SD_OPEN_MODE
+        jsr     mia_sd_seek
+        lda     #FS_OPEN_WRITE_CREATE
+        sta     IDXA_PORT
+        lda     #MIA_CMD_FS_OPEN
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+
+        ; VID_COUNT (2 bytes) = remaining = VARTAB - TXTTAB; INDEX = TXTTAB.
+        ; Both are free to reuse here: VID_COUNT is private scratch for the
+        ; video/audio bulk-load loops (unrelated to program text), and INDEX
+        ; is done holding the filename pointer by the time this runs.
+        sec
+        lda     VARTAB
+        sbc     TXTTAB
+        sta     VID_COUNT
+        lda     VARTAB+1
+        sbc     TXTTAB+1
+        sta     VID_COUNT+1
+        lda     TXTTAB
+        sta     INDEX
+        lda     TXTTAB+1
+        sta     INDEX+1
+
+@chunk:
+        lda     VID_COUNT
+        ora     VID_COUNT+1
+        jeq     @done                   ; remaining == 0 -> wrote everything
+
+        ; TEMP1 = min(remaining, LOADSAVE_CHUNK)
+        lda     VID_COUNT+1
+        bne     @full                   ; remaining > 255 -> definitely a full chunk
+        lda     VID_COUNT
+        cmp     #LOADSAVE_CHUNK+1
+        bcs     @full                   ; remaining in [129,255] -> full chunk
+        sta     TEMP1                   ; remaining in [1,128] -> that's the chunk
+        jmp     @havelen
+@full:
+        lda     #LOADSAVE_CHUNK
+        sta     TEMP1
+@havelen:
+        jsr     mia_sd_select_transfer
+        ldy     #$00
+@copyout:
+        lda     (INDEX),y
+        sta     IDXA_PORT
+        iny
+        cpy     TEMP1
+        bne     @copyout
+
+        lda     #SD_REQUEST_LEN_L
+        jsr     mia_sd_seek
+        lda     TEMP1
+        sta     IDXA_PORT
+        lda     #$00
+        sta     IDXA_PORT
+        lda     #MIA_CMD_FS_WRITE
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+
+        lda     INDEX
+        clc
+        adc     TEMP1
+        sta     INDEX
+        lda     INDEX+1
+        adc     #$00
+        sta     INDEX+1
+        lda     VID_COUNT
+        sec
+        sbc     TEMP1
+        sta     VID_COUNT
+        lda     VID_COUNT+1
+        sbc     #$00
+        sta     VID_COUNT+1
+        jmp     @chunk
+
+@done:
+        ldx     #LOADSAVE_HANDLE
+        jsr     mia_sd_select_handle
+        lda     #MIA_CMD_FS_CLOSE
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+        rts
+
+; ----------------------------------------------------------------------------
+; LOAD "path" : replace the current program with a file's tokenized text,
+; LOADSAVE_CHUNK bytes at a time - the reverse of SAVE. Clears variables,
+; arrays, and the string heap exactly like NEW (via FIX_LINKS, which every
+; other platform's LOAD in this codebase also ends with - apple/kim/
+; microtan/sym1_loadsave.s). Does not return to its caller: FIX_LINKS always
+; transfers control to the READY-prompt input loop directly, whether LOAD
+; ran from direct mode or from a running program - the same as NEW/SCRTCH.
+; A failed OPEN (bad filename, no such file) is caught before any of the
+; current program is touched, so a failed LOAD leaves it intact.
+; ----------------------------------------------------------------------------
+BASIC_LOAD:
+        jsr     FRMEVL
+        bit     VALTYP
+        jpl     mia_typerr
+        jsr     FREFAC
+        jsr     mia_sd_write_path
+        ldx     #LOADSAVE_HANDLE
+        jsr     mia_sd_select_handle
+        lda     #SD_OPEN_MODE
+        jsr     mia_sd_seek
+        lda     #FS_OPEN_READ
+        sta     IDXA_PORT
+        lda     #MIA_CMD_FS_OPEN
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+
+        ; INDEX = write cursor (starts at TXTTAB); VID_COUNT here counts UP
+        ; (bytes loaded so far), not down - the file's length isn't known in
+        ; advance, so EOF is detected by a short (or zero) FS_READ instead.
+        lda     TXTTAB
+        sta     INDEX
+        lda     TXTTAB+1
+        sta     INDEX+1
+        lda     #$00
+        sta     VID_COUNT
+        sta     VID_COUNT+1
+
+@chunk:
+        ; Refuse to load past MEMSIZ - a real corruption risk feeding this a
+        ; huge or non-BASIC file. A file this LOAD actually wrote never gets
+        ; close: SAVE only ever writes up to VARTAB, itself always <= MEMSIZ.
+        sec
+        lda     MEMSIZ
+        sbc     INDEX
+        tax
+        lda     MEMSIZ+1
+        sbc     INDEX+1
+        bne     @roomok                 ; headroom's high byte nonzero -> plenty left
+        cpx     #LOADSAVE_CHUNK
+        bcs     @roomok
+        ldx     #LOADSAVE_HANDLE
+        jsr     mia_sd_select_handle
+        lda     #MIA_CMD_FS_CLOSE
+        jsr     mia_sd_cmd              ; best-effort close, ignore its own result
+        jmp     mia_fileerr
+@roomok:
+        ldx     #LOADSAVE_HANDLE
+        jsr     mia_sd_select_handle
+        lda     #SD_REQUEST_LEN_L
+        jsr     mia_sd_seek
+        lda     #LOADSAVE_CHUNK
+        sta     IDXA_PORT
+        lda     #$00
+        sta     IDXA_PORT
+        lda     #MIA_CMD_FS_READ
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+
+        lda     #SD_RESULT_LEN_L
+        jsr     mia_sd_seek
+        lda     IDXA_PORT               ; actual bytes read this chunk (never > 128)
+        sta     TEMP1
+        jeq     @eof                    ; 0 -> nothing left to read
+
+        jsr     mia_sd_select_transfer
+        ldy     #$00
+@copyin:
+        lda     IDXA_PORT
+        sta     (INDEX),y
+        iny
+        cpy     TEMP1
+        bne     @copyin
+
+        lda     INDEX
+        clc
+        adc     TEMP1
+        sta     INDEX
+        lda     INDEX+1
+        adc     #$00
+        sta     INDEX+1
+        lda     VID_COUNT
+        clc
+        adc     TEMP1
+        sta     VID_COUNT
+        lda     VID_COUNT+1
+        adc     #$00
+        sta     VID_COUNT+1
+
+        lda     TEMP1
+        cmp     #LOADSAVE_CHUNK
+        jeq     @chunk                  ; full chunk -> more may follow
+        ; short read: that was the end of the file
+@eof:
+        ldx     #LOADSAVE_HANDLE
+        jsr     mia_sd_select_handle
+        lda     #MIA_CMD_FS_CLOSE
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+
+        lda     INDEX                   ; VARTAB = TXTTAB + total bytes loaded
+        sta     VARTAB
+        lda     INDEX+1
+        sta     VARTAB+1
+        jmp     FIX_LINKS
 
 ; ----------------------------------------------------------------------------
 ; MIALOAD "path", addr[, maxlen] : load a file straight into MIA RAM at a raw

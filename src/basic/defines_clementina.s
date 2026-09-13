@@ -140,10 +140,14 @@ STYLE_SIDE_MAGIC1   := $FF
 ; note in docs/memory-map.md.
 RAMSTART2        := $5D00
 
-; storage: route the LOAD/SAVE tokens to the kernel jump table (stubs today).
+; LOAD/SAVE: a BASIC program's own tokenized text to/from an SD file - see
+; BASIC_LOAD/BASIC_SAVE in clementina_extra.s and docs/basic-file.md. Used to
+; route to the kernel jump table below (a permanent stub - KERN_LOAD/
+; KERN_SAVE are plain RTS, so "LOAD"/"SAVE" alone did nothing, and
+; "LOAD "file"" left the filename unconsumed, always a ?SYNTAX ERROR).
 KERN_LOAD := $041E
 KERN_SAVE := $0421
 SAVE:
-        jmp KERN_SAVE
+        jmp BASIC_SAVE
 LOAD:
-        jmp KERN_LOAD
+        jmp BASIC_LOAD

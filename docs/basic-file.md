@@ -40,9 +40,11 @@ repo, `docs/sd.md` and `docs/sd-programmer-guide.md`.
 | `DIR "path"` | — | List `path` without changing the current directory. |
 | `MIALOAD "path", addr[, maxlen]` | `addr` 0–16777215 | Load a file straight into MIA RAM at a raw address, no CPU byte-touching. Omitted/zero `maxlen` reads until EOF or the end of MIA RAM. |
 | `MIASAVE "path", addr, len` | | Save `len` bytes of MIA RAM starting at `addr` to a file. |
+| `LOAD "path"` | — | Replace the current program with a saved one. |
+| `SAVE "path"` | — | Save the current program. |
 
 `OPEN`, `CLOSE`, `BGET#`, `BPUT#`, `SEEK#`, `EOF`, `KILL`, `MKDIR`, `RMDIR`,
-`NAME`, `CD`, and `DIR` are reserved words.
+`NAME`, `CD`, `DIR`, `LOAD`, and `SAVE` are reserved words.
 
 Out-of-range file numbers (0, or above 16) raise `ILLEGAL QUANTITY`. A string
 expression is required wherever a path is expected; a number there raises
@@ -76,6 +78,30 @@ expression is required wherever a path is expected; a number there raises
 (sizes and dates are not printed). `CD` requires an existing directory —
 `CD "NOPE"` on a directory that does not exist raises `FILE I/O ERROR` and
 leaves the current directory unchanged.
+
+### Program LOAD/SAVE
+
+```basic
+10 PRINT "HELLO"
+20 END
+SAVE "HELLO.BAS"
+NEW
+LOAD "HELLO.BAS"
+RUN
+```
+
+`LOAD`/`SAVE` move the current program's own tokenized text (not MIA RAM, and
+not related to `MIALOAD`/`MIASAVE` below) between BASIC's workspace and a
+file. `SAVE` doesn't touch the running program; `LOAD` replaces it entirely —
+variables, arrays, and strings are all cleared exactly like `NEW`, so it
+behaves the same whether typed directly or reached from a running program's
+own statement (there is no returning to "after the `LOAD`"). A failed `LOAD`
+(bad filename, no such file) is caught before anything is touched, so the
+current program survives.
+
+`LOAD`/`SAVE` use file handle 16 internally to stream the program through the
+same file I/O this whole page describes — close it first if a program has it
+open when calling either.
 
 ## Video/audio asset family
 
