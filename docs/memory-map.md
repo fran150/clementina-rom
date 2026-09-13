@@ -206,7 +206,7 @@ combined kernel+BASIC image is ~11.4 KiB. Notable internal routines:
 
 ---
 
-## 7.5. Background-PLAY control block (`$4C00–$4C8F`)
+## 7.5. Background-PLAY control block (`$5C00–$5C8F`)
 
 Fixed RAM between the loaded image and `RAMSTART2`, defined as plain equates
 in `src/basic/clementina_extra.s` (`BGP_*`) exactly like `KVARS`/`KJIFFY` —
@@ -229,6 +229,14 @@ et al.) independently of whatever the foreground interpreter is doing:
 | `+$0C` | `BGP_TMP` | 2 | General parser scratch (digit accumulation, dotted-length halving). |
 | `+$0E` | `BGP_BUF` | 128 | The background MML string, copied here from BASIC's string heap at `PLAY s$,n` time so it survives independently of GC/reassignment/`CLR`. |
 
+Right after this block (`$5C8F–$5CB6`, still below `RAMSTART2`, same
+"costs no ROM bytes" reasoning): `DIR_NAME_BUF` (40 bytes), a transient
+scratch buffer `DIR` (`docs/basic-file.md`) reads one directory entry's name
+into before printing any of it. It is unrelated to the background player —
+placed here only because this was the free space available — and is not
+"live" the way `BGP_*` is: nothing needs it to survive between `DIR`
+invocations.
+
 `PLAY s$,n` (`n<>0`) copies `s$` in here and sets `BGP_FLAGS`; `bg_play_tick`
 (called from `irq_handler` right after the `KJIFFY` bump) counts `BGP_TICKS`
 down and, at zero, parses the next MML token via a private mirror of blocking
@@ -239,21 +247,26 @@ string just stops the player. See `docs/basic-sound.md`.
 
 ---
 
-## 8. BASIC free workspace (`$4D01 … $BFFF`)
+## 8. BASIC free workspace (`$5D01 … $BFFF`)
 
 At runtime BASIC's program text, variables, arrays, and strings live between
-`TXTTAB` and `MEMSIZ`. Clementina currently sets `RAMSTART2 = $4D00`, above
-both the combined kernel+BASIC+monitor image (capped at `$4C00` by
-`MAX_KERNEL_BYTES`) and the background-PLAY control block above (`$4C00–$4C8F`).
+`TXTTAB` and `MEMSIZ`. Clementina currently sets `RAMSTART2 = $5D00`, above
+both the combined kernel+BASIC+monitor image (capped at `$5800` by
+`MAX_KERNEL_BYTES`) and the background-PLAY control block above (`$5C00–$5C8F`,
+plus `DIR_NAME_BUF` through `$5CB6`).
 Cold start selects Extended RAM bank 0 and caps `MEMSIZ` at `$C000`,
 immediately before the I/O region. The empty program marker advances `TXTTAB`
-to `$4D01`, giving BASIC ~29,439 bytes. `make` fails if `build/kernel.bin`
-grows past the `$4C00` boundary, because BASIC's cold-start RAM probe writes
-from `RAMSTART2` upward. (`RAMSTART2` was raised from `$3600` to make room for
-the extension-token command set, then to `$4000`, then to `$4500` for the
-background-PLAY control block, then to `$4D00` (2026-09) for the video
-bulk-load commands and `BGCHAR`/sprite single-field setters — see
-`docs/basic-video.md`; raise it further, in lockstep with `MAX_KERNEL_BYTES`
+to `$5D01`, giving BASIC ~25,343 bytes (confirmed against the boot banner's own
+"BYTES FREE" line). `make` fails if `build/kernel.bin` grows past the `$5800`
+boundary, because BASIC's cold-start RAM probe writes from `RAMSTART2` upward.
+(`RAMSTART2` was raised from `$3600` to make room for the extension-token
+command set, then to `$4000`, then to `$4500` for the background-PLAY control
+block, then to `$4D00` (2026-09) for the video bulk-load commands and
+`BGCHAR`/sprite single-field setters — see `docs/basic-video.md` — then to
+`$5D00` (2026-09) for the SD/FS multi-handle file I/O command set (`OPEN`/
+`CLOSE`/`BGET#`/`BPUT#`/`MIALOAD`/`MIASAVE`, the video/audio asset family's
+file-sourced forms, `SEEK#`/`KILL`/`MKDIR`/`RMDIR`/`NAME`/`EOF`, `CD`/`DIR`) —
+see `docs/basic-file.md`; raise it further, in lockstep with `MAX_KERNEL_BYTES`
 and `BGP_BASE`, as more commands are added. This is a self-imposed software
 convention, not a 6502/65C02 hardware limit — the CPU addresses a full 64K and
 the linker's own `MAIN` region allows the combined image up to 31 KiB; nothing
@@ -268,10 +281,10 @@ bound) — grep both for the old hex value before changing `RAMSTART2` again.
 > **Known landmine — avoid `TXTTAB` in ~`[$39FE, $3AC0]`.** A pre-existing latent
 > bug (present on the stock baseline, independent of the extension tokens) makes
 > `INPUT` misread its buffer and re-prompt `??` when the program text begins in
-> that ~200-byte window. `$3600` and `$3B00`+ are unaffected; `$4D00` clears it
-> with even more margin than `$4500` did. Root cause not yet diagnosed; keep
-> `RAMSTART2` clear of that window when choosing future values (`$5000`, `$6000`,
-> … are all fine).
+> that ~200-byte window. `$3600` and `$3B00`+ are unaffected; `$4D00`/`$5D00`
+> clear it with even more margin than `$4500` did. Root cause not yet
+> diagnosed; keep `RAMSTART2` clear of that window when choosing future values
+> (`$6000`, `$7000`, … are all fine).
 
 Bank 0 must remain selected while BASIC is active: changing PA0-PA4 would replace
 the portion of its live workspace at `$8000-$BFFF`. Kernel warm start therefore

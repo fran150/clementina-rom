@@ -21,14 +21,18 @@ KERNEL_BIN  := $(BUILD_DIR)/kernel.bin
 BASIC_SRC   := $(BASIC_DIR)/msbasic.s
 # WOZ monitor, linked into the image and reachable via KERN_WOZMON ($042A).
 MONITOR_SRC := $(MONITOR_DIR)/wozmon-clementina.s
-# MIA loads the image at $0400 and BASIC RAM starts at RAMSTART2=$4D00
-# (src/basic/defines_clementina.s), so the binary must fit below $4C00 - the
-# background-PLAY control block occupies $4C00-$4C8F, fixed RAM below RAMSTART2
+# MIA loads the image at $0400 and BASIC RAM starts at RAMSTART2=$5D00
+# (src/basic/defines_clementina.s), so the binary must fit below $5C00 - the
+# background-PLAY control block occupies $5C00-$5C8F, fixed RAM below RAMSTART2
 # (see clementina_extra.s BGP_* equates), not part of the loaded image.
-# Raised from $4400 (MAX_KERNEL_BYTES 16384) to $4C00 (18432) for the video
-# bulk-load commands (BGLOAD/CHRLOAD/PALLOAD) and BGCHAR/sprite single-field
-# setters; bump MAX_KERNEL_BYTES/RAMSTART2/BGP_* together as more commands land.
-MAX_KERNEL_BYTES := 18432
+# Raised from $4400 (16384) to $4C00 (18432) for the video bulk-load commands
+# (BGLOAD/CHRLOAD/PALLOAD) and BGCHAR/sprite single-field setters; raised again
+# to $5800 (22528) for file I/O (OPEN/CLOSE/BGET#/BPUT#), the generic MIA RAM
+# loader (MIALOAD/MIASAVE), and the video/audio asset family's *READ/*LOAD/
+# *SAVE split (see docs/basic-file.md) - deliberate headroom (not just enough
+# to fit) for the still-remaining file-management commands (DIR/CD/MKDIR/etc).
+# Bump MAX_KERNEL_BYTES/RAMSTART2/BGP_* together as more commands land.
+MAX_KERNEL_BYTES := 22528
 
 # Destinations for the kernel image. Override on the command line if your
 # checkouts live elsewhere, e.g.  make install MIA_DIR=... EMU_DIR=...

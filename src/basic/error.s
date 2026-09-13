@@ -46,4 +46,7 @@ define_error ERR_BADDATA, "FILE DATA"
 define_error ERR_FRMCPX, "FORMULA TOO COMPLEX"
 define_error ERR_CANTCONT, "CAN'T CONTINUE"
 define_error ERR_UNDEFFN, "UNDEF'D FUNCTION"
+.ifdef CLEMENTINA
+define_error ERR_FILEIO, "FILE I/O"
+.endif
 .endif

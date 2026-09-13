@@ -738,6 +738,8 @@ LC49E:
         jcs     L246C           ; matched: TOKENIZE_EXTFN already stored both bytes
         jsr     TOKENIZE_EXT    ; extension keywords -> TOKEN_EXT + subtoken
         jcs     L246C           ; matched: TOKENIZE_EXT already stored both bytes
+        jsr     TOKENIZE_EXT2   ; 2nd extension table -> TOKEN_EXT2 + subtoken
+        jcs     L246C           ; matched: TOKENIZE_EXT2 already stored both bytes
 .endif
         cmp     #$30
         bcc     L248C
@@ -966,6 +968,59 @@ TOKENIZE_EXT:
         lda     EXT_NAME_TABLE-1,y
         bpl     @skip           ; scan to the end (high-bit char) of this name
         lda     EXT_NAME_TABLE,y
+        bne     @compare        ; another keyword follows -> try it
+        ; --- end of table: no extension keyword matched ---
+        ldx     TXTPTR          ; restore input index (word start)
+        ldy     STRNG2          ; restore crunch output index
+        lda     INPUTBUFFERX,x  ; A = current char, for the caller's cmp #$30
+        clc
+        rts
+
+; ----------------------------------------------------------------------------
+; TOKENIZE_EXT2 - identical to TOKENIZE_EXT above, but matches against
+; EXT2_NAME_TABLE and crunches to TOKEN_EXT2 + subtoken. The second extension
+; statement table (see macros.s) - TOKEN_EXT's own table filled up.
+; ----------------------------------------------------------------------------
+TOKENIZE_EXT2:
+        sty     STRNG2          ; save crunch output index
+        ldy     #$00
+        sty     EOLPNTR         ; extension keyword index = 0
+        dey                     ; Y = $FF (name-table index, pre-incremented)
+        stx     TXTPTR          ; input word start
+        dex                     ; X = start-1 (pre-incremented)
+@advance:
+        iny
+@nextin:
+        inx
+@compare:
+        lda     INPUTBUFFERX,x
+        jsr     TOKEN_UPPER     ; fold case, exactly like the primary search
+        sec
+        sbc     EXT2_NAME_TABLE,y
+        beq     @advance        ; char matches (not final) -> step both
+        cmp     #$80            ; matched the final (high-bit) char?
+        bne     @nextkw
+        ; --- MATCH: A=$80, X on last char, EOLPNTR=index, Y=name index ---
+        ora     EOLPNTR         ; A = subtoken = $80 | index
+        ldy     STRNG2          ; Y = crunch output index
+        iny
+        pha
+        lda     #TOKEN_EXT2
+        sta     INPUTBUFFER-5,y ; store the prefix byte
+        pla
+        iny
+        sta     INPUTBUFFER-5,y ; store the subtoken byte
+        inx                     ; X: last keyword char -> next input char
+        sec                     ; C=1: caller resumes the main loop
+        rts
+@nextkw:
+        ldx     TXTPTR          ; reset input to the word start
+        inc     EOLPNTR         ; advance to the next extension keyword
+@skip:
+        iny
+        lda     EXT2_NAME_TABLE-1,y
+        bpl     @skip           ; scan to the end (high-bit char) of this name
+        lda     EXT2_NAME_TABLE,y
         bne     @compare        ; another keyword follows -> try it
         ; --- end of table: no extension keyword matched ---
         ldx     TXTPTR          ; restore input index (word start)
@@ -1460,6 +1515,31 @@ L25E5a:
         jsr     OUTDO
         bne     @ext_l3         ; always (name chars are nonzero)
 @not_ext_token:
+        cmp     #TOKEN_EXT2
+        bne     @not_ext2_token
+        ; Second extension keyword table - mirrors @not_ext_token above.
+        iny
+        lda     (LOWTRX),y      ; A = subtoken
+        sty     FORPNT          ; resume the list loop after the subtoken byte
+        sec
+        sbc     #$7F            ; index+1 (subtoken $80 -> 1)
+        tax
+        ldy     #$FF
+@ext2_l1:
+        dex
+        beq     @ext2_l3
+@ext2_l2:
+        iny
+        lda     EXT2_NAME_TABLE,y
+        bpl     @ext2_l2
+        bmi     @ext2_l1
+@ext2_l3:
+        iny
+        lda     EXT2_NAME_TABLE,y
+        jmi     L25CA           ; final char (high bit) -> mask, output, continue
+        jsr     OUTDO
+        bne     @ext2_l3        ; always (name chars are nonzero)
+@not_ext2_token:
 .endif
 .ifdef CONFIG_DATAFLG
         cmp     #$FF

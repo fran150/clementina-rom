@@ -93,6 +93,40 @@ EXT_ADDRESS_TABLE_END:
 .endmacro
 
 ; ----------------------------------------------------------------------------
+; Second extension keyword table (two-byte tokens: TOKEN_EXT2 prefix +
+; subtoken). Identical shape to the EXT table above, in its own segments
+; (EXT2VEC/EXT2KEYW) for a second, independent 256-byte/128-entry budget -
+; the file-I/O and asset-family commands outgrew the first table's budget,
+; the same reason TOKEN_EXTFN exists below for the function table. See the
+; tokenizer (TOKENIZE_EXT2), dispatch (EXECUTE_STATEMENT1 @ext2) and LIST
+; hooks in program.s / flow1.s.
+; ----------------------------------------------------------------------------
+.macro init_ext2_token_tables
+        .segment "EXT2VEC"
+EXT2_ADDRESS_TABLE:
+        .segment "EXT2KEYW"
+EXT2_NAME_TABLE:
+.endmacro
+
+.macro ext2_keyword_rts key, vec
+        .segment "EXT2VEC"
+		.word	vec-1
+        .segment "EXT2KEYW"
+		htasc	key
+.endmacro
+
+.macro end_ext2_token_tables
+        .segment "EXT2KEYW"
+		.byte	0                       ; name-table terminator
+EXT2_NAME_TABLE_END:
+        .segment "EXT2VEC"
+EXT2_ADDRESS_TABLE_END:
+		NUM_EXT2_TOKENS = <((EXT2_ADDRESS_TABLE_END - EXT2_ADDRESS_TABLE) / 2)
+		.assert (EXT2_NAME_TABLE_END - EXT2_NAME_TABLE) <= 256, error, "extension keyword name table #2 exceeds 256 bytes"
+		.assert (EXT2_ADDRESS_TABLE_END - EXT2_ADDRESS_TABLE) <= 256, error, "extension address table #2 exceeds 128 entries"
+.endmacro
+
+; ----------------------------------------------------------------------------
 ; Extension FUNCTION keyword tables (two-byte tokens: TOKEN_EXTFN prefix +
 ; subtoken). Same shape as the extension statement tables above, but the
 ; address table holds a plain .addr (like keyword_addr/UNFNC), not an RTS-style

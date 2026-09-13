@@ -63,6 +63,12 @@ TOKEN_EXT        := $FF
 ; TOKEN_MON ($FE) / TOKEN_EXT ($FF).
 TOKEN_EXTFN      := $FD
 
+; Second extension-token prefix. Same idea as TOKEN_EXT, in its own two-byte
+; TOKEN_EXT2 + subtoken form with its own independent 256-byte/128-token
+; budget - the file-I/O and video/audio asset-family commands outgrew
+; TOKEN_EXT's single table. $FC is free: the next slot down from TOKEN_EXTFN.
+TOKEN_EXT2       := $FC
+
 ; ----------------------------------------------------------------------------
 ; Styled strings (see docs/styled-strings.md)
 ; ----------------------------------------------------------------------------
@@ -111,28 +117,28 @@ STYLE_SIDE_MAGIC1   := $FF
 ; memory layout
 ; BASIC program/variable workspace starts safely above the combined
 ; kernel+BASIC image. Keep this in sync with Makefile's MAX_KERNEL_BYTES guard:
-; MIA loads the image at $0400, so with MAX_KERNEL_BYTES=$4800 the loaded image
-; (kernel + BASIC + WOZ monitor) must fit below $4C00. Background-PLAY's fixed
-; control block occupies $4C00-$4C8F (BGP_* in clementina_extra.s, not part of
-; the loaded image - equates only, like KVARS), leaving RAMSTART2=$4D00 as
+; MIA loads the image at $0400, so with MAX_KERNEL_BYTES=$5800 the loaded image
+; (kernel + BASIC + WOZ monitor) must fit below $5C00. Background-PLAY's fixed
+; control block occupies $5C00-$5C8F (BGP_* in clementina_extra.s, not part of
+; the loaded image - equates only, like KVARS), leaving RAMSTART2=$5D00 as
 ; BASIC's free-RAM floor. BASIC continues through Extended RAM bank 0 at
-; $8000-$BFFF and uses $C000 as its exclusive memory ceiling, giving it a
-; ~28,927-byte workspace after the initial empty-program marker (2048 bytes
-; less than before this bump, still ample for BASIC programs). Bump
+; $8000-$BFFF and uses $C000 as its exclusive memory ceiling. Bump
 ; MAX_KERNEL_BYTES/RAMSTART2/BGP_* together as more commands land.
 ;
-; Raised from $4500 to $4D00 (2026-09) for the video bulk-load commands
-; (BGLOAD/CHRLOAD/PALLOAD) plus BGCHAR and the single-field sprite setters -
-; deliberate headroom (not just enough to fit) after landing OAMLOAD/SPRITE
-; exactly at the previous $4400 ceiling took three rounds of cutting features
-; to fit. See docs/basic-video.md.
+; Raised from $4D00 to $5D00 (2026-09) for file I/O (OPEN/CLOSE/BGET#/BPUT#),
+; the generic MIA RAM loader (MIALOAD/MIASAVE), and the video/audio asset
+; family's *READ/*LOAD/*SAVE split (see docs/basic-file.md) - deliberate
+; headroom for the still-remaining file-management commands (DIR/CD/MKDIR/
+; etc), not just enough to fit today. This also needed a second extension
+; token table (TOKEN_EXT2 in defines_clementina.s/macros.s/token.s): the
+; first table's 256-byte keyword-name budget filled up.
 ;
 ; AVOID TXTTAB in ~[$39FE, $3AC0]: a pre-existing latent bug (reproduces on stock
 ; baseline, unrelated to the extension tokens) makes INPUT misread its buffer and
 ; re-prompt "??" when the program text starts in that ~200-byte window. $3600 and
-; $3B00+ are fine; $4D00 clears it with even more margin than $4500 did. See the
+; $3B00+ are fine; $5D00 clears it with even more margin than $4D00 did. See the
 ; note in docs/memory-map.md.
-RAMSTART2        := $4D00
+RAMSTART2        := $5D00
 
 ; storage: route the LOAD/SAVE tokens to the kernel jump table (stubs today).
 KERN_LOAD := $041E

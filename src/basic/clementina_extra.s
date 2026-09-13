@@ -1229,7 +1229,23 @@ bgc_check_row:
 ; current DATA position into raw BG table `table` (0-7), starting at cell
 ; `cell` (0-999). Writes the nametable and attribute planes in lockstep -
 ; author DATA as tile0,attr0,tile1,attr1,...
-BASIC_BGLOAD:
+; ============================================================================
+; File-sourced asset I/O (see docs/basic-file.md): CHRREAD/PALREAD/OAMREAD/
+; NTREAD/ATRREAD bulk-load from the current DATA position, exactly as
+; CHRLOAD/PALLOAD/OAMLOAD/BGLOAD used to (BGLOAD itself is retired - its
+; interleaved nametable+attribute case is now two calls, NTREAD/NTLOAD +
+; ATRREAD/ATRLOAD). CHRLOAD/PALLOAD/OAMLOAD/NTLOAD/ATRLOAD now instead mean
+; "load from an SD file" (matching classic LOAD's real meaning - storage, not
+; DATA), with *SAVE siblings for the reverse. All ten share the exact address
+; computation their *READ twin already had, differing only in where the bytes
+; come from/go: vid_bulk_run for *READ, mia_sd_load_trigger/
+; mia_sd_save_trigger (this file, near BASIC_OPEN) for the rest.
+; ============================================================================
+
+; NTREAD table,cell,count : bulk-load `count` raw nametable (tile) bytes from
+; the current DATA position into raw BG table `table` (0-7), starting at
+; `cell` (0-999).
+BASIC_NTREAD:
         jsr     GETBYT                  ; X = table 0-7
         cpx     #$08
         jcs     snd_iqerr
@@ -1244,12 +1260,8 @@ BASIC_BGLOAD:
         sbc     #>1000
         jcs     snd_iqerr
         pla                             ; A = table
-        pha
         jsr     bg_seek_nt              ; VID_ADDR = nametable base + table*1000
         jsr     vid_addr_add16          ; + cell
-        pla
-        jsr     bg_seek_attr            ; VID_ADDR2 = attr base + table*1000
-        jsr     vid_addr_add16_2        ; + cell
         jsr     CHKCOM
         jsr     FRMNUM
         jsr     GETADR                  ; count -> LINNUM/LINNUM+1
@@ -1257,16 +1269,177 @@ BASIC_BGLOAD:
         sta     VID_COUNT
         lda     LINNUM+1
         sta     VID_COUNT+1
-        lda     #2
+        lda     #1
         sta     VID_STRIDE
-        lda     #%00000010
+        lda     #0
         sta     VID_STREAM2
         jmp     vid_bulk_run
 
-; CHRLOAD bank,offset,count : bulk-load `count` raw tile/graphics bytes from
+; NTLOAD table,cell,count,"file" : as NTREAD, but reads from a file.
+BASIC_NTLOAD:
+        jsr     GETBYT
+        cpx     #$08
+        jcs     snd_iqerr
+        txa
+        pha
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR
+        lda     LINNUM
+        cmp     #<1000
+        lda     LINNUM+1
+        sbc     #>1000
+        jcs     snd_iqerr
+        pla
+        jsr     bg_seek_nt
+        jsr     vid_addr_add16
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR                  ; count -> LINNUM/LINNUM+1
+        lda     LINNUM
+        sta     VID_COUNT
+        lda     LINNUM+1
+        sta     VID_COUNT+1
+        jsr     mia_parse_path_arg
+        jmp     mia_sd_load_trigger
+
+; NTSAVE table,cell,count,"file" : as NTLOAD, in reverse (nametable -> file).
+BASIC_NTSAVE:
+        jsr     GETBYT
+        cpx     #$08
+        jcs     snd_iqerr
+        txa
+        pha
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR
+        lda     LINNUM
+        cmp     #<1000
+        lda     LINNUM+1
+        sbc     #>1000
+        jcs     snd_iqerr
+        pla
+        jsr     bg_seek_nt
+        jsr     vid_addr_add16
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR
+        lda     LINNUM
+        sta     VID_COUNT
+        lda     LINNUM+1
+        sta     VID_COUNT+1
+        jsr     mia_parse_path_arg
+        jmp     mia_sd_save_trigger
+
+; ATRREAD table,cell,count : as NTREAD, but the attribute half of the table.
+BASIC_ATRREAD:
+        jsr     GETBYT                  ; X = table 0-7
+        cpx     #$08
+        jcs     snd_iqerr
+        txa
+        pha
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR
+        lda     LINNUM
+        cmp     #<1000
+        lda     LINNUM+1
+        sbc     #>1000
+        jcs     snd_iqerr
+        pla                             ; A = table
+        jsr     bg_seek_attr            ; VID_ADDR2 = attr base + table*1000
+        lda     VID_ADDR2               ; copy to VID_ADDR: this is the
+        sta     VID_ADDR                ; single-stream path (STREAM2=0), and
+        lda     VID_ADDR2+1             ; vid_bulk_run/mia_sd_*_trigger only
+        sta     VID_ADDR+1              ; ever read VID_ADDR, never VID_ADDR2
+        lda     VID_ADDR2+2             ; (that register is BGCHAR/BGLOAD's
+        sta     VID_ADDR+2              ; own dual-stream second target)
+        jsr     vid_addr_add16          ; + cell
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR                  ; count -> LINNUM/LINNUM+1
+        lda     LINNUM
+        sta     VID_COUNT
+        lda     LINNUM+1
+        sta     VID_COUNT+1
+        lda     #1
+        sta     VID_STRIDE
+        lda     #0
+        sta     VID_STREAM2
+        jmp     vid_bulk_run
+
+; ATRLOAD table,cell,count,"file" : as ATRREAD, but reads from a file.
+BASIC_ATRLOAD:
+        jsr     GETBYT
+        cpx     #$08
+        jcs     snd_iqerr
+        txa
+        pha
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR
+        lda     LINNUM
+        cmp     #<1000
+        lda     LINNUM+1
+        sbc     #>1000
+        jcs     snd_iqerr
+        pla
+        jsr     bg_seek_attr            ; VID_ADDR2 = attr base + table*1000
+        lda     VID_ADDR2               ; copy to VID_ADDR - see ATRREAD above
+        sta     VID_ADDR
+        lda     VID_ADDR2+1
+        sta     VID_ADDR+1
+        lda     VID_ADDR2+2
+        sta     VID_ADDR+2
+        jsr     vid_addr_add16          ; + cell
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR
+        lda     LINNUM
+        sta     VID_COUNT
+        lda     LINNUM+1
+        sta     VID_COUNT+1
+        jsr     mia_parse_path_arg
+        jmp     mia_sd_load_trigger
+
+; ATRSAVE table,cell,count,"file" : as ATRLOAD, in reverse (attrs -> file).
+BASIC_ATRSAVE:
+        jsr     GETBYT
+        cpx     #$08
+        jcs     snd_iqerr
+        txa
+        pha
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR
+        lda     LINNUM
+        cmp     #<1000
+        lda     LINNUM+1
+        sbc     #>1000
+        jcs     snd_iqerr
+        pla
+        jsr     bg_seek_attr            ; VID_ADDR2 = attr base + table*1000
+        lda     VID_ADDR2               ; copy to VID_ADDR - see ATRREAD above
+        sta     VID_ADDR
+        lda     VID_ADDR2+1
+        sta     VID_ADDR+1
+        lda     VID_ADDR2+2
+        sta     VID_ADDR+2
+        jsr     vid_addr_add16          ; + cell
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR
+        lda     LINNUM
+        sta     VID_COUNT
+        lda     LINNUM+1
+        sta     VID_COUNT+1
+        jsr     mia_parse_path_arg
+        jmp     mia_sd_save_trigger
+
+; CHRREAD bank,offset,count : bulk-load `count` raw tile/graphics bytes from
 ; the current DATA position into CHR bank `bank` (0-7), starting at byte
 ; `offset` (0-6143).
-BASIC_CHRLOAD:
+BASIC_CHRREAD:
         jsr     GETBYT                  ; X = bank 0-7
         cpx     #$08
         jcs     snd_iqerr
@@ -1296,10 +1469,66 @@ BASIC_CHRLOAD:
         sta     VID_STREAM2
         jmp     vid_bulk_run
 
-; PALLOAD bank,offset,count : bulk-load `count` raw palette bytes from the
+; CHRLOAD bank,offset,count,"file" : as CHRREAD, but reads from a file.
+BASIC_CHRLOAD:
+        jsr     GETBYT
+        cpx     #$08
+        jcs     snd_iqerr
+        txa
+        pha
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR
+        lda     LINNUM
+        cmp     #<6144
+        lda     LINNUM+1
+        sbc     #>6144
+        jcs     snd_iqerr
+        pla
+        jsr     chr_seek
+        jsr     vid_addr_add16
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR                  ; count -> LINNUM/LINNUM+1
+        lda     LINNUM
+        sta     VID_COUNT
+        lda     LINNUM+1
+        sta     VID_COUNT+1
+        jsr     mia_parse_path_arg
+        jmp     mia_sd_load_trigger
+
+; CHRSAVE bank,offset,count,"file" : as CHRLOAD, in reverse (CHR -> file).
+BASIC_CHRSAVE:
+        jsr     GETBYT
+        cpx     #$08
+        jcs     snd_iqerr
+        txa
+        pha
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR
+        lda     LINNUM
+        cmp     #<6144
+        lda     LINNUM+1
+        sbc     #>6144
+        jcs     snd_iqerr
+        pla
+        jsr     chr_seek
+        jsr     vid_addr_add16
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR
+        lda     LINNUM
+        sta     VID_COUNT
+        lda     LINNUM+1
+        sta     VID_COUNT+1
+        jsr     mia_parse_path_arg
+        jmp     mia_sd_save_trigger
+
+; PALREAD bank,offset,count : bulk-load `count` raw palette bytes from the
 ; current DATA position, starting `offset` bytes into palette bank `bank`
 ; (each bank is 16 bytes: 8 colors x RGB565).
-BASIC_PALLOAD:
+BASIC_PALREAD:
         jsr     GETBYT                  ; X = bank 0-15
         cpx     #$10
         jcs     snd_iqerr
@@ -1330,10 +1559,68 @@ BASIC_PALLOAD:
         sta     VID_STREAM2
         jmp     vid_bulk_run
 
-; OAMLOAD n,count : bulk-load `count` sprites' raw 5-byte OAM records
+; PALLOAD bank,offset,count,"file" : as PALREAD, but reads from a file.
+BASIC_PALLOAD:
+        jsr     GETBYT
+        cpx     #$10
+        jcs     snd_iqerr
+        txa
+        asl     a
+        asl     a
+        asl     a
+        asl     a
+        sta     TEMP2
+        jsr     COMBYTE                 ; X = offset 0-15
+        cpx     #$10
+        jcs     snd_iqerr
+        txa
+        clc
+        adc     TEMP2
+        sta     VID_ADDR
+        lda     #$01
+        sta     VID_ADDR+1
+        lda     #$00
+        sta     VID_ADDR+2
+        jsr     COMBYTE                 ; X = count
+        stx     VID_COUNT
+        lda     #$00
+        sta     VID_COUNT+1
+        jsr     mia_parse_path_arg
+        jmp     mia_sd_load_trigger
+
+; PALSAVE bank,offset,count,"file" : as PALLOAD, in reverse (palette -> file).
+BASIC_PALSAVE:
+        jsr     GETBYT
+        cpx     #$10
+        jcs     snd_iqerr
+        txa
+        asl     a
+        asl     a
+        asl     a
+        asl     a
+        sta     TEMP2
+        jsr     COMBYTE
+        cpx     #$10
+        jcs     snd_iqerr
+        txa
+        clc
+        adc     TEMP2
+        sta     VID_ADDR
+        lda     #$01
+        sta     VID_ADDR+1
+        lda     #$00
+        sta     VID_ADDR+2
+        jsr     COMBYTE                 ; X = count
+        stx     VID_COUNT
+        lda     #$00
+        sta     VID_COUNT+1
+        jsr     mia_parse_path_arg
+        jmp     mia_sd_save_trigger
+
+; OAMREAD n,count : bulk-load `count` sprites' raw 5-byte OAM records
 ; (tile,xlo,ylo,attr,ext - see docs/basic-video.md for the attr/ext bit
 ; layout) from the current DATA position, starting at OAM index `n` (0-255).
-BASIC_OAMLOAD:
+BASIC_OAMREAD:
         jsr     GETBYT                  ; X = n
         txa
         jsr     oam_seek_n
@@ -1346,6 +1633,30 @@ BASIC_OAMLOAD:
         lda     #0
         sta     VID_STREAM2
         jmp     vid_bulk_run
+
+; OAMLOAD n,count,"file" : as OAMREAD, but reads from a file.
+BASIC_OAMLOAD:
+        jsr     GETBYT                  ; X = n
+        txa
+        jsr     oam_seek_n
+        jsr     COMBYTE                 ; X = count
+        stx     VID_COUNT
+        lda     #0
+        sta     VID_COUNT+1
+        jsr     mia_parse_path_arg
+        jmp     mia_sd_load_trigger
+
+; OAMSAVE n,count,"file" : as OAMLOAD, in reverse (OAM -> file).
+BASIC_OAMSAVE:
+        jsr     GETBYT                  ; X = n
+        txa
+        jsr     oam_seek_n
+        jsr     COMBYTE                 ; X = count
+        stx     VID_COUNT
+        lda     #0
+        sta     VID_COUNT+1
+        jsr     mia_parse_path_arg
+        jmp     mia_sd_save_trigger
 
 ; SPRITE n,tile,x,y,pal,flags : full OAM entry setup in one call. n 0-255
 ; (OAM index), tile 0-255, x -512..511, y -256..255, pal 0-15, flags: bit0
@@ -2659,7 +2970,7 @@ styled_outc:
 .endif
 
 ; ============================================================================
-; Background PLAY - fixed RAM control block, below RAMSTART2 ($4D00). Plain
+; Background PLAY - fixed RAM control block, below RAMSTART2 ($5D00). Plain
 ; equates, never part of the loaded image (same pattern as KVARS/KJIFFY) - see
 ; Makefile MAX_KERNEL_BYTES and defines_clementina.s RAMSTART2. Persists across
 ; arbitrary BASIC execution between IRQ calls, so unlike blocking PLAY's
@@ -2671,7 +2982,7 @@ styled_outc:
 ; addressing (bg_peek) - (ptr),y indirect addressing (like INDEX in blocking
 ; PLAY) only works for zero-page pointers, and BGP_BUF is deliberately NOT in
 ; zero page (see the block header comment above).
-BGP_BASE        = $4C00
+BGP_BASE        = $5C00
 BGP_FLAGS       = BGP_BASE + $00       ; bit0: background player active
 BGP_IDX         = BGP_BASE + $01       ; read cursor into BGP_BUF (0-127)
 BGP_LEN         = BGP_BASE + $02       ; valid bytes in BGP_BUF
@@ -2688,6 +2999,19 @@ BGP_TMP         = BGP_BASE + $0C       ; [2] bg parser scratch (digits / dotted-
 BGP_SP          = BGP_BASE + $0E       ; saved 6502 stack pointer - see bg_next_event
 BGP_BUF         = BGP_BASE + $0F       ; [128] copied MML text
 BGP_BUF_SIZE    = 128
+
+; DIR's own scratch, in the free space between BGP_BUF and RAMSTART2 ($5D00) -
+; a name must be fully read out of the MIA dir-entry window into CPU RAM
+; before any of it is printed. MONCOUT (kernel CHROUT) draws to the screen
+; through MIA's own indexed-RAM window mechanism (the same IDXA_SELECT/
+; IDXA_PORT pair DIR itself uses to read FS_READDIR results), so interleaving
+; a read with a MONCOUT call lets CHROUT's own use of window A silently
+; reposition it out from under DIR - confirmed the hard way: only an entry's
+; first character came out right, with the rest replaced by whatever CHROUT
+; had just left window A pointing at. 40 bytes comfortably covers any
+; filename this console can usefully display (a 40-column screen).
+DIR_NAME_BUF      = BGP_BUF + BGP_BUF_SIZE
+DIR_NAME_BUF_SIZE = 40
 
 BGP_FLAG_PLAYING = $01
 
@@ -3243,3 +3567,800 @@ bg_num_req:
         jsr     bg_num
         jcc     bg_next_event_bad
         rts
+
+; ============================================================================
+; File I/O (see docs/basic-file.md): OPEN/CLOSE/BGET#/BPUT# against MIA's
+; SD/FAT layer. BASIC-visible file numbers 1-16 map directly onto MIA's 16
+; file-handle slots (SD_HANDLE_SELECT), one-to-one, with no allocator - the
+; programmer picks the number, same as every historical BASIC's OPEN. See
+; clementina-mia docs/sd.md and sd-programmer-guide.md for the protocol this
+; wraps.
+; ============================================================================
+
+; MIA SD/FS register subset. BASIC does not include kernel.inc; full map in
+; src/kernel/kernel.inc and the clementina-mia repo.
+STATUS_H              = $FFEB
+
+MIA_SD_INDEX_CONTROL  = $E0
+MIA_FS_INDEX_PATH     = $E2
+MIA_FS_INDEX_TRANSFER = $E4
+MIA_FS_INDEX_PATH2    = $E5    ; FS_RENAME's destination path; overlays the transfer buffer
+
+MIA_CMD_FS_OPEN       = $7B
+MIA_CMD_FS_READ       = $7C
+MIA_CMD_FS_CLOSE      = $7D
+MIA_CMD_FS_WRITE      = $7F
+MIA_CMD_FS_LOAD_MIA   = $7E    ; FS_LOAD_TO_MIA_RAM: file -> MIA RAM, no CPU byte-touching
+MIA_CMD_FS_SAVE_MIA   = $87    ; FS_SAVE_FROM_MIA_RAM: MIA RAM -> file
+MIA_CMD_FS_SEEK       = $81
+MIA_CMD_FS_MKDIR      = $83
+MIA_CMD_FS_DELETE     = $84
+MIA_CMD_FS_RENAME     = $85
+MIA_CMD_FS_OPENDIR    = $79
+MIA_CMD_FS_READDIR    = $7A
+MIA_CMD_FS_CHDIR      = $88
+
+; SD/FS control block field offsets (relative to selecting MIA_SD_INDEX_CONTROL).
+SD_LAST_ERROR         = $02
+SD_REQUEST_LEN_L      = $08
+SD_DEST_ADDR_L        = $0C    ; 24-bit MIA RAM address for the LOAD_MIA/SAVE_MIA jobs
+SD_OPEN_MODE          = $10
+SD_EOF                = $11
+SD_FILE_POS0          = $1C    ; 32-bit file position; input to FS_SEEK
+SD_HANDLE_SELECT      = $2E
+
+; Directory entry buffer field offsets (relative to selecting
+; MIA_FS_INDEX_DIR_ENTRY) - filled by FS_READDIR/FS_STAT.
+MIA_FS_INDEX_DIR_ENTRY = $E3
+DIR_ATTR               = $00
+DIR_NAME_LEN           = $01
+DIR_NAME               = $0C
+DIR_ATTR_DIRECTORY     = $10
+SD_TRANSFER_LEN0      = $2A    ; 32-bit byte count for FS_SAVE_FROM_MIA_RAM
+
+FS_OPEN_READ          = $00
+FS_OPEN_WRITE_CREATE  = $01
+FS_OPEN_WRITE_APPEND  = $02
+
+STATUS_H_SD_BUSY      = %00000100      ; bit 2 of STATUS_H (MIA_STAT_SD_BUSY, bit 10 overall)
+
+mia_fileerr:
+        ldx     #ERR_FILEIO
+        jmp     ERROR
+
+mia_typerr:
+        ldx     #ERR_BADTYPE
+        jmp     ERROR
+
+; mia_sd_seek: A = SD/FS control block field offset. Selects the control
+; block index and steps IDXA_PORT forward to that offset, ready for the next
+; read/write. Clobbers A,X.
+; Absolute address of the SD/FS control block (see MIA_SD_STATE_OFFSET in
+; clementina-mia sd.h), as CFG_IDXA_ADDR_M/_H bytes - the low byte varies per
+; field and is written last, from the caller-supplied offset.
+SD_CONTROL_ADDR_M     = $30
+SD_CONTROL_ADDR_H     = $01
+
+mia_sd_seek:
+        ; Reposition window A's current address directly via CFG, rather than
+        ; reselecting the index and reading/skipping N bytes: writing
+        ; IDXA_SELECT does NOT rewind the index's current address (it only
+        ; reflects whatever position a *previous* access left it at), so the
+        ; skip-N-reads approach silently drifts across repeated calls instead
+        ; of ever landing on a fixed field. This mirrors vid_seek's own
+        ; absolute-addressing approach in this same file.
+        pha
+        lda     #MIA_SD_INDEX_CONTROL
+        sta     IDXA_SELECT
+        lda     #CFG_IDXA_ADDR_H
+        sta     CFG_SELECT
+        lda     #SD_CONTROL_ADDR_H
+        sta     CFG_PORT
+        lda     #CFG_IDXA_ADDR_M
+        sta     CFG_SELECT
+        lda     #SD_CONTROL_ADDR_M
+        sta     CFG_PORT
+        lda     #CFG_IDXA_ADDR_L
+        sta     CFG_SELECT
+        pla                             ; field offset -> current address low byte
+        sta     CFG_PORT
+        rts
+
+; mia_sd_wait: poll until MIA_STAT_SD_BUSY clears. Clobbers A.
+mia_sd_wait:
+        lda     STATUS_H
+        and     #STATUS_H_SD_BUSY
+        bne     mia_sd_wait
+        rts
+
+; mia_sd_cmd: A = command id. Clears CMD_PARAM1-3, triggers the command,
+; waits for completion, and leaves SD_LAST_ERROR in A (Z set if zero, i.e.
+; success). Clobbers A,X.
+mia_sd_cmd:
+        pha
+        lda     #$00
+        sta     CMD_PARAM1
+        sta     CMD_PARAM2
+        sta     CMD_PARAM3
+        pla
+        sta     CMD_TRIGGER
+        jsr     mia_sd_wait
+        lda     #SD_LAST_ERROR
+        jsr     mia_sd_seek
+        lda     IDXA_PORT
+        rts
+
+; mia_sd_select_handle: X = slot (0-15). Writes SD_HANDLE_SELECT. Clobbers
+; A,X.
+mia_sd_select_handle:
+        txa
+        pha
+        lda     #SD_HANDLE_SELECT
+        jsr     mia_sd_seek
+        pla
+        sta     IDXA_PORT
+        rts
+
+; mia_sd_write_path: writes the string at (INDEX), length A (as left by
+; FREFAC), into the SD/FS path buffer, null-terminated. Clobbers A,X,Y.
+mia_sd_write_path:
+        ; Reposition to the path buffer's start via CFG before writing - same
+        ; reasoning as mia_sd_seek: selecting the index does not rewind it,
+        ; so without this a second OPEN in the same session would start
+        ; writing wherever the previous path write left off.
+        pha
+        lda     #MIA_FS_INDEX_PATH
+        sta     IDXA_SELECT
+        lda     #CFG_IDXA_ADDR_H
+        sta     CFG_SELECT
+        lda     #$01
+        sta     CFG_PORT
+        lda     #CFG_IDXA_ADDR_M
+        sta     CFG_SELECT
+        lda     #$32
+        sta     CFG_PORT
+        lda     #CFG_IDXA_ADDR_L
+        sta     CFG_SELECT
+        lda     #$40
+        sta     CFG_PORT
+        pla
+        tax
+        ldy     #$00
+        cpx     #$00
+        beq     @term
+@loop:  lda     (INDEX),y
+        sta     IDXA_PORT
+        iny
+        dex
+        bne     @loop
+@term:  lda     #$00
+        sta     IDXA_PORT
+        rts
+
+; mia_sd_write_path2: like mia_sd_write_path, but targets the second path
+; buffer ($E5, MIA_FS_INDEX_PATH2) - FS_RENAME's destination path. Overlays
+; the first 256 bytes of the transfer buffer, so do not rely on transfer data
+; surviving a rename. A = length (as left by FREFAC), INDEX = pointer.
+; Clobbers A,X,Y.
+mia_sd_write_path2:
+        pha
+        lda     #MIA_FS_INDEX_PATH2
+        sta     IDXA_SELECT
+        lda     #CFG_IDXA_ADDR_H
+        sta     CFG_SELECT
+        lda     #$01
+        sta     CFG_PORT
+        lda     #CFG_IDXA_ADDR_M
+        sta     CFG_SELECT
+        lda     #$34
+        sta     CFG_PORT
+        lda     #CFG_IDXA_ADDR_L
+        sta     CFG_SELECT
+        lda     #$40
+        sta     CFG_PORT
+        pla
+        tax
+        ldy     #$00
+        cpx     #$00
+        beq     @term
+@loop:  lda     (INDEX),y
+        sta     IDXA_PORT
+        iny
+        dex
+        bne     @loop
+@term:  lda     #$00
+        sta     IDXA_PORT
+        rts
+
+; mia_parse_path_expr: evaluates the string expression starting right here
+; (no leading comma) and writes it as the SD/FS path. Shared by the plain
+; single-path commands (KILL/MKDIR/RMDIR) that take "path" as their only
+; argument, with nothing before it to consume. Clobbers A,X,Y.
+mia_parse_path_expr:
+        jsr     FRMEVL
+        bit     VALTYP
+        jpl     mia_typerr
+        jsr     FREFAC
+        jmp     mia_sd_write_path
+
+; mia_getadr24: like GETADR, but accepts values up to 2^24-1 instead of 16
+; bits - comfortably covers MIA's 256KB (2^18) address space with headroom.
+; Call right after FRMNUM, same as GETADR. Result goes directly into VID_ADDR
+; (low byte) through VID_ADDR+2 (high byte), mirroring how the video bulk
+; commands already use VID_ADDR as "the destination address about to be
+; used", rather than through LINNUM (GETADR's own 16-bit-only output). The
+; exponent ceiling is $99: GETADR's own $91 ceiling accepts exponents up to
+; $90 (values < 2^16 = 8 more bits than $80's zero point); the same relation
+; scaled to 24 bits is $98 accepted / $99 rejected. Clobbers A,X,Y.
+mia_getadr24:
+        lda     FACSIGN
+        jmi     snd_iqerr
+        lda     FAC
+        cmp     #$99
+        jcs     snd_iqerr
+        jsr     QINT
+        lda     FAC_LAST-2
+        sta     VID_ADDR+2
+        lda     FAC_LAST-1
+        sta     VID_ADDR+1
+        lda     FAC_LAST
+        sta     VID_ADDR
+        rts
+
+; mia_parse_path_arg: expects ",\"file\"" next in the source text - consumes
+; the comma, evaluates the string expression, and writes it as the SD/FS
+; path. Used by every asset command whose filename is its LAST argument
+; (CHRLOAD/PALLOAD/OAMLOAD/NTLOAD/ATRLOAD and their *SAVE siblings; MIALOAD/
+; MIASAVE take their filename first instead, so they call FRMEVL/FREFAC/
+; mia_sd_write_path directly). Tail-calls mia_sd_write_path.
+mia_parse_path_arg:
+        jsr     CHKCOM
+        jsr     FRMEVL
+        bit     VALTYP
+        jpl     mia_typerr
+        jsr     FREFAC
+        jmp     mia_sd_write_path
+
+; mia_sd_load_trigger: VID_ADDR (24-bit destination) and VID_COUNT (16-bit
+; max length, 0 = load until EOF or the end of MIA RAM) must already be set,
+; and the path already written. Triggers FS_LOAD_TO_MIA_RAM - a whole-file
+; job the firmware runs internally in 512-byte chunks, with no CPU byte-
+; touching at all. Clobbers A,X.
+mia_sd_load_trigger:
+        lda     #SD_DEST_ADDR_L
+        jsr     mia_sd_seek
+        lda     VID_ADDR
+        sta     IDXA_PORT
+        lda     VID_ADDR+1
+        sta     IDXA_PORT
+        lda     VID_ADDR+2
+        sta     IDXA_PORT
+        lda     #SD_REQUEST_LEN_L
+        jsr     mia_sd_seek
+        lda     VID_COUNT
+        sta     IDXA_PORT
+        lda     VID_COUNT+1
+        sta     IDXA_PORT
+        lda     #MIA_CMD_FS_LOAD_MIA
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+        rts
+
+; mia_sd_save_trigger: same preconditions as mia_sd_load_trigger, in reverse -
+; triggers FS_SAVE_FROM_MIA_RAM (create/truncate; use OPEN+BPUT# instead if
+; appending is ever needed). VID_COUNT is zero-extended into the 32-bit
+; SD_TRANSFER_LEN field. Clobbers A,X.
+mia_sd_save_trigger:
+        lda     #SD_DEST_ADDR_L
+        jsr     mia_sd_seek
+        lda     VID_ADDR
+        sta     IDXA_PORT
+        lda     VID_ADDR+1
+        sta     IDXA_PORT
+        lda     VID_ADDR+2
+        sta     IDXA_PORT
+        lda     #SD_OPEN_MODE
+        jsr     mia_sd_seek
+        lda     #FS_OPEN_WRITE_CREATE
+        sta     IDXA_PORT
+        lda     #SD_TRANSFER_LEN0
+        jsr     mia_sd_seek
+        lda     VID_COUNT
+        sta     IDXA_PORT
+        lda     VID_COUNT+1
+        sta     IDXA_PORT
+        lda     #$00
+        sta     IDXA_PORT
+        sta     IDXA_PORT
+        lda     #MIA_CMD_FS_SAVE_MIA
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+        rts
+
+; mia_sd_select_transfer: binds window A to the FS transfer buffer and resets
+; its position to offset 0 - same reasoning as mia_sd_seek/mia_sd_write_path
+; (selecting an index does not rewind it). Clobbers A.
+mia_sd_select_transfer:
+        lda     #MIA_FS_INDEX_TRANSFER
+        sta     IDXA_SELECT
+        lda     #CFG_IDXA_ADDR_H
+        sta     CFG_SELECT
+        lda     #$01
+        sta     CFG_PORT
+        lda     #CFG_IDXA_ADDR_M
+        sta     CFG_SELECT
+        lda     #$34
+        sta     CFG_PORT
+        lda     #CFG_IDXA_ADDR_L
+        sta     CFG_SELECT
+        lda     #$40
+        sta     CFG_PORT
+        rts
+
+; mia_sd_select_dir_entry: binds window A to the directory-entry buffer
+; (MIA_FS_INDEX_DIR_ENTRY, $013340) and resets its position to offset 0 -
+; same reasoning as mia_sd_select_transfer. Used by DIR to read back each
+; FS_READDIR result. Clobbers A.
+mia_sd_select_dir_entry:
+        lda     #MIA_FS_INDEX_DIR_ENTRY
+        sta     IDXA_SELECT
+        lda     #CFG_IDXA_ADDR_H
+        sta     CFG_SELECT
+        lda     #$01
+        sta     CFG_PORT
+        lda     #CFG_IDXA_ADDR_M
+        sta     CFG_SELECT
+        lda     #$33
+        sta     CFG_PORT
+        lda     #CFG_IDXA_ADDR_L
+        sta     CFG_SELECT
+        lda     #$40
+        sta     CFG_PORT
+        rts
+
+; mia_match_word: A/Y = pointer to a null-terminated literal word (uppercase
+; ASCII). Matches it against upcoming source text one character at a time via
+; CHRGET, consuming each matched character; SYNTAX ERROR on any mismatch (our
+; fixed OPEN grammar never needs to backtrack a partial match). Clobbers
+; A,FORPNT (a genuine adjacent 2-byte zero-page pointer pair - unlike
+; TEMP1/TEMP2, which are NOT adjacent in this codebase's zero-page layout and
+; so cannot back (TEMP1),y indirection).
+mia_match_word:
+        sta     FORPNT
+        sty     FORPNT+1
+@loop:  ldy     #$00
+        lda     (FORPNT),y
+        beq     @done
+        cmp     (TXTPTR),y
+        jne     SYNERR
+        jsr     CHRGET
+        inc     FORPNT
+        bne     @loop
+        inc     FORPNT+1
+        jmp     @loop
+@done:  rts
+
+lit_OUTPUT: .byte "OUTPUT", 0
+lit_APPEND: .byte "APPEND", 0
+lit_AS:     .byte "AS", 0
+
+; mia_store_byte: A = byte value (0-255) to store into the numeric variable
+; named next in the source text. Mirrors LET's own numeric-assignment tail:
+; PTRGET locates the variable (VALTYP+1 records its int/float-ness), GIVAYF
+; floats our byte into FAC, then FAC is stored into the variable either as a
+; 2-byte integer or copied whole as a float. Errors with TYPE MISMATCH if the
+; named variable is a string. Clobbers A,X,Y.
+mia_store_byte:
+        pha
+        jsr     PTRGET                  ; A,Y -> variable's value slot
+        bit     VALTYP
+        jmi     mia_typerr              ; can't BGET# into a string variable
+        sta     FORPNT
+        sty     FORPNT+1
+        pla
+        tay                             ; Y = byte value (low)
+        lda     #$00                    ; A = 0 (high byte)
+        jsr     GIVAYF                  ; float A:Y into FAC
+        lda     VALTYP+1
+        bpl     @float
+        jsr     ROUND_FAC
+        jsr     AYINT
+        ldy     #$00
+        lda     FAC+3
+        sta     (FORPNT),y
+        iny
+        lda     FAC+4
+        sta     (FORPNT),y
+        rts
+@float:
+        ; A verbatim byte-for-byte copy of FAC is wrong here: FAC+1's top bit
+        ; is the implicit, always-1 leading mantissa bit while "live" (pre-
+        ; normalization already guarantees it), not the real sign - the real
+        ; sign lives separately in FACSIGN until packed into that same bit for
+        ; storage. SETFOR (float.s, LET's own float-target path) already does
+        ; that FACSIGN/FAC+1 merge correctly - jump there, not straight to its
+        ; STORE_FAC_AT_YX_ROUNDED tail, which expects X/Y already loaded from
+        ; FORPNT (SETFOR's own first two instructions); skipping that left
+        ; X/Y holding whatever they last held, storing through a stale
+        ; pointer instead of ours.
+        jmp     SETFOR
+
+; ----------------------------------------------------------------------------
+; OPEN "file" FOR mode AS #n
+; ----------------------------------------------------------------------------
+BASIC_OPEN:
+        jsr     FRMEVL                  ; evaluate the filename expression
+        bit     VALTYP
+        jpl     mia_typerr              ; must be a string
+        jsr     FREFAC                  ; A = length, INDEX = pointer
+        jsr     mia_sd_write_path
+        lda     #TOKEN_FOR
+        jsr     SYNCHR
+        ldy     #$00
+        lda     (TXTPTR),y
+        cmp     #TOKEN_INPUT
+        bne     @notinput
+        jsr     CHRGET
+        lda     #FS_OPEN_READ
+        jmp     @gotmode
+@notinput:
+        cmp     #'O'
+        bne     @notoutput
+        lda     #<lit_OUTPUT
+        ldy     #>lit_OUTPUT
+        jsr     mia_match_word
+        lda     #FS_OPEN_WRITE_CREATE
+        jmp     @gotmode
+@notoutput:
+        cmp     #'A'
+        beq     @isappend
+        jmp     SYNERR
+@isappend:
+        lda     #<lit_APPEND
+        ldy     #>lit_APPEND
+        jsr     mia_match_word
+        lda     #FS_OPEN_WRITE_APPEND
+@gotmode:
+        ; Stash the mode byte in TEMP1, not the hardware stack: GETBYT's
+        ; expression evaluation (FRMNUM/FRMEVL) uses the processor stack
+        ; internally, so a value pushed here would not reliably survive a
+        ; later GETBYT call - the same reason every existing bulk-load
+        ; handler (BGCHAR, PALLOAD, ...) stashes cross-call values in
+        ; TEMP1-3/LINNUM rather than with pha/pla.
+        sta     TEMP1
+        lda     #<lit_AS
+        ldy     #>lit_AS
+        jsr     mia_match_word
+        lda     #'#'
+        jsr     SYNCHR
+        jsr     GETBYT                  ; X = file number
+        dex
+        cpx     #16
+        jcs     snd_iqerr
+        jsr     mia_sd_select_handle    ; X still holds the slot
+        lda     #SD_OPEN_MODE
+        jsr     mia_sd_seek
+        lda     TEMP1                   ; A = mode byte
+        sta     IDXA_PORT
+        lda     #MIA_CMD_FS_OPEN
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+        rts
+
+; ----------------------------------------------------------------------------
+; CLOSE #n
+; ----------------------------------------------------------------------------
+BASIC_CLOSE:
+        lda     #'#'
+        jsr     SYNCHR
+        jsr     GETBYT                  ; X = file number
+        dex
+        cpx     #16
+        jcs     snd_iqerr
+        jsr     mia_sd_select_handle
+        lda     #MIA_CMD_FS_CLOSE
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+        rts
+
+; ----------------------------------------------------------------------------
+; BGET#n, B : read one byte from file n into numeric variable B.
+; ----------------------------------------------------------------------------
+BASIC_BGET:
+        jsr     GETBYT                  ; X = file number
+        dex
+        cpx     #16
+        jcs     snd_iqerr
+        jsr     mia_sd_select_handle
+        jsr     CHKCOM
+        lda     #SD_REQUEST_LEN_L
+        jsr     mia_sd_seek
+        lda     #1
+        sta     IDXA_PORT
+        lda     #$00
+        sta     IDXA_PORT
+        lda     #MIA_CMD_FS_READ
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+        jsr     mia_sd_select_transfer
+        lda     IDXA_PORT               ; the byte read
+        jmp     mia_store_byte          ; stores into the variable named next
+
+; ----------------------------------------------------------------------------
+; BPUT#n, B : write the low byte of numeric expression B to file n.
+; ----------------------------------------------------------------------------
+BASIC_BPUT:
+        jsr     GETBYT                  ; X = file number
+        dex
+        cpx     #16
+        jcs     snd_iqerr
+        jsr     mia_sd_select_handle
+        jsr     COMBYTE                 ; X = value 0-255
+        stx     TEMP1
+        jsr     mia_sd_select_transfer
+        lda     TEMP1
+        sta     IDXA_PORT
+        lda     #SD_REQUEST_LEN_L
+        jsr     mia_sd_seek
+        lda     #1
+        sta     IDXA_PORT
+        lda     #$00
+        sta     IDXA_PORT
+        lda     #MIA_CMD_FS_WRITE
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+        rts
+
+; ----------------------------------------------------------------------------
+; MIALOAD "path", addr[, maxlen] : load a file straight into MIA RAM at a raw
+; address (0-16777215, well past MIA's 256KB) - zero CPU byte-touching. This
+; is the generic counterpart to CHRLOAD/PALLOAD/etc.: those wrap the same
+; underlying job with a safe, bank/offset-checked address; MIALOAD exposes
+; the raw address directly, for anything without its own convenience
+; wrapper (audio registers, or any other MIA RAM region). maxlen omitted or
+; 0 means load until EOF or the end of MIA RAM.
+; ----------------------------------------------------------------------------
+BASIC_MIALOAD:
+        jsr     FRMEVL                  ; evaluate the path expression
+        bit     VALTYP
+        jpl     mia_typerr              ; must be a string
+        jsr     FREFAC                  ; A = length, INDEX = pointer
+        jsr     mia_sd_write_path
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     mia_getadr24            ; VID_ADDR = 24-bit address
+        jsr     CHRGOT                  ; peek: is a trailing ",maxlen" present?
+        cmp     #','
+        bne     @nolen
+        jsr     CHRGET
+        jsr     FRMNUM
+        jsr     GETADR                  ; LINNUM = maxlen (16-bit)
+        lda     LINNUM
+        sta     VID_COUNT
+        lda     LINNUM+1
+        sta     VID_COUNT+1
+        jmp     mia_sd_load_trigger
+@nolen:
+        lda     #$00
+        sta     VID_COUNT
+        sta     VID_COUNT+1
+        jmp     mia_sd_load_trigger
+
+; ----------------------------------------------------------------------------
+; MIASAVE "path", addr, len : save `len` bytes of MIA RAM starting at `addr`
+; to a file. len is mandatory here (unlike MIALOAD's optional maxlen): MIA
+; RAM has no "file size" of its own until told how much to write, the same
+; asymmetry GW-BASIC's own BLOAD/BSAVE have.
+; ----------------------------------------------------------------------------
+BASIC_MIASAVE:
+        jsr     FRMEVL
+        bit     VALTYP
+        jpl     mia_typerr
+        jsr     FREFAC
+        jsr     mia_sd_write_path
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     mia_getadr24            ; VID_ADDR = 24-bit address
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR                  ; LINNUM = len (16-bit)
+        lda     LINNUM
+        sta     VID_COUNT
+        lda     LINNUM+1
+        sta     VID_COUNT+1
+        jmp     mia_sd_save_trigger
+
+; ----------------------------------------------------------------------------
+; SEEK#n,pos : jump file n to byte offset pos (0-16777215) - wraps FS_SEEK.
+; ----------------------------------------------------------------------------
+BASIC_SEEK:
+        jsr     GETBYT                  ; X = file number
+        dex
+        cpx     #16
+        jcs     snd_iqerr
+        jsr     mia_sd_select_handle
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     mia_getadr24            ; VID_ADDR = 24-bit offset
+        lda     #SD_FILE_POS0
+        jsr     mia_sd_seek
+        lda     VID_ADDR
+        sta     IDXA_PORT
+        lda     VID_ADDR+1
+        sta     IDXA_PORT
+        lda     VID_ADDR+2
+        sta     IDXA_PORT
+        lda     #$00
+        sta     IDXA_PORT
+        lda     #MIA_CMD_FS_SEEK
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+        rts
+
+; ----------------------------------------------------------------------------
+; KILL "path" : delete a file (GW-BASIC's real name for this) - wraps
+; FS_DELETE. RMDIR shares this exact body: FatFs's f_unlink (what FS_DELETE
+; calls) already deletes either a file or an empty directory, so there is
+; nothing RMDIR needs to do differently - see token.s.
+; ----------------------------------------------------------------------------
+BASIC_KILL:
+        jsr     mia_parse_path_expr
+        lda     #MIA_CMD_FS_DELETE
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+        rts
+
+; ----------------------------------------------------------------------------
+; MKDIR "path" : create one directory (parent directories must already
+; exist) - wraps FS_MKDIR.
+; ----------------------------------------------------------------------------
+BASIC_MKDIR:
+        jsr     mia_parse_path_expr
+        lda     #MIA_CMD_FS_MKDIR
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+        rts
+
+; ----------------------------------------------------------------------------
+; NAME "old" AS "new" : rename/move (GW-BASIC's real syntax) - wraps
+; FS_RENAME.
+; ----------------------------------------------------------------------------
+BASIC_NAME:
+        jsr     FRMEVL                  ; evaluate "old"
+        bit     VALTYP
+        jpl     mia_typerr
+        jsr     FREFAC
+        jsr     mia_sd_write_path
+        lda     #<lit_AS
+        ldy     #>lit_AS
+        jsr     mia_match_word
+        jsr     FRMEVL                  ; evaluate "new"
+        bit     VALTYP
+        jpl     mia_typerr
+        jsr     FREFAC
+        jsr     mia_sd_write_path2
+        lda     #MIA_CMD_FS_RENAME
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+        rts
+
+; ----------------------------------------------------------------------------
+; CD "path" : change the current directory - wraps FS_CHDIR. This is what
+; makes relative paths in every other command (OPEN/KILL/MKDIR/MIALOAD/...)
+; resolve inside "path" from here on: FatFs itself tracks the current
+; directory per mounted volume (FF_FS_RPATH in clementina-mia's ffconf.h) and
+; every existing path-writing routine already passes relative paths through
+; unmodified, so nothing else needed to change. See clementina-mia sd.c's
+; sd_request_chdir and sd_prepare_fatfs_path_from.
+; ----------------------------------------------------------------------------
+BASIC_CD:
+        jsr     mia_parse_path_expr
+        lda     #MIA_CMD_FS_CHDIR
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+        rts
+
+; ----------------------------------------------------------------------------
+; DIR [path$] : list a directory - wraps FS_OPENDIR/FS_READDIR. With no
+; argument, lists the current directory (CD's target, or the SD root if CD
+; has never been used); an explicit path$ lists that directory instead,
+; without changing the current directory. One name per line, directories
+; marked with a trailing "/" (sizes/dates are not printed - see
+; docs/basic-file.md for the rationale).
+;
+; Each FS_READDIR result's own DIR_NAME_LEN field (not the transient SD_EOF
+; control-block flag EOF(n) reads) is what signals "no more entries": SD_EOF
+; is shared with per-handle file I/O and reads back whatever handle
+; SD_HANDLE_SELECT last pointed at (see clementina-mia sd.c's sd_publish_state)
+; - wrong here if a file happens to be open on that same slot while DIR runs.
+; DIR_NAME_LEN has no such ambiguity: sd_clear_dir_entry zeroes it, and a
+; real entry's name is never zero length.
+; ----------------------------------------------------------------------------
+BASIC_DIR:
+        jsr     CHRGOT                  ; peek: any argument at all?
+        cmp     #$3A                    ; ':' (next statement)
+        beq     @noarg
+        cmp     #$00                    ; end of line
+        beq     @noarg
+        jsr     FRMEVL
+        bit     VALTYP
+        jpl     mia_typerr
+        jsr     FREFAC
+        jsr     mia_sd_write_path
+        jmp     @open
+@noarg:
+        lda     #$00                    ; empty path -> current directory
+        jsr     mia_sd_write_path
+@open:
+        lda     #MIA_CMD_FS_OPENDIR
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+@loop:
+        lda     #MIA_CMD_FS_READDIR
+        jsr     mia_sd_cmd
+        jne     mia_fileerr
+        jsr     mia_sd_select_dir_entry
+        lda     IDXA_PORT               ; DIR_ATTR (offset 0)
+        sta     TEMP1
+        lda     IDXA_PORT               ; DIR_NAME_LEN (offset 1)
+        beq     @done                   ; 0 -> no more entries
+        cmp     #DIR_NAME_BUF_SIZE      ; clamp to the scratch buffer - the
+        bcc     @fits                   ; next FS_READDIR/mia_sd_select_dir_entry
+        lda     #DIR_NAME_BUF_SIZE      ; resets position from offset 0 again
+        ; regardless, so an over-length name's untouched tail is simply
+        ; never read, not left dangling for anything later to trip over.
+@fits:  sta     TEMP2                   ; TEMP2 = bytes to read/print this entry
+        ldy     #DIR_NAME-2             ; skip offsets 2..(DIR_NAME-1)
+@skip:  lda     IDXA_PORT
+        dey
+        bne     @skip
+        ldy     #$00                    ; copy the name out before printing
+@read:  cpy     TEMP2                   ; any of it - see DIR_NAME_BUF's comment
+        beq     @print
+        lda     IDXA_PORT
+        sta     DIR_NAME_BUF,y
+        iny
+        bne     @read                   ; always taken (TEMP2 <= 40)
+@print: ldy     #$00
+@pname: cpy     TEMP2
+        beq     @nomarkcheck
+        lda     DIR_NAME_BUF,y
+        jsr     MONCOUT
+        iny
+        bne     @pname                  ; always taken (TEMP2 <= 40)
+@nomarkcheck:
+        lda     TEMP1
+        and     #DIR_ATTR_DIRECTORY
+        beq     @nomark
+        lda     #'/'
+        jsr     MONCOUT
+@nomark:
+        lda     #CR
+        jsr     MONCOUT
+        jmp     @loop
+@done:
+        rts
+
+; ----------------------------------------------------------------------------
+; EOF(n) : true (1) when file n is at end, false (0) otherwise. Dispatched via
+; TOKEN_EXTFN/EXTFN_DISPATCH (see that routine's own comment) - PARCHK has
+; already evaluated "(n)" into FAC by the time this body runs, so CONINT
+; converts that already-evaluated FAC to a byte in X directly, without
+; re-parsing anything from the source text (no FRMNUM/FRMEVL call here).
+; Matches PLAYING's 0/1 convention (see BASIC_PLAYING), not classic BASIC's
+; 0/-1 - either reads as "true" to IF, which is all a status check needs.
+; ----------------------------------------------------------------------------
+BASIC_EOF:
+        jsr     CONINT                  ; X = file number, from PARCHK's FAC
+        dex
+        cpx     #16
+        jcs     snd_iqerr
+        jsr     mia_sd_select_handle
+        lda     #SD_EOF
+        jsr     mia_sd_seek
+        ldy     #$00
+        lda     IDXA_PORT
+        beq     @done
+        iny
+@done:
+        jmp     SNGFLT

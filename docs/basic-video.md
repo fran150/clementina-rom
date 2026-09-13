@@ -86,23 +86,34 @@ field-within-item loop learned this the hard way: keeping the index in `Y`
 across `jsr vid_data_byte` silently corrupted it for every multi-stream
 command, which single-stream commands (`VID_STREAM2=0`) masked completely
 (`0 AND anything` is always `0`, so the stream decision came out right by
-accident) - only `BGLOAD`, the one genuine multi-stream user, exposed it. The
+accident) - only `BGLOAD` (since split into `NTREAD`/`ATRREAD` - see below),
+the one genuine multi-stream user, exposed it. The
 field index lives in a dedicated byte (`VID_FIELD`) now, reloaded into `Y`
 fresh right before the one instruction that needs it.
 
 | Statement | Arguments | Effect |
 | --- | --- | --- |
 | `BGCHAR col,row,tile,attr` | `col`/`row` map-relative for the current `BGMODE` (e.g. 0-159/0-24 in mode 3) | Write one BG nametable+attribute cell, mode-aware - resolves which of the 8 raw tables and where in it, replaying `bgTableAndLocal`'s math (see below). Out-of-range `col`/`row` raises `ILLEGAL QUANTITY` rather than wrapping. |
-| `BGLOAD table,cell,count` | `table` 0-7, `cell` 0-999, `count` 0-65535 | Bulk-load `count` (tile,attr) pairs from `DATA` into raw BG table `table`, starting at `cell`. Author `DATA` as `tile0,attr0,tile1,attr1,...`. |
-| `CHRLOAD bank,offset,count` | `bank` 0-7, `offset` 0-6143, `count` 0-65535 | Bulk-load `count` raw tile/graphics bytes from `DATA` into CHR bank `bank`. |
-| `PALLOAD bank,offset,count` | `bank` 0-15, `offset` 0-15, `count` 0-255 | Bulk-load `count` raw palette bytes from `DATA`, starting `offset` bytes into bank `bank`. |
-| `OAMLOAD n,count` | `n` 0-255, `count` 0-255 | Bulk-load `count` sprites' raw 5-byte records (`tile,xlo,ylo,attr,ext`) from `DATA`, starting at OAM index `n`. |
+| `NTREAD table,cell,count` | `table` 0-7, `cell` 0-999, `count` 0-65535 | Bulk-load `count` raw nametable (tile) bytes from `DATA` into raw BG table `table`, starting at `cell`. |
+| `ATRREAD table,cell,count` | same ranges as `NTREAD` | As `NTREAD`, but the attribute half of the table - a separate call over its own run of `DATA` values, continuing the shared stream where the last `READ`/`NTREAD`/etc. left it. |
+| `CHRREAD bank,offset,count` | `bank` 0-7, `offset` 0-6143, `count` 0-65535 | Bulk-load `count` raw tile/graphics bytes from `DATA` into CHR bank `bank`. |
+| `PALREAD bank,offset,count` | `bank` 0-15, `offset` 0-15, `count` 0-255 | Bulk-load `count` raw palette bytes from `DATA`, starting `offset` bytes into bank `bank`. |
+| `OAMREAD n,count` | `n` 0-255, `count` 0-255 | Bulk-load `count` sprites' raw 5-byte records (`tile,xlo,ylo,attr,ext`) from `DATA`, starting at OAM index `n`. |
 | `SPRITE n,tile,x,y,pal,flags` | `n`/`tile` 0-255, `x` -512..511, `y` -256..255, `pal` 0-15, `flags` bit0 disable/bit1 priority/bit2 flip-X/bit3 flip-Y | Full per-sprite setup in one call. |
 | `SPRX n,x` / `SPRY n,y` | same ranges as `SPRITE`'s `x`/`y` | Change one sprite's position only - cheap per-frame animation update without respecifying every `SPRITE` field. |
 | `SPRTILE n,t` | `t` 0-255 | Change one sprite's tile/frame index only. |
 | `SPRCOLOR n,pal` | `pal` 0-15 | Change one sprite's palette only. |
 | `SPRFLIP n,fx,fy` | each 0/non-zero | Change one sprite's flip-X/flip-Y only. |
 | `SPRPRI n,p` | 0/non-zero | Change one sprite's priority only. |
+
+**Renamed in the file-I/O work (2026-09):** these five were originally named
+`BGLOAD`/`CHRLOAD`/`PALLOAD`/`OAMLOAD` (`BGLOAD` doing both halves of a BG
+table in one interleaved call). The bare names now mean "load from an SD
+file" instead - matching `LOAD`'s real meaning - with `NTLOAD`/`CHRLOAD`/
+`PALLOAD`/`OAMLOAD` and their `*SAVE` counterparts documented in
+[docs/basic-file.md](basic-file.md) alongside the rest of Clementina's file
+I/O. The table above is current; `BGLOAD`/the old `CHRLOAD` etc. no longer
+exist as such.
 
 ### `BGCHAR`'s mode math
 
@@ -115,7 +126,7 @@ local cell offset, fold the quotient into a table index the same way each
 `BGMODE` does (`col/40` for modes 1 and 3, `row/25` for mode 4, `(row/25)*2 +
 col/40` for mode 5, `(row/25)*2` for mode 2, always `0` for mode 0), add
 `BG_ACTIVE_SET*4`, then write through `bg_seek_nt`/`bg_seek_attr` exactly like
-`BGLOAD` does for a single cell.
+`NTREAD`/`ATRREAD` (originally `BGLOAD`) do for a single cell.
 
 ### Fitting it: growing the ROM's code budget
 
@@ -139,6 +150,11 @@ upper bound) - grep both repos for the old hex value before moving it again.
 
 Bump `MAX_KERNEL_BYTES`/`RAMSTART2`/`BGP_BASE` together, in lockstep, if more
 commands land later.
+
+> **Since raised again** (2026-09, `$4C00`→`$5C00`/`18432`→`22528`) for the
+> SD/FS file I/O command set - see [docs/basic-file.md](basic-file.md) and
+> [memory-map.md §7.5/§8](memory-map.md). The `$4400`/`$4C00`/`18432`/`16384`
+> figures above are that step's own history, not the current values.
 
 ## Register reference
 
@@ -217,3 +233,14 @@ layout):
   table math, `BGLOAD`'s two parallel streams, and that the single-field
   sprite setters touch only their own bits. Full existing suite (both repos)
   still green throughout.
+- **File I/O rename - IMPLEMENTED (2026-09).** `BGLOAD` split into `NTREAD`
+  (nametable half) + `ATRREAD` (attribute half); `CHRLOAD`/`PALLOAD`/`OAMLOAD`
+  renamed to `CHRREAD`/`PALREAD`/`OAMREAD` for their existing DATA-sourced
+  behavior. The bare names `NTLOAD`/`CHRLOAD`/`PALLOAD`/`OAMLOAD` were then
+  reused for a new, file-sourced meaning (load from an SD file), with
+  matching `*SAVE` counterparts - part of the broader SD/FS file I/O work.
+  See [docs/basic-file.md](basic-file.md) for the full statement list and
+  rationale; the code-budget knobs bumped again for it (see "Fitting it"
+  above). Emulator-validated: `basic_video_phase2b_test.go` (updated) and
+  `basic_video_phase2_test.go` (updated) in `clementina-6502`
+  `pkg/computers/clementina`.

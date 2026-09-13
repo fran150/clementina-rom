@@ -107,7 +107,7 @@ SYNERR1:
         jmp     SYNERR
 LA5DC:
 .else
-        bne     COLON; new: 1 cycle more on ":" case
+        jne     COLON; new: 1 cycle more on ":" case
 .endif
 .ifdef STYLED_STRINGS
         jsr     SKIP_TXTPTR_SIDECAR
@@ -157,6 +157,8 @@ EXECUTE_STATEMENT1:
         beq     @mon
         cmp     #TOKEN_EXT
         beq     @ext
+        cmp     #TOKEN_EXT2
+        beq     @ext2
         sec
 .endif
         sbc     #$80
@@ -200,6 +202,21 @@ EXECUTE_STATEMENT1:
         jmp     CHRGET          ; step past subtoken to first arg; RTS -> handler
 @ext_syn:
         jmp     SYNERR
+; Second extension statement table - mirrors @ext above (TOKEN_EXT's own
+; table filled up; see macros.s).
+@ext2:
+        jsr     CHRGET          ; A = subtoken ($80|index)
+        sec
+        sbc     #$80            ; A = extension index
+        cmp     #NUM_EXT2_TOKENS
+        bcs     @ext_syn        ; unknown subtoken -> SYNTAX ERROR
+        asl     a
+        tay
+        lda     EXT2_ADDRESS_TABLE+1,y
+        pha
+        lda     EXT2_ADDRESS_TABLE,y
+        pha
+        jmp     CHRGET          ; step past subtoken to first arg; RTS -> handler
 .endif
 
 .ifdef CONFIG_11

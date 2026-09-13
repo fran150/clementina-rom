@@ -1,13 +1,13 @@
 		init_token_tables
 
 		keyword_rts "END", END
-		keyword_rts "FOR", FOR
+		keyword_rts "FOR", FOR, TOKEN_FOR
 		keyword_rts "NEXT", NEXT
 		keyword_rts "DATA", DATA
 .ifdef CONFIG_FILE
 		keyword_rts "INPUT#", INPUTH
 .endif
-		keyword_rts "INPUT", INPUT
+		keyword_rts "INPUT", INPUT, TOKEN_INPUT
 		keyword_rts "DIM", DIM
 		keyword_rts "READ", READ
 .ifdef APPLE
@@ -249,7 +249,11 @@ MATHTBL:
         ext_keyword_rts "VIDOFF",   BASIC_VIDOFF
         ; Video Phase 2: bulk loading from DATA + full sprite setup.
         ext_keyword_rts "BGCHAR",   BASIC_BGCHAR
-        ext_keyword_rts "BGLOAD",   BASIC_BGLOAD
+        ; CHRLOAD/PALLOAD/OAMLOAD keep their original names and slots here
+        ; (this table already had exactly enough room for them), but now mean
+        ; "load from a file" rather than "load from DATA" - see the *READ/
+        ; *SAVE siblings in the second extension table (EXT2, below) for the
+        ; rest of the family this table no longer has room for.
         ext_keyword_rts "CHRLOAD",  BASIC_CHRLOAD
         ext_keyword_rts "PALLOAD",  BASIC_PALLOAD
         ext_keyword_rts "OAMLOAD",  BASIC_OAMLOAD
@@ -260,7 +264,59 @@ MATHTBL:
         ext_keyword_rts "SPRCOLOR", BASIC_SPRCOLOR
         ext_keyword_rts "SPRFLIP",  BASIC_SPRFLIP
         ext_keyword_rts "SPRPRI",   BASIC_SPRPRI
+        ; File I/O (see docs/basic-file.md): OPEN/CLOSE/BGET#/BPUT# against
+        ; MIA's SD/FAT layer. "OPEN"/"CLOSE" chosen over the primary table to
+        ; keep that table's tight 256-byte budget untouched.
+        ext_keyword_rts "OPEN",    BASIC_OPEN
+        ext_keyword_rts "CLOSE",   BASIC_CLOSE
+        ext_keyword_rts "BGET#",   BASIC_BGET
+        ext_keyword_rts "BPUT#",   BASIC_BPUT
         end_ext_token_tables
+
+; ----------------------------------------------------------------------------
+; Second extension keyword table (two-byte tokens: TOKEN_EXT2 + subtoken).
+; The first extension table (above) filled up its 256-byte keyword-name
+; budget once the video/audio asset family and MIALOAD/MIASAVE landed - same
+; problem TOKEN_EXTFN already solved once for the function table. See
+; docs/basic-file.md.
+; ----------------------------------------------------------------------------
+        init_ext2_token_tables
+        ; Video/audio asset family: *READ bulk-loads from DATA exactly as
+        ; CHRLOAD/PALLOAD/OAMLOAD/BGLOAD used to (BGLOAD itself is retired -
+        ; its interleaved nametable+attribute case is now NTREAD/NTLOAD +
+        ; ATRREAD/ATRLOAD). CHRLOAD/PALLOAD/OAMLOAD (still in the first
+        ; table, above) now mean "from an SD file" instead, matching LOAD's
+        ; real meaning; *SAVE is the reverse.
+        ext2_keyword_rts "NTREAD",   BASIC_NTREAD
+        ext2_keyword_rts "NTLOAD",   BASIC_NTLOAD
+        ext2_keyword_rts "NTSAVE",   BASIC_NTSAVE
+        ext2_keyword_rts "ATRREAD",  BASIC_ATRREAD
+        ext2_keyword_rts "ATRLOAD",  BASIC_ATRLOAD
+        ext2_keyword_rts "ATRSAVE",  BASIC_ATRSAVE
+        ext2_keyword_rts "CHRREAD",  BASIC_CHRREAD
+        ext2_keyword_rts "CHRSAVE",  BASIC_CHRSAVE
+        ext2_keyword_rts "PALREAD",  BASIC_PALREAD
+        ext2_keyword_rts "PALSAVE",  BASIC_PALSAVE
+        ext2_keyword_rts "OAMREAD",  BASIC_OAMREAD
+        ext2_keyword_rts "OAMSAVE",  BASIC_OAMSAVE
+        ; Generic MIA RAM loader/saver (see docs/basic-file.md).
+        ext2_keyword_rts "MIALOAD",  BASIC_MIALOAD
+        ext2_keyword_rts "MIASAVE",  BASIC_MIASAVE
+        ; Filesystem management (see docs/basic-file.md). RMDIR shares
+        ; KILL's body: FatFs's f_unlink already deletes either a file or an
+        ; empty directory.
+        ext2_keyword_rts "SEEK#",    BASIC_SEEK
+        ext2_keyword_rts "KILL",     BASIC_KILL
+        ext2_keyword_rts "RMDIR",    BASIC_KILL
+        ext2_keyword_rts "MKDIR",    BASIC_MKDIR
+        ext2_keyword_rts "NAME",     BASIC_NAME
+        ; Directory navigation/listing (see docs/basic-file.md). CD relies on
+        ; FatFs's own current-directory tracking (FF_FS_RPATH) - every other
+        ; path-taking command above resolves a relative path against it for
+        ; free, no changes needed to any of them.
+        ext2_keyword_rts "CD",       BASIC_CD
+        ext2_keyword_rts "DIR",      BASIC_DIR
+        end_ext2_token_tables
 
 ; ----------------------------------------------------------------------------
 ; Extension FUNCTION keyword table (two-byte tokens: TOKEN_EXTFN + subtoken).
@@ -272,5 +328,7 @@ MATHTBL:
 ; ----------------------------------------------------------------------------
         init_extfn_token_tables
         extfn_keyword_addr "PLAYING", BASIC_PLAYING
+        ; EOF(n) - see docs/basic-file.md.
+        extfn_keyword_addr "EOF",     BASIC_EOF
         end_extfn_token_tables
 .endif
