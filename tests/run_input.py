@@ -9,7 +9,7 @@ import tempfile
 repo = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--emulator', type=Path, default=Path('/Users/fran150/development/go/clementina-6502'))
-parser.add_argument('--run', default='TestBasicInput|TestBasicOverlay|TestBasicTiming|TestBasicMemory', help='Go test name filter')
+parser.add_argument('--run', default='TestBasicInput|TestBasicOverlay|TestBasicTiming|TestBasicMemory|TestBasicFSExtensions|TestEmulatedMiaFSFileInfo', help='Go test name filter')
 args = parser.parse_args()
 emulator = args.emulator.resolve()
 subprocess.run(['make'], cwd=repo, check=True)
@@ -26,11 +26,13 @@ with tempfile.TemporaryDirectory(prefix='clementina-input-test-') as directory:
     data = ','.join(str(b) for b in (repo / 'build/kernel.bin').read_bytes())
     (temp / 'assets.go').write_text(source.replace(declaration, 'var MiaKernel = []byte{' + data + '}'))
     overlay = {'Replace': {
+        str(emulator / 'pkg/components/mia/fs_info_extension_test.go'): str(repo / 'tests/fs_info_test.go'),
         str(assets): str(temp / 'assets.go'),
         str(emulator / 'pkg/computers/clementina/basic_input_phase_test.go'): str(repo / 'tests/basic_input_test.go'),
         str(emulator / 'pkg/computers/clementina/basic_overlay_test.go'): str(repo / 'tests/basic_overlay_test.go'),
         str(emulator / 'pkg/computers/clementina/basic_timing_test.go'): str(repo / 'tests/basic_timing_test.go'),
         str(emulator / 'pkg/computers/clementina/basic_memory_test.go'): str(repo / 'tests/basic_memory_test.go'),
+        str(emulator / 'pkg/computers/clementina/basic_fs_extensions_test.go'): str(repo / 'tests/basic_fs_test.go'),
     }}
     # The emulator uses Go copy (memmove semantics), whereas Pico DMA reads
     # forward. Assert that the ROM's reserved memory descriptors always issue
@@ -52,5 +54,5 @@ with tempfile.TemporaryDirectory(prefix='clementina-input-test-') as directory:
     overlay['Replace'][str(commands)] = str(temp / 'commands.go')
     (temp / 'overlay.json').write_text(json.dumps(overlay))
     subprocess.run(['go', 'test', '-overlay', str(temp / 'overlay.json'),
-                    './pkg/computers/clementina', '-run', args.run, '-count=1'],
+                    './pkg/computers/clementina', './pkg/components/mia', '-run', args.run, '-count=1'],
                    cwd=emulator, check=True)

@@ -9,7 +9,7 @@ This repository contains the 6502-side software for Clementina:
 ## Build
 
 ```sh
-make            # build the kernel image -> build/kernel.bin (loads at $0400)
+make            # build build/kernel.bin (top-anchored, ends at $BFFF)
 make install    # copy kernel.bin into the emulator's embedded asset
 ```
 
@@ -27,3 +27,5 @@ BASIC `READY.` prompt without clearing the current program.
 - [BASIC input](docs/basic-input.md) — keyboard, mouse, gamepad and repeat configuration.
 - [BASIC timing](docs/basic-timing.md) — millisecond delays and the 60 Hz TI clock.
 - [BASIC MIA memory](docs/basic-memory.md) — byte access, overlapping copies, and block fills.
+
+- [BASIC file I/O](docs/basic-file.md) — file handles, updates, flushing, metadata and free space.

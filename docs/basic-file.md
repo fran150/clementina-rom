@@ -25,11 +25,11 @@ repo, `docs/sd.md` and `docs/sd-programmer-guide.md`.
 
 | Statement | Arguments | Effect |
 | --- | --- | --- |
-| `OPEN "file" FOR mode AS #n` | `mode` `INPUT`\|`OUTPUT`\|`APPEND`, `n` 1–16 | Open a file on handle `n`. `OUTPUT` creates/truncates; `APPEND` creates or positions at the end. |
+| `OPEN "file" FOR mode AS #n` | `mode` `INPUT`\|`OUTPUT`\|`APPEND`\|`UPDATE`, `n` 1–16 | Open a file on handle `n`. `OUTPUT` creates/truncates; `APPEND` creates or positions at the end. `UPDATE` opens/creates for reading and writing at position zero without truncation. |
 | `CLOSE #n` | `n` 1–16 | Close handle `n`. |
 | `BGET#n, v` | `n` 1–16, `v` a numeric variable | Read one byte from handle `n` into `v`. |
 | `BPUT#n, expr` | `n` 1–16 | Write the low byte of `expr` to handle `n`. |
-| `SEEK#n, pos` | `pos` 0–16777215 | Jump handle `n` to byte offset `pos`. |
+| `SEEK#n, pos` | `pos` 0–4294967295 | Jump handle `n` to byte offset `pos`. |
 | `EOF(n)` | `n` 1–16 (function) | `1` once handle `n` has been read past its last byte, else `0`. |
 | `KILL "path"` | — | Delete a file. |
 | `MKDIR "path"` | — | Create one directory (its parent must already exist). |
@@ -127,3 +127,63 @@ reading from the current `DATA` position.
   to MIA as one job, the same as the video/audio `*LOAD`/`*SAVE` statements.
   `BGET#`/`BPUT#` are the CPU-visible, one-byte-at-a-time alternative, for
   when the program needs to look at (or compute) each byte.
+
+## Extended filesystem operations
+
+| Statement/function | Meaning |
+| --- | --- |
+| `OPEN "file" FOR UPDATE AS #n` | Open or create for reading and writing, positioned at zero; preserve existing contents. |
+| `FLUSH #n` | Flush the open file's pending data and metadata to SD without closing it. |
+| `FPOS(n)` | Return the selected open file's current byte position. |
+| `FSIZE(n)` | Return the selected open file's size in bytes. |
+| `FSTAT "path",S,A,D,T` | Assign size, FAT attributes, packed modification date, and packed modification time to numeric variables or array elements. |
+| `DISKFREE(0)` | Return free bytes on the current SD volume. Zero identifies the current volume. |
+| `SEEK#n,pos` | Set position, now accepting the full unsigned 32-bit range, 0–4294967295. |
+
+`FLUSH` is the BASIC name for firmware `FS_SYNC`; there is no BASIC `SYNC`
+alias. `CLOSE` already flushes, so explicit flushing is mainly useful for
+checkpoints while a file stays open. It reduces pending filesystem writes but
+does not make updates atomic or guarantee protection from power loss.
+
+`FPOS` and `FSIZE` require companion firmware/emulator SD protocol version 6.
+They issue `FS_FILE_INFO` (`$89`) for the requested handle, then read the
+existing 32-bit position/size fields. Queries do not flush or change position.
+Older firmware produces `FILE I/O ERROR` instead of returning stale values.
+Existing command IDs, buffers, and saved BASIC token numbers are preserved.
+
+`FSTAT` does not open a file or consume one of the 16 handles. For directories,
+size is zero and attribute bit 4 (16) is set. Other FAT bits are read-only (1),
+hidden (2), system (4), volume label (8), and archive (32). Date encodes
+`(year-1980)*512 + month*32 + day`; time encodes
+`hour*2048 + minute*32 + second/2`. Actual timestamp availability depends on the
+filesystem clock. Use ordinary floating-point variables for unsigned dates,
+times and large sizes; integer variables retain BASIC's signed 16-bit limits.
+As with other multi-result statements, an error in a later destination can
+leave earlier destinations assigned.
+
+Unsigned 32-bit positions and sizes are represented exactly by this BASIC's
+32-bit mantissa. Fractional seek positions truncate after normal BASIC numeric
+evaluation; negative values and values at or above 4294967296 are rejected.
+Seeking beyond EOF retains the firmware's existing FatFs behavior, which
+depends on whether the file is writable.
+
+Free space is computed as `free_clusters * sectors_per_cluster * 512` using
+BASIC arithmetic, avoiding a 32-bit byte-count overflow. Very large capacities
+are subject to BASIC floating-point precision. The emulator reports space for
+its simulated volume, not the host disk's remaining capacity.
+
+```basic
+10 OPEN "SETTINGS.DAT" FOR UPDATE AS #1
+20 SEEK#1,10
+30 BPUT#1,42
+40 FLUSH #1
+50 PRINT FPOS(1),FSIZE(1)
+60 CLOSE #1
+70 FSTAT "SETTINGS.DAT",S,A,D,T
+80 PRINT S,DISKFREE(0)
+```
+
+Run `python3 tests/run_input.py --run 'TestBasicFSExtensions|TestEmulatedMiaFSFileInfo'`
+for the extension regression tests. They cover independent handles, nested
+queries, updates without truncation, creation, metadata, free space, errors,
+and sparse files at 32-bit size/position boundaries.

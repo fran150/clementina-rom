@@ -331,6 +331,8 @@ MATHTBL:
         ext2_keyword_rts "MPOKE", BASIC_MPOKE
         ext2_keyword_rts "MCOPY", BASIC_MCOPY
         ext2_keyword_rts "MFILL", BASIC_MFILL
+        ext2_keyword_rts "FLUSH", BASIC_FLUSH
+        ext2_keyword_rts "FSTAT", BASIC_FSTAT
         end_ext2_token_tables
 
 ; ----------------------------------------------------------------------------
@@ -361,5 +363,8 @@ EXTFN_RAW_START:
 EXTFN_RAW_END:
         extfn_keyword_addr "TICKS", BASIC_TICKS
         extfn_keyword_addr "MPEEK", BASIC_MPEEK
+        extfn_keyword_addr "FPOS", BASIC_FPOS
+        extfn_keyword_addr "FSIZE", BASIC_FSIZE
+        extfn_keyword_addr "DISKFREE", BASIC_DISKFREE
         end_extfn_token_tables
 .endif

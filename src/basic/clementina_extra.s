@@ -1,3 +1,4 @@
+.setcpu "65C02"
 ; ============================================================================
 ; clementina_extra.s - Clementina BASIC console glue (EXTRA segment)
 ; ----------------------------------------------------------------------------
@@ -3727,8 +3728,12 @@ mia_sd_seek:
         sta     CFG_PORT
         rts
 
-; mia_sd_wait: poll until MIA_STAT_SD_BUSY clears. Clobbers A.
+; Wait for Core 0 command acceptance before testing asynchronous SD completion.
+; Core 1 sets CMD_RUNNING when it forwards the trigger; SD_BUSY is set later.
 mia_sd_wait:
+        lda     $FFEA                   ; STATUS_L
+        and     #$04                    ; MIA_STAT_CMD_RUNNING
+        bne     mia_sd_wait
         lda     STATUS_H
         and     #STATUS_H_SD_BUSY
         bne     mia_sd_wait
@@ -4003,6 +4008,7 @@ mia_match_word:
 
 lit_OUTPUT: .byte "OUTPUT", 0
 lit_APPEND: .byte "APPEND", 0
+lit_UPDATE: .byte "UPDATE", 0
 lit_AS:     .byte "AS", 0
 
 ; mia_store_byte: A = byte value (0-255) to store into the numeric variable
@@ -4073,6 +4079,14 @@ BASIC_OPEN:
         lda     #FS_OPEN_WRITE_CREATE
         jmp     @gotmode
 @notoutput:
+        cmp     #'U'
+        bne     @notupdate
+        lda     #<lit_UPDATE
+        ldy     #>lit_UPDATE
+        jsr     mia_match_word
+        lda     #3
+        bra     @gotmode
+@notupdate:
         cmp     #'A'
         beq     @isappend
         jmp     SYNERR
@@ -4082,13 +4096,7 @@ BASIC_OPEN:
         jsr     mia_match_word
         lda     #FS_OPEN_WRITE_APPEND
 @gotmode:
-        ; Stash the mode byte in TEMP1, not the hardware stack: GETBYT's
-        ; expression evaluation (FRMNUM/FRMEVL) uses the processor stack
-        ; internally, so a value pushed here would not reliably survive a
-        ; later GETBYT call - the same reason every existing bulk-load
-        ; handler (BGCHAR, PALLOAD, ...) stashes cross-call values in
-        ; TEMP1-3/LINNUM rather than with pha/pla.
-        sta     TEMP1
+        pha                     ; preserve mode across handle expressions
         lda     #<lit_AS
         ldy     #>lit_AS
         jsr     mia_match_word
@@ -4101,7 +4109,7 @@ BASIC_OPEN:
         jsr     mia_sd_select_handle    ; X still holds the slot
         lda     #SD_OPEN_MODE
         jsr     mia_sd_seek
-        lda     TEMP1                   ; A = mode byte
+        pla                             ; A = mode byte
         sta     IDXA_PORT
         lda     #MIA_CMD_FS_OPEN
         jsr     mia_sd_cmd
@@ -4155,9 +4163,11 @@ BASIC_BPUT:
         dex
         cpx     #16
         jcs     snd_iqerr
-        jsr     mia_sd_select_handle
+        phx
         jsr     COMBYTE                 ; X = value 0-255
         stx     TEMP1
+        plx
+        jsr     mia_sd_select_handle
         jsr     mia_sd_select_transfer
         lda     TEMP1
         sta     IDXA_PORT
@@ -4455,31 +4465,43 @@ BASIC_MIASAVE:
         jmp     mia_sd_save_trigger
 
 ; ----------------------------------------------------------------------------
-; SEEK#n,pos : jump file n to byte offset pos (0-16777215) - wraps FS_SEEK.
+; SEEK#n,pos : jump file n to byte offset pos (0-4294967295) - wraps FS_SEEK.
 ; ----------------------------------------------------------------------------
 BASIC_SEEK:
-        jsr     GETBYT                  ; X = file number
+        jsr     GETBYT
         dex
         cpx     #16
         jcs     snd_iqerr
-        jsr     mia_sd_select_handle
+        phx
         jsr     CHKCOM
         jsr     FRMNUM
-        jsr     mia_getadr24            ; VID_ADDR = 24-bit offset
+        jsr     fs_integer32
+        lda     FAC+1
+        pha
+        lda     FAC+2
+        pha
+        lda     FAC+3
+        pha
+        lda     FAC+4
+        pha
+        ; Restore the handle after nested FPOS/FSIZE argument evaluation.
+        tsx
+        lda     $0105,x
+        tax
+        jsr     mia_sd_select_handle
         lda     #SD_FILE_POS0
         jsr     mia_sd_seek
-        lda     VID_ADDR
+        pla
         sta     IDXA_PORT
-        lda     VID_ADDR+1
+        pla
         sta     IDXA_PORT
-        lda     VID_ADDR+2
+        pla
         sta     IDXA_PORT
-        lda     #$00
+        pla
         sta     IDXA_PORT
+        pla
         lda     #MIA_CMD_FS_SEEK
-        jsr     mia_sd_cmd
-        jne     mia_fileerr
-        rts
+        jmp     fs_command
 
 ; ----------------------------------------------------------------------------
 ; KILL "path" : delete a file (GW-BASIC's real name for this) - wraps
@@ -4654,3 +4676,5 @@ BASIC_EOF:
 .include "clementina_timing.s"
 
 .include "clementina_memory.s"
+
+.include "clementina_fs.s"
