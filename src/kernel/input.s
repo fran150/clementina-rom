@@ -5,7 +5,7 @@
 ; kernel.inc).
 ; ============================================================================
 
-.segment "CODE"
+.segment "KERNCODE"
 
 ; ----------------------------------------------------------------------------
 ; chrin - blocking read of one text byte from the MIA FIFO -> A

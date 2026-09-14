@@ -16,6 +16,14 @@ CONFIG_2C := 1
 CONFIG_NO_CR        := 1
 CONFIG_SCRTCH_ORDER := 2
 
+; PEEK's own GETADR call overwrites LINNUM; without this, a nested PEEK
+; inside another statement's address argument - the extremely common
+; "POKE dest, PEEK(src)" byte-copy idiom (used throughout BLOAD's own
+; test suite) - silently writes back to src instead of dest, since POKE
+; parses dest into LINNUM *before* evaluating the value expression, and
+; the nested PEEK clobbers it without saving/restoring.
+CONFIG_PEEK_SAVE_LINNUM := 1
+
 ; zero page (BASIC owns the low/mid zero page; kernel keeps $F0-$FB)
 ZP_START1 := $00
 ZP_START2 := $0D
@@ -130,11 +138,10 @@ STYLE_SIDE_MAGIC1   := $FF
 ; line buffer, KVARS, then the BGP_* control block and DIR_NAME_BUF
 ; (clementina_extra.s - relocated here from their old $5C00 spot; nothing
 ; requires them to be anywhere specific, they're plain equates). RAMSTART2 is
-; a small, stable constant - it no longer needs bumping as the image grows,
-; since the image lives at the *other* end of the map now. BASIC's heap fills
-; everything in between, up to wherever the image currently starts
-; (__MAIN_START__, read directly by init.s - no runtime RAM probe into that
-; region, since it holds live running code). See docs/memory-map.md.
+; a small, stable constant matching the image's own fixed low start
+; (KERN_BASE, kernel.inc) - kernel+WozMon+BASIC are loaded right above it.
+; BASIC's heap fills everything above wherever the image currently ends
+; (__BASICMEM_LAST__, read directly by init.s). See docs/memory-map.md.
 RAMSTART2        := $04B7
 
 ; LOAD/SAVE: a BASIC program's own tokenized text to/from an SD file - see
@@ -142,10 +149,10 @@ RAMSTART2        := $04B7
 ; route to the kernel jump table below (a permanent stub - KERN_LOAD/
 ; KERN_SAVE are plain RTS, so "LOAD"/"SAVE" alone did nothing, and
 ; "LOAD "file"" left the filename unconsumed, always a ?SYNTAX ERROR).
-; KERN_BASE is now $BFD0 (top-anchored, see kernel.inc) - keep these two in
+; KERN_BASE is now $04B7 (bottom-anchored, see kernel.inc) - keep these two in
 ; sync with it; BASIC deliberately does not .include kernel.inc.
-KERN_LOAD := $BFEE
-KERN_SAVE := $BFF1
+KERN_LOAD := $04D5
+KERN_SAVE := $04D8
 SAVE:
         jmp BASIC_SAVE
 LOAD:

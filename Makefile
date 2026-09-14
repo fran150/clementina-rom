@@ -5,14 +5,15 @@
 # The kernel owns reset/video/console; MS BASIC owns the foreground after
 # cold start.
 #
-# 2026-09 RAM/ROM reorg: the image is top-anchored, ending exactly at $BFFF
-# (immediately below I/O), instead of starting at a fixed low load base.
-# Since the image's own size determines where it *starts*, and the linker
-# needs concrete addresses at link time, this is a two-pass build: pass 1
-# links with a throwaway placement just to measure the image's total size,
-# then pass 2 relinks with the region's start computed as $C000 - <that
-# size>, so the image's last byte always lands on $BFFF with no wasted
-# address space. See src/kernel/clementina.cfg and docs/memory-map.md.
+# Bottom-anchored (2026-09 rework, reversing the earlier top-anchored/
+# descending-loader design): the image starts at a fixed low address, $04B7
+# (right after working RAM), kernel+WozMon first, then BASIC growing upward -
+# reclaimable up through $BFFF by a loaded program that no longer needs
+# BASIC. Anchoring at a fixed START lets ld65 place everything in one pass
+# natively (no measure-then-relink dance needed - that was only required by
+# the old design's fixed END anchor, where the start had to be computed
+# backward from the total size first). See src/kernel/clementina.cfg and
+# docs/memory-map.md.
 # ============================================================================
 
 CA65    ?= ca65
@@ -28,14 +29,8 @@ KERNEL_SRC  := $(KERNEL_DIR)/kernel.s
 KERNEL_CFG  := $(KERNEL_DIR)/clementina.cfg
 KERNEL_BIN  := $(BUILD_DIR)/kernel.bin
 BASIC_SRC   := $(BASIC_DIR)/msbasic.s
-# WOZ monitor, linked into the image and reachable via KERN_WOZMON ($BFFA).
+# WOZ monitor, linked into the image and reachable via KERN_WOZMON.
 MONITOR_SRC := $(MONITOR_DIR)/wozmon-clementina.s
-
-# BASIC's heap floor (RAMSTART2, src/basic/defines_clementina.s) - a small,
-# stable constant now that the image no longer sits between working RAM and
-# the heap. The two-pass link below fails loudly if a future image ever grows
-# large enough to reach down into it.
-RAMSTART2 := 0x04B7
 
 # Destinations for the kernel image. Override on the command line if your
 # checkouts live elsewhere, e.g.  make install MIA_DIR=... EMU_DIR=...
@@ -54,24 +49,15 @@ $(KERNEL_BIN): $(KERNEL_DIR)/*.s $(KERNEL_DIR)/kernel.inc $(KERNEL_CFG) $(BASIC_
 	$(CA65) --cpu $(CPU) -g -l $(BUILD_DIR)/kernel.lst -o $(BUILD_DIR)/kernel.o $(KERNEL_SRC)
 	$(CA65) --cpu $(CPU) -D clementina -g -l $(BUILD_DIR)/basic.lst -o $(BUILD_DIR)/basic.o $(BASIC_SRC)
 	$(CA65) --cpu $(CPU) -g -l $(BUILD_DIR)/wozmon.lst -o $(BUILD_DIR)/wozmon.o $(MONITOR_SRC)
-	@# Pass 1: link with a throwaway placement, just to measure the image's
-	@# total size (kernel + WozMon + BASIC + jump table).
-	$(LD65) -C $(KERNEL_CFG) -D __CODE_START__=0x0400 -D __CODE_SIZE__=0x7C00 \
-		-o $(BUILD_DIR)/kernel_measure.bin \
-		$(BUILD_DIR)/kernel.o $(BUILD_DIR)/wozmon.o $(BUILD_DIR)/basic.o
-	@SIZE=$$(wc -c < $(BUILD_DIR)/kernel_measure.bin | tr -d ' '); \
-	START=$$(( 0xC000 - SIZE )); \
-	if [ $$START -le $$(( $(RAMSTART2) )) ]; then \
-		echo "ERROR: image ($$SIZE bytes) would start at $$(printf '0x%04X' $$START)," \
-			"at or below RAMSTART2 ($(RAMSTART2)) - it would overlap BASIC's heap floor"; \
-		exit 1; \
-	fi; \
-	START_HEX=$$(printf '0x%04X' $$START); \
-	$(LD65) -C $(KERNEL_CFG) -D __CODE_START__=$$START_HEX -D __CODE_SIZE__=$$SIZE \
+	$(LD65) -C $(KERNEL_CFG) \
 		-m $(BUILD_DIR)/kernel.map -Ln $(BUILD_DIR)/kernel.lbl -o $(KERNEL_BIN) \
-		$(BUILD_DIR)/kernel.o $(BUILD_DIR)/wozmon.o $(BUILD_DIR)/basic.o; \
-	echo "Built $(KERNEL_BIN) ($$SIZE bytes): image $$START_HEX-\$$BFFF," \
-		"heap $(shell printf '0x%04X' $$(( $(RAMSTART2) )))-$$(printf '0x%04X' $$(( START - 1 )))"
+		$(BUILD_DIR)/kernel.o $(BUILD_DIR)/wozmon.o $(BUILD_DIR)/basic.o
+	@SIZE=$$(wc -c < $(KERNEL_BIN) | tr -d ' '); \
+	sym() { awk -v n="$$1" '{ for (i=1;i<=NF;i++) if ($$i==n) { print $$(i+1); exit } }' $(BUILD_DIR)/kernel.map; }; \
+	KLAST=0x$$(sym __KERNEL_LAST__); BLAST=0x$$(sym __BASICMEM_LAST__); \
+	echo "Built $(KERNEL_BIN) ($$SIZE bytes): kernel+wozmon \$$04B7-$$(printf '0x%04X' $$((KLAST-1)))," \
+		"basic $$(printf '0x%04X' $$KLAST)-$$(printf '0x%04X' $$((BLAST-1)))," \
+		"heap $$(printf '0x%04X' $$BLAST)-\$$BFFF"
 
 $(BUILD_DIR):
 	@mkdir -p $(BUILD_DIR)
@@ -81,13 +67,13 @@ $(BUILD_DIR):
 install-emulator: $(KERNEL_BIN)
 	cp $(KERNEL_BIN) $(EMU_KERNEL)
 	@echo "Copied kernel.bin -> $(EMU_KERNEL)"
-	@echo "NOTE: emulator must have miaKernelTargetAddress=0xBFD0, miaKernelLoadTopAddress=0xBFFF (registers.go)"
+	@echo "NOTE: emulator must have kernelTargetAddress/kernelLoadBottomAddress=0x04B7 (registers.go)"
 
 # Copy the image into the firmware tree (CMake turns it into kernel_data.c).
 install-firmware: $(KERNEL_BIN)
 	cp $(KERNEL_BIN) $(MIA_KERNEL)
 	@echo "Copied kernel.bin -> $(MIA_KERNEL)"
-	@echo "NOTE: firmware must have kernel_target_address=0xBFD0, kernel_load_top_address=0xBFFF (mia.c)"
+	@echo "NOTE: firmware must have kernel_target_address/kernel_load_bottom_address=0x04B7 (mia.c)"
 
 install: install-emulator
 
@@ -102,7 +88,8 @@ help:
 	@echo "  make install-firmware  Copy kernel.bin into the MIA firmware tree"
 	@echo "  make clean      Remove build artifacts"
 	@echo
-	@echo "The image is top-anchored: it always ends at \$$BFFF, loaded by a"
-	@echo "descending MIA bootstrap. Needs kernel_target_address=0xBFD0 and"
-	@echo "kernel_load_top_address=0xBFFF in both the MIA firmware (mia.c) and"
-	@echo "the emulator (registers.go). See docs/memory-map.md."
+	@echo "The image is bottom-anchored: it always starts at \$$04B7 (kernel,"
+	@echo "then WozMon, then BASIC growing upward, reclaimable through \$$BFFF),"
+	@echo "loaded by an ascending MIA bootstrap. Needs kernel_target_address/"
+	@echo "kernel_load_bottom_address=0x04B7 in both the MIA firmware (mia.c)"
+	@echo "and the emulator (registers.go). See docs/memory-map.md."

@@ -3,24 +3,40 @@
 ; clementina_extra.s - Clementina BASIC console glue (EXTRA segment)
 ; ----------------------------------------------------------------------------
 ; Thin thunks from BASIC's console contract into the Clementina kernel jump
-; table. As of the 2026-09 RAM/ROM reorg the jump table is top-anchored at
-; KERN_BASE=$BFD0 (see src/kernel/kernel.inc) instead of the old load-base
-; $0400 - it's placed last in clementina.cfg so it always lands on the top 48
-; bytes of the image, $BFD0-$BFFF, regardless of image size.
+; table. Bottom-anchor rework: the jump table is at the fixed low anchor
+; KERN_BASE=$04B7 (see src/kernel/kernel.inc), placed first in clementina.cfg
+; so it always starts there regardless of how much kernel/WozMon code follows.
 ; Keep these addresses in sync with src/kernel/kernel.inc / docs/memory-map.md.
 ; ============================================================================
 
 .segment "EXTRA"
 .export BASIC_COLD_START, BASIC_WARM_START, MONRDKEY, MONRDKEY_NB, MONCOUT, MONRDLINE
 .export bg_play_tick
+.export mia_fileerr    ; KERN_LOAD (src/kernel/load.s) reaches this for any
+                        ; error detected before it writes a destination byte -
+                        ; safe, since BASIC's own code (this routine included)
+                        ; is still guaranteed intact at that point.
 
-KERN_CHROUT       = $BFD6
-KERN_CHRIN        = $BFD9
-KERN_GETKEY_NB    = $BFDC
-KERN_EDITKEY      = $BFF4
-KERN_CHROUT_GLYPH = $BFF7
-KERN_WOZMON       = $BFFA
-KERN_SET_BACKDROP = $BFFD
+KERN_CHROUT       = $04BD
+KERN_CHRIN        = $04C0
+KERN_GETKEY_NB    = $04C3
+; KERN_LOAD is already defined in defines_clementina.s (same translation
+; unit as this file, both pulled into basic.o via msbasic.s) - BLOAD hands
+; off there, see src/kernel/load.s.
+KERN_EDITKEY      = $04DB
+KERN_CHROUT_GLYPH = $04DE
+KERN_WOZMON       = $04E1
+KERN_SET_BACKDROP = $04E4
+
+; Kernel zero page ($F0-$FB, see kernel.inc) - BLOAD hands its parsed
+; destination-override/run addresses to KERN_LOAD through these two.
+KPTR              = $F0
+KTMP              = $F2
+
+; VIA Port A output register - selects the Extended RAM bank mapped at
+; $8000-$BFFF (PA0-PA4, see kernel.inc). BSAVE selects a bank directly
+; (it never runs through the kernel); KERN_LOAD has its own copy.
+VIA_ORA           = $C001
 
 ; Console control codes (CHROUT interprets these) and overlay geometry. Keep in
 ; sync with src/kernel/kernel.inc.
@@ -681,6 +697,22 @@ VID_FIELD:
         .res    1                       ; vid_bulk_run's field-within-item
                                          ; index (see vid_bulk_run - not Y,
                                          ; which vid_data_byte clobbers)
+
+BSAVE_BANK:
+        .res    1                       ; BASIC_BSAVE's current source bank,
+                                         ; 0 = unbanked (same private-scratch
+                                         ; rule as VID_COUNT above - safe
+                                         ; across mia_sd_* calls, not across
+                                         ; FRMNUM/GETADR/GETBYT)
+BSAVE_ADDR:
+        .res    2                       ; BASIC_BSAVE's parsed addr argument,
+                                         ; held here (not INDEX - INDEX is
+                                         ; general scratch to FRMNUM/GETBYT
+                                         ; themselves, not safe to hold a live
+                                         ; value across the *later* len/bank
+                                         ; arguments' own parsing) until all
+                                         ; parsing is done and it's copied
+                                         ; into INDEX for the copy loop
 
 VID_DATA_VARNAME:
         .byte   "Z9",$00
@@ -4482,6 +4514,287 @@ BASIC_MIASAVE:
         lda     LINNUM+1
         sta     VID_COUNT+1
         jmp     mia_sd_save_trigger
+
+; ----------------------------------------------------------------------------
+; BLOAD "path"[, run][, addr] : stream a file straight into CPU RAM, the way
+; a C64 loads a machine-code program - see docs/basic-file.md. `run` before
+; `addr` (not the more obvious load-then-run order) so the common case,
+; "load per the file's own header, then run", never needs to skip a blank
+; positional argument: `BLOAD"G",X` alone says run at X; only relocating a
+; program to somewhere other than its header's own address needs the third
+; argument too. `run` omitted or 0 means "don't run" ($0000 is never a valid
+; code entry point); `addr` omitted or 0 means "use the file's own 2-byte
+; header address" (never a valid destination either - it's zero page).
+;
+; Only this thin argument-parsing glue is BASIC-resident; everything from
+; here on (the actual file open/read/write and, for a `run` load, the final
+; jump) happens in kernel-resident code (KERN_LOAD, src/kernel/load.s) -
+; required because a load whose destination reaches into BASIC's own
+; resident region can end up overwriting the very code that would otherwise
+; need to keep running to finish it. There is deliberately no BASIC-side
+; logic after the JMP KERN_LOAD below.
+; ----------------------------------------------------------------------------
+BASIC_BLOAD:
+        jsr     mia_parse_path_expr    ; path -> MIA's own FS path buffer,
+                                        ; not CPU RAM - safe regardless of
+                                        ; what KERN_LOAD goes on to overwrite
+        stz     KTMP
+        stz     KTMP+1
+        stz     KPTR
+        stz     KPTR+1
+
+        jsr     CHRGOT                  ; peek: is a trailing ",run" present?
+        cmp     #','
+        bne     @go
+        jsr     CHRGET
+        jsr     FRMNUM
+        jsr     GETADR                  ; LINNUM = run address
+        lda     LINNUM
+        sta     KTMP
+        lda     LINNUM+1
+        sta     KTMP+1
+
+        jsr     CHRGOT                  ; peek: is a trailing ",addr" present?
+        cmp     #','
+        bne     @go
+        jsr     CHRGET
+        jsr     FRMNUM
+        jsr     GETADR                  ; LINNUM = destination override
+        lda     LINNUM
+        sta     KPTR
+        lda     LINNUM+1
+        sta     KPTR+1
+@go:
+        jmp     KERN_LOAD
+
+; ----------------------------------------------------------------------------
+; BSAVE "path", addr, len[, bank] : write `len` bytes of CPU RAM starting at
+; `addr` to a file, in the same format BLOAD reads - see docs/basic-file.md.
+; Unlike BLOAD this is entirely BASIC-resident: reading memory to write a
+; file never touches currently-executing code, so there's no self-overwrite
+; hazard and no need for kernel residency.
+;
+; `bank` is mandatory whenever addr >= $8000 (error if omitted) - no
+; implicit "whatever's currently selected," the same stance KERN_LOAD takes
+; - and is selected via VIA_ORA for the read, restored to bank 0 before
+; returning (BASIC always requires bank 0 selected). A length that reaches
+; the top of a bank ($BFFF) auto-advances into the next bank rather than
+; requiring the caller to split the call themselves, mirroring KERN_LOAD's
+; own auto-advance on the write side.
+; ----------------------------------------------------------------------------
+BASIC_BSAVE:
+        jsr     FRMEVL                  ; evaluate the filename expression
+        bit     VALTYP
+        jpl     mia_typerr              ; must be a string
+        jsr     FREFAC                  ; A = length, INDEX = pointer
+        jsr     mia_sd_write_path
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR                  ; LINNUM = addr (16-bit)
+        lda     LINNUM
+        sta     BSAVE_ADDR
+        lda     LINNUM+1
+        sta     BSAVE_ADDR+1
+        jsr     CHKCOM
+        jsr     FRMNUM
+        jsr     GETADR                  ; LINNUM = len (16-bit)
+        lda     LINNUM
+        sta     VID_COUNT
+        lda     LINNUM+1
+        sta     VID_COUNT+1
+
+        stz     BSAVE_BANK              ; 0 = unbanked, until proven otherwise
+        lda     BSAVE_ADDR+1
+        cmp     #$80
+        bcc     @haveaddr               ; addr < $8000 -> unbanked, no bank arg
+
+        jsr     CHRGOT                  ; peek: is a trailing ",bank" present?
+        cmp     #','
+        jne     bs_bankerr              ; addr >= $8000 requires one
+        jsr     CHRGET
+        jsr     GETBYT                  ; X = bank (0-255)
+        cpx     #1
+        jcc     bs_bankerr              ; bank 0 is never a valid target
+        cpx     #32
+        jcs     bs_bankerr              ; only 1-31 exist
+        stx     BSAVE_BANK
+        lda     BSAVE_BANK
+        sta     VIA_ORA
+
+@haveaddr:
+        ; All parsing is done - safe to occupy INDEX now.
+        lda     BSAVE_ADDR
+        sta     INDEX
+        lda     BSAVE_ADDR+1
+        sta     INDEX+1
+
+@open:
+        ldx     #LOADSAVE_HANDLE
+        jsr     mia_sd_select_handle
+        lda     #SD_OPEN_MODE
+        jsr     mia_sd_seek
+        lda     #FS_OPEN_WRITE_CREATE
+        sta     IDXA_PORT
+        lda     #MIA_CMD_FS_OPEN
+        jsr     mia_sd_cmd
+        jne     bs_fileerr
+
+        ; Header: addr_lo, addr_hi[, bank] - same shape BLOAD's file format
+        ; parses on the way in.
+        jsr     mia_sd_select_transfer
+        lda     INDEX
+        sta     IDXA_PORT
+        lda     INDEX+1
+        sta     IDXA_PORT
+        lda     BSAVE_BANK
+        beq     @hdr2
+        sta     IDXA_PORT
+        lda     #3
+        bra     @hdrgo
+@hdr2:
+        lda     #2
+@hdrgo:
+        sta     TEMP1
+        lda     #SD_REQUEST_LEN_L
+        jsr     mia_sd_seek
+        lda     TEMP1
+        sta     IDXA_PORT
+        stz     IDXA_PORT
+        lda     #MIA_CMD_FS_WRITE
+        jsr     mia_sd_cmd
+        jne     bs_fileerr
+
+; Stream the payload LOADSAVE_CHUNK bytes at a time, the same shape as
+; BASIC_SAVE's own loop - see its comments above for the chunking mechanics
+; this mirrors. Each request is additionally capped to never cross $BFFF-
+; >$8000 when banked, so a chunk can land exactly on the boundary (and
+; auto-advance) but never overshoot past it.
+@chunk:
+        lda     VID_COUNT
+        ora     VID_COUNT+1
+        jeq     @done                   ; remaining == 0 -> wrote everything
+
+        ; TEMP1 = min(remaining, LOADSAVE_CHUNK)
+        lda     VID_COUNT+1
+        bne     @full
+        lda     VID_COUNT
+        cmp     #LOADSAVE_CHUNK+1
+        bcs     @full
+        sta     TEMP1
+        jmp     @havelen
+@full:
+        lda     #LOADSAVE_CHUNK
+        sta     TEMP1
+@havelen:
+        lda     BSAVE_BANK
+        jeq     @havelen_ok             ; unbanked -> no boundary to cap against
+        sec
+        lda     #$00
+        sbc     INDEX
+        tax                             ; X = low byte of ($C000 - INDEX)
+        lda     #$C0
+        sbc     INDEX+1
+        bne     @havelen_ok             ; high byte nonzero -> room for 128+
+        cpx     #LOADSAVE_CHUNK+1
+        bcs     @havelen_ok             ; room in [129,255] -> full chunk fits
+        stx     TEMP1                   ; room in [1,128] -> cap to that
+@havelen_ok:
+        jsr     mia_sd_select_transfer
+        ldy     #$00
+@copyout:
+        lda     (INDEX),y
+        sta     IDXA_PORT
+        iny
+        cpy     TEMP1
+        bne     @copyout
+
+        lda     #SD_REQUEST_LEN_L
+        jsr     mia_sd_seek
+        lda     TEMP1
+        sta     IDXA_PORT
+        stz     IDXA_PORT
+        lda     #MIA_CMD_FS_WRITE
+        jsr     mia_sd_cmd
+        jne     bs_fileerr
+
+        clc
+        lda     INDEX
+        adc     TEMP1
+        sta     INDEX
+        lda     INDEX+1
+        adc     #$00
+        sta     INDEX+1
+        sec
+        lda     VID_COUNT
+        sbc     TEMP1
+        sta     VID_COUNT
+        lda     VID_COUNT+1
+        sbc     #$00
+        sta     VID_COUNT+1
+
+        lda     BSAVE_BANK
+        jeq     @chunk                  ; unbanked -> never auto-advances
+        lda     INDEX+1
+        cmp     #$C0
+        jne     @chunk                  ; short of the boundary - keep going
+        lda     VID_COUNT
+        ora     VID_COUNT+1
+        jeq     @chunk                  ; landed exactly on it with nothing left -
+                                         ; @chunk's own top-of-loop check ends it
+        lda     #$80
+        sta     INDEX+1
+        inc     BSAVE_BANK
+        lda     BSAVE_BANK
+        cmp     #32
+        bcs     bs_bankerr              ; source ran past the last bank
+        sta     VIA_ORA
+        jmp     @chunk
+
+@done:
+        ldx     #LOADSAVE_HANDLE
+        jsr     mia_sd_select_handle
+        lda     #MIA_CMD_FS_CLOSE
+        jsr     mia_sd_cmd
+        jne     bs_fileerr
+        lda     BSAVE_BANK
+        beq     @rts_out
+        stz     VIA_ORA                 ; BASIC always requires bank 0 selected
+@rts_out:
+        rts
+
+bs_bankerr:
+        lda     BSAVE_BANK
+        beq     @rts_bank0              ; error before any bank was ever selected
+        stz     VIA_ORA
+@rts_bank0:
+        jmp     snd_iqerr
+
+bs_fileerr:
+        lda     BSAVE_BANK
+        beq     @go_fileerr
+        stz     VIA_ORA
+@go_fileerr:
+        jmp     mia_fileerr
+
+; ----------------------------------------------------------------------------
+; SYS addr : call a machine-code routine at addr, then return - a plain
+; statement, unlike USR() (an expression function bound once through its own
+; zero-page vector - see eval.s). JSR, not JMP: SYS is expected to return via
+; RTS and fall through to the next statement, exactly like USR and the
+; EXTFN dispatch above - both already use JMPADRS as a JSR-to-anywhere
+; trampoline (a permanently-resident "JSR $xxxx" instruction whose operand
+; gets patched before each call, set up once at cold start - see init.s);
+; SYS just reuses it directly rather than needing a trampoline of its own.
+; ----------------------------------------------------------------------------
+BASIC_SYS:
+        jsr     FRMNUM
+        jsr     GETADR                  ; LINNUM = target address (16-bit)
+        lda     LINNUM
+        sta     JMPADRS+1
+        lda     LINNUM+1
+        sta     JMPADRS+2
+        jsr     JMPADRS
+        rts
 
 ; ----------------------------------------------------------------------------
 ; SEEK#n,pos : jump file n to byte offset pos (0-4294967295) - wraps FS_SEEK.

@@ -1,5 +1,6 @@
 .ifdef CLEMENTINA
-.import __MAIN_START__ ; clementina.cfg - start of the top-anchored image region
+.import __BASICMEM_LAST__ ; clementina.cfg - first free byte past BASIC's own
+                          ; code/tables (start of the heap, bottom-anchored)
 .endif
 
 .segment "INIT"
@@ -229,14 +230,16 @@ L4098:
         bne     L40EE
 .endif
 .ifdef CLEMENTINA
-; Clementina (2026-09 RAM/ROM reorg): skip the byte-probe below entirely.
-; The image (kernel+BASIC+WozMon) now lives immediately above the heap,
-; ending at $BFFF - probing into it byte-by-byte like the generic RAM probe
-; does would scribble test patterns into live, running code. __MAIN_START__
-; is the linker-computed start of that region (clementina.cfg); MEMSIZ/FRETOP
-; are set to it directly, with no RAM probe involved.
-        lda     #<__MAIN_START__
-        ldy     #>__MAIN_START__
+; Clementina (bottom-anchor rework): skip the byte-probe below entirely.
+; The image (kernel+WozMon+BASIC) is bottom-anchored, so MEMSIZ (top of the
+; heap) is simply the fixed hardware boundary immediately below I/O - no
+; probing needed, and probing upward from a low start would immediately
+; scribble test patterns into the live, running image anyway (that image
+; sits right above the heap's start, not below MEMSIZ, so there is nothing
+; here to discover at runtime). TXTTAB (bottom of the heap) is set from the
+; linker-computed __BASICMEM_LAST__ further down instead.
+        lda     #$00
+        ldy     #$C0
         sta     LINNUM
         sty     LINNUM+1
         jmp     L40FA
@@ -402,8 +405,19 @@ L4157:
         ldy     #>SIN_COS_TAN_ATN	; all of trig.s
 L4183:
 .else
+.ifdef CLEMENTINA
+; Bottom-anchor rework: TXTTAB (start of BASIC's program text / bottom of
+; the heap) is wherever the loaded image's own content actually ends, not
+; the fixed RAMSTART2 constant other platforms use - that varies build to
+; build as kernel/WozMon/BASIC code grows or shrinks, so it comes from the
+; linker (__BASICMEM_LAST__, clementina.cfg) instead of a compile-time
+; equate.
+        ldx     #<__BASICMEM_LAST__
+        ldy     #>__BASICMEM_LAST__
+.else
         ldx     #<RAMSTART2
         ldy     #>RAMSTART2
+.endif
 .endif
         stx     TXTTAB
         sty     TXTTAB+1

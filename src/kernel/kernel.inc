@@ -230,18 +230,33 @@ CHR_DEL_FWD         = $7F      ; editor: delete the char at the cursor (close ga
 CHR_INSERT          = $94      ; editor: open a gap at the cursor (insert space)
 
 ; ----------------------------------------------------------------------------
-; Kernel jump table - the stable ABI. As of the 2026-09 RAM/ROM reorg, the
-; loaded image (kernel+BASIC+WozMon) lives at the *top* of the flat address
-; space, ending exactly at $BFFF, and the jump table is placed LAST in
-; clementina.cfg's SEGMENTS list - so it always lands on the top 48 bytes of
-; the image, $BFD0-$BFFF, no matter how much kernel/BASIC/WozMon code exists
-; below it. KERN_BASE is therefore a true fixed constant ($C000 minus the
-; table's own fixed size), unlike the image's *start*, which varies build to
-; build and is never referenced by address - only through this table.
-; Callers JSR these; internal routine addresses may move freely.
+; Kernel jump table - the stable ABI. Bottom-anchored (2026-09 rework): the
+; loaded image now starts at a fixed LOW address, $04B7 (right after working
+; RAM), with kernel+WozMon occupying a small block there and BASIC growing
+; upward above it, reclaimable up through $BFFF. The jump table is placed
+; FIRST in clementina.cfg's SEGMENTS list, so it always starts exactly at
+; $04B7 no matter how much kernel/WozMon code follows it - KERN_BASE is
+; therefore a true fixed constant, unlike the image's *end*, which varies
+; build to build and is never referenced by address - only through this
+; table. Callers JSR these; internal routine addresses may move freely.
+;
+; This is the reverse of the 2026-09-13 top-anchored/descending-loader
+; design: that design fixed the *end* of the image at $BFFF and computed the
+; start; this one fixes the *start* and lets BASIC's own end (and the heap
+; that begins there) be computed instead. The reason: with the image
+; top-anchored, roughly the top 16 KiB of it (all of Extended RAM bank 0)
+; was executable kernel/BASIC code, including the jump table and CHRGET (the
+; single most-executed routine in the interpreter) - any code switching
+; banks away from bank 0 (a loaded program's own bank-switching, or a future
+; kernel loader streaming a program across banks) risked unmapping its own
+; next instruction. Bottom-anchoring keeps kernel+WozMon permanently below
+; $8000, so nothing resident is ever at risk from a bank switch, and BASIC's
+; own resident code becomes a well-bounded, reclaimable region a loaded
+; program can safely overwrite once it no longer needs BASIC. See
+; docs/memory-map.md.
 ; ----------------------------------------------------------------------------
 KERN_JUMPTAB_SIZE  = $30       ; 16 entries x 3 bytes - keep in sync with kernel.s
-KERN_BASE          = $C000 - KERN_JUMPTAB_SIZE  ; = $BFD0
+KERN_BASE          = $04B7
 KERN_COLDSTART     = KERN_BASE + $00   ; reset entry (MIA points RESET here)
 KERN_WARMSTART     = KERN_BASE + $03   ; re-enter the system
 KERN_CHROUT        = KERN_BASE + $06   ; A = char -> console

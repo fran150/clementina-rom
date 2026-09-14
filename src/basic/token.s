@@ -333,6 +333,20 @@ MATHTBL:
         ext2_keyword_rts "MFILL", BASIC_MFILL
         ext2_keyword_rts "FLUSH", BASIC_FLUSH
         ext2_keyword_rts "FSTAT", BASIC_FSTAT
+        ; Load a raw machine-code/data file straight into CPU RAM, the way a
+        ; C64 loads a game (see docs/basic-file.md). Real implementation is
+        ; kernel-resident (KERN_LOAD, src/kernel/load.s) - see BASIC_BLOAD's
+        ; own comment in clementina_extra.s for why.
+        ext2_keyword_rts "BLOAD", BASIC_BLOAD
+        ; BSAVE's counterpart - entirely BASIC-resident, see BASIC_BSAVE's
+        ; own comment in clementina_extra.s.
+        ext2_keyword_rts "BSAVE", BASIC_BSAVE
+        ; Standalone control transfer (JSR, not USR()'s bound expression
+        ; vector) - see BASIC_SYS's own comment in clementina_extra.s. EXT2
+        ; for consistency with BLOAD/BSAVE, not because SYS is file-related;
+        ; the classic primary-table SYS slot is dead code for Clementina
+        ; (CONFIG_FILE is undefined), so this doesn't collide with anything.
+        ext2_keyword_rts "SYS", BASIC_SYS
         end_ext2_token_tables
 
 ; ----------------------------------------------------------------------------

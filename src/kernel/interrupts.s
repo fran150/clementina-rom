@@ -5,12 +5,14 @@
 ; kernel.inc).
 ; ============================================================================
 
-.segment "CODE"
+.segment "KERNCODE"
 
 ; ----------------------------------------------------------------------------
-; load / save - storage stubs (mapped onto MIA FAT later)
+; save - storage stub. KERN_LOAD (KERN_LOAD's jump-table slot) now has a real
+; implementation in load.s; KERN_SAVE stays a stub - BSAVE (like BASIC's own
+; SAVE) never needs kernel residency, since reading memory to write a file
+; never touches currently-executing code. See docs/memory-map.md.
 ; ----------------------------------------------------------------------------
-load:
 save:
         rts
 

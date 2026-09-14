@@ -42,9 +42,13 @@ repo, `docs/sd.md` and `docs/sd-programmer-guide.md`.
 | `MIASAVE "path", addr, len` | | Save `len` bytes of MIA RAM starting at `addr` to a file. |
 | `LOAD "path"` | — | Replace the current program with a saved one. |
 | `SAVE "path"` | — | Save the current program. |
+| `BLOAD "path"[, run][, addr]` | `run`/`addr` 16-bit CPU addresses | Load a file straight into CPU RAM at the address its own header specifies (or `addr`, if given), the way a C64 loads a game. `run`, if given and nonzero, jumps there once loaded instead of returning. |
+| `BSAVE "path", addr, len[, bank]` | `addr`/`len` 16-bit, `bank` 1–31 | Save `len` bytes of CPU RAM starting at `addr` to a file, in the format `BLOAD` reads. `bank` is mandatory whenever `addr >= $8000`. |
+| `SYS addr` | `addr` 16-bit CPU address | Call a machine-code routine at `addr` (`JSR`) and continue with the next statement once it returns (`RTS`). |
 
 `OPEN`, `CLOSE`, `BGET#`, `BPUT#`, `SEEK#`, `EOF`, `KILL`, `MKDIR`, `RMDIR`,
-`NAME`, `CD`, `DIR`, `LOAD`, and `SAVE` are reserved words.
+`NAME`, `CD`, `DIR`, `LOAD`, `SAVE`, `BLOAD`, `BSAVE`, and `SYS` are reserved
+words.
 
 Out-of-range file numbers (0, or above 16) raise `ILLEGAL QUANTITY`. A string
 expression is required wherever a path is expected; a number there raises
@@ -102,6 +106,98 @@ current program survives.
 `LOAD`/`SAVE` use file handle 16 internally to stream the program through the
 same file I/O this whole page describes — close it first if a program has it
 open when calling either.
+
+## Loading and running machine code (BLOAD/BSAVE/SYS)
+
+`BLOAD`/`BSAVE` load and save raw CPU-RAM byte ranges — not BASIC's
+tokenized text (that's `LOAD`/`SAVE` above), and not MIA RAM (that's
+`MIALOAD`/`MIASAVE`) — the way a C64 loads a game or a sprite/font asset.
+`SYS` then transfers control into loaded code and, unlike `USR()` (an
+expression function bound once through its own vector), can be called fresh
+against any address at any time as a plain statement.
+
+### File format (PRG)
+
+```text
+[addr_lo][addr_hi]                 addr < $8000  -> plain CPU RAM, unbanked
+[addr_lo][addr_hi][bank]           addr in $8000-$BFFF -> bank REQUIRED,
+                                    1-31 (bank 0 is never a valid target -
+                                    it's BASIC's own running heap, §8/§9 of
+                                    docs/memory-map.md)
+```
+
+The address itself signals which shape follows, so a plain unbanked file is
+byte-identical to the classic 2-byte-header format. `BSAVE` writes exactly
+the header shape `BLOAD` expects back.
+
+### `BLOAD "path"[, run][, addr]`
+
+Loads `path` into CPU RAM at the address its own 2-or-3-byte header
+specifies, or at `addr` instead if given (`addr` omitted or `0` means "use
+the file's own header address" — `0` is never a valid destination anyway,
+it's zero page). `run`, given before `addr` so the common case ("load per
+the file's own header, then run") never needs a blank placeholder argument,
+jumps to that address once loaded instead of returning to BASIC — `run`
+omitted or `0` means "don't run" (`0` is never a valid code entry point).
+
+**A destination that reaches into BASIC's own resident region or heap
+(anywhere `>= $04B7`, unbanked — see `docs/memory-map.md` §8) requires a
+`run` address.** BASIC's own code may not survive the load, so returning to
+it afterward is never coherent; without `run`, such a load is rejected
+before anything is written, leaving the running program untouched. A
+**banked** destination (`$8000-$BFFF`, `bank` 1-31 from the file's own
+header) never has this restriction — it's ordinary storage, not BASIC's own
+workspace, so an ordinary (non-`run`) banked `BLOAD` returns to BASIC
+normally once loaded.
+
+A payload that reaches the top of a bank (`$BFFF`) auto-advances into the
+next bank rather than requiring the caller to split the load across bank
+boundaries themselves — the same reason a payload can start a few bytes
+before `$C000` and still land correctly. Loading is entirely kernel-resident
+(`KERN_LOAD`, `src/kernel/load.s`): the destination may overwrite BASIC's
+own code as it copies, so it cannot call out to any BASIC-resident routine
+mid-copy.
+
+### `BSAVE "path", addr, len[, bank]`
+
+Saves `len` bytes of CPU RAM starting at `addr` to a file, in exactly the
+format `BLOAD` reads back. Unlike `BLOAD`, `len` is mandatory (there's no
+"file's own length" to fall back on) — the same asymmetry classic BASIC's
+`BLOAD`/`BSAVE` have. `bank` is mandatory whenever `addr >= $8000` (error if
+omitted) — no implicit "whatever's currently selected." A length that
+reaches the top of a bank auto-advances into the next bank, mirroring
+`BLOAD`'s own auto-advance, so a payload that spans a bank boundary
+round-trips through `BLOAD`/`BSAVE` unchanged. Reading memory to write a
+file never touches currently-executing code, so `BSAVE` (unlike `BLOAD`) is
+entirely BASIC-resident — no self-overwrite hazard to guard against.
+
+### `SYS addr`
+
+Calls the machine-code routine at `addr` (`JSR`) and, once it returns
+(`RTS`), continues with the next statement — a plain, repeatable control
+transfer, not a bound expression vector like `USR()`. A routine meant to
+take over the machine permanently (the way `BLOAD ,run` loads a whole game)
+should be entered through `BLOAD`'s own `run` argument instead; `SYS` is for
+calling a subroutine and getting control back.
+
+### Example
+
+```basic
+10 BLOAD "SPRITES.PRG"           ' load per its own header address
+20 BLOAD "GAME.PRG", 24576       ' run at $6000 once loaded (relocated)
+```
+
+```basic
+10 FOR I=0 TO 15: POKE 24576+I,I+1: NEXT I
+20 BSAVE "DATA.PRG", 24576, 16   ' unbanked, no bank argument needed
+30 BSAVE "BANKED.PRG", 32768, 16384, 1   ' whole bank 1
+```
+
+```basic
+10 BLOAD "ROUTINE.PRG"           ' loaded somewhere that doesn't need `run`
+20 SYS 24576                     ' call it
+30 PRINT "back in BASIC"         ' SYS returned - this line still runs
+```
 
 ## Video/audio asset family
 

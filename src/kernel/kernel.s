@@ -1,11 +1,13 @@
 ; ============================================================================
 ; kernel.s - Clementina kernel
 ; ----------------------------------------------------------------------------
-; Loaded by MIA into base RAM, placed by clementina.cfg so the image (kernel +
-; BASIC + WozMon) ends exactly at $BFFF, and entered via the MIA-backed RESET
-; vector, which points at the jump table's fixed top-anchored address
-; (KERN_BASE=$BFD0, kernel.inc). Provides the console (overlay text + input
-; FIFO), a stable jump-table ABI, and (later) storage and BASIC/WozMon hand-off.
+; Loaded by MIA into base RAM, placed by clementina.cfg so the image starts
+; at a fixed low address (kernel, then WozMon, then BASIC growing upward -
+; the top of that block up through $BFFF is reclaimable by a loaded program
+; that no longer needs BASIC), entered via the MIA-backed RESET vector, which
+; points at the jump table's fixed bottom-anchored address (KERN_BASE=$04B7,
+; kernel.inc). Provides the console (overlay text + input FIFO), a stable
+; jump-table ABI, and storage load/execute (KERN_LOAD).
 ;
 ; Cold start enables the overlay text layer, clears the screen, prints the
 ; banner, then enters BASIC through the fixed kernel jump table.
@@ -41,13 +43,12 @@ _KJIFFY_STORAGE: .res 2 ; free-running 16-bit tick counter; +1 per VIA Timer-1
 
 ; ============================================================================
 ; Jump table - must land exactly on the KERN_* addresses from kernel.inc.
-; The purpose of the jump table is to keep kernel address fixed even if the
-; code changes in size. Placed LAST in clementina.cfg's SEGMENTS list, so it
-; always lands on the top KERN_JUMPTAB_SIZE bytes of the image, ending at
-; $BFFF - that placement is what clementina.cfg/the two-pass Makefile build
-; guarantee, not this file; the assert below only checks the table's own
-; *size* (relative to its own start), since during the Makefile's first
-; (measurement) link pass this segment is not yet at its final address.
+; The purpose of the jump table is to keep kernel addresses fixed even if the
+; code changes in size. Placed FIRST in clementina.cfg's SEGMENTS list, so it
+; always starts exactly at $04B7 (KERNEL's fixed low anchor), regardless of
+; how much kernel/WozMon code follows it - that placement is what
+; clementina.cfg guarantees, not this file; the assert below only checks the
+; table's own *size*.
 ; ============================================================================
 .segment "JUMPTAB"
 jumptab_start:
@@ -74,9 +75,17 @@ jumptab_start:
 .assert (* - jumptab_start = KERN_JUMPTAB_SIZE), error, "kernel jump table size/layout mismatch"
 
 ; ============================================================================
-; Code
+; Code - own segment name ("KERNCODE", not the shared "CODE" basic.s and
+; every other platform's msbasic source also use), so ld65 can place all of
+; kernel+WozMon's code as one contiguous block strictly below all of BASIC's
+; segments (clementina.cfg's KERNEL memory region) instead of merging with
+; BASIC's own "CODE" contribution in link-file order. This is what makes
+; "everything from BASIC's start through $BFFF is safely reclaimable, nothing
+; kernel-resident is interleaved into it" a real, linker-checked property
+; instead of an accident of file order. See clementina.cfg and
+; docs/memory-map.md.
 ; ============================================================================
-.segment "CODE"
+.segment "KERNCODE"
 
 ; ----------------------------------------------------------------------------
 ; coldstart - reset entry point
@@ -160,3 +169,4 @@ warmstart:
 .include "editor.s"
 .include "print.s"
 .include "interrupts.s"
+.include "load.s"

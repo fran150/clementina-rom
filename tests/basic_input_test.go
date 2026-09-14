@@ -2,6 +2,9 @@
 // overlay; tests/run_input.py supplies the freshly built kernel.bin.
 package clementina
 
+// Checkpoints use $0200 (512), the WozMon buffer, which is idle during BASIC.
+// Do not use heap addresses: stored programs can grow through them.
+
 import (
 	"fmt"
 	"strings"
@@ -37,41 +40,41 @@ func TestBasicInputPhase(t *testing.T) {
 	write(85, 127)
 	write(86, 255)
 	write(88, 255)
-	add("POKE 24576,KEYDOWN(79)")
-	add("POKE 24577,KEYDOWN(80)")
-	add("POKE 24578,CONSDOWN(225)")
-	add("POKE 24579,INPUTDEV(0)")
+	add("POKE 512,KEYDOWN(79)")
+	add("POKE 513,KEYDOWN(80)")
+	add("POKE 514,CONSDOWN(225)")
+	add("POKE 515,INPUTDEV(0)")
 	add("PADREAD 0")
-	add("POKE 24580,PADON(0):POKE 24581,PADDIR(0)")
-	add("POKE 24582,PADSTICK(0):POKE 24583,PADBTN(0,9)")
-	add("POKE 24584,PADAXIS(0,0)+128")
-	add("POKE 24585,PADAXIS(0,1):POKE 24586,PADTRIG(0,0)")
+	add("POKE 516,PADON(0):POKE 517,PADDIR(0)")
+	add("POKE 518,PADSTICK(0):POKE 519,PADBTN(0,9)")
+	add("POKE 520,PADAXIS(0,0)+128")
+	add("POKE 521,PADAXIS(0,1):POKE 522,PADTRIG(0,0)")
 	add("A=PADBTN(PADON(1),PADBTN(0,0)*9)")
-	add("POKE 24587,A")
+	add("POKE 523,A")
 	// Explicit cached read: changing MIA must not change PADAXIS until PADREAD.
 	write(84, 10)
-	add("POKE 24588,PADAXIS(0,0)+128")
-	add("PADREAD 0:POKE 24589,PADAXIS(0,0)")
+	add("POKE 524,PADAXIS(0,0)+128")
+	add("PADREAD 0:POKE 525,PADAXIS(0,0)")
 	write(65, 250)
 	write(66, 3)
-	add("MOUSE DX,DY,B,W,P:POKE 24590,DX:POKE 24591,DY")
+	add("MOUSE DX,DY,B,W,P:POKE 526,DX:POKE 527,DY")
 	write(64, 5)
 	write(65, 3)
 	write(66, 250)
 	write(67, 255)
 	write(68, 2)
 	add("MOUSE DX%,DY%,B%,W%,P%")
-	add("POKE 24592,DX%:POKE 24593,DY%+128:POKE 24594,B%")
-	add("POKE 24595,W%+128:POKE 24596,P%")
-	add("MOUSE DX,DY,B,W,P:POKE 24597,DX:POKE 24598,DY")
+	add("POKE 528,DX%:POKE 529,DY%+128:POKE 530,B%")
+	add("POKE 531,W%+128:POKE 532,P%")
+	add("MOUSE DX,DY,B,W,P:POKE 533,DX:POKE 534,DY")
 	add("KEYREPEAT 400,60:KEYRPT 79,0:KEYREPEAT 0")
-	add("KEYCLEAR:INPUTMODE 0:POKE 24599,123")
+	add("KEYCLEAR:INPUTMODE 0:POKE 535,123")
 	add(fmt.Sprintf("GOTO %d", line))
 	typeLine(computer, step, "RUN")
 	editorTickN(computer, step, 3_000_000)
 	want := []byte{1, 0, 1, 4, 1, 9, 165, 1, 0, 127, 255, 1, 0, 10, 0, 0, 9, 119, 5, 127, 2, 0, 0, 123}
 	for i, w := range want {
-		if got := peek(computer, uint32(24576+i)); got != w {
+		if got := peek(computer, uint32(512+i)); got != w {
 			t.Errorf("input result %d: want %d got %d", i, w, got)
 		}
 	}

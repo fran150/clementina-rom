@@ -1,7 +1,7 @@
 ; MIA clock protocol (sys/timing.h): latch $11078..$1107F with command $55.
 ; No periodic MIA writer touches the snapshot. The existing VIA tick/IRQ is
 ; independent and continues servicing background PLAY while callers wait.
-.segment "CODE"
+.segment "KERNCODE"
 .export timing_read, timing_set, ktime_snapshot
 
 timing_read:

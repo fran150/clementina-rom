@@ -5,7 +5,7 @@
 ; kernel.inc). Drives the overlay nametable/attribute planes via window A.
 ; ============================================================================
 
-.segment "CODE"
+.segment "KERNCODE"
 
 ; ----------------------------------------------------------------------------
 ; clrscr - fill the overlay with spaces and home the cursor

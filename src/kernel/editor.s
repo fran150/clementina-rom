@@ -13,7 +13,7 @@
 ; so single-key reads are unaffected.
 ; ============================================================================
 
-.segment "CODE"
+.segment "KERNCODE"
 
 ; ----------------------------------------------------------------------------
 ; editkey - return the next character of the edited logical line (KERN_EDITKEY).

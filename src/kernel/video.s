@@ -6,7 +6,7 @@
 ; already in scope and no .import/.export plumbing is required.
 ; ============================================================================
 
-.segment "CODE"
+.segment "KERNCODE"
 
 ; ----------------------------------------------------------------------------
 ; video_init - configure font state, enable overlay, request refresh

@@ -2,7 +2,7 @@
 ; Every DMA request uses disjoint ranges, including when the whole move overlaps.
 ; Only reserved descriptors F4/F5 are changed; IRQ users of A/B remain independent.
 .macpack longbranch
-.segment "CODE"
+.segment "KERNCODE"
 .export mia_mem_read, mia_mem_write, mia_mem_copy, mia_mem_fill
 .export km_src, km_dst, km_count, km_value
 

@@ -335,6 +335,12 @@ L2D36:
 L2D39:
         jsr     ISLETC
         bcs     FRM_VARIABLE
+.ifdef CLEMENTINA
+        cmp     #$24            ; '$' - hex literal prefix ($FF, $0900, ...)
+        bne     L2D39_NOT_HEX
+        jmp     FINH
+L2D39_NOT_HEX:
+.endif
 .ifdef CONFIG_CBM_ALL
         cmp     #$FF
         bne     LCDC1

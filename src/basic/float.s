@@ -1365,6 +1365,62 @@ L3C3A:
         sta     EXPON
         jmp     FIN4
 
+.ifdef CLEMENTINA
+; ----------------------------------------------------------------------------
+; CONVERT HEX STRING TO FP VALUE IN FAC ($nnnn HEX LITERAL)
+;
+; STRING POINTED TO BY TXTPTR, LEADING '$' ALREADY SCANNED BY FRM_ELEMENT
+; (eval.s). Accumulates an unsigned 16-bit value from hex digits 0-9/A-F
+; (uppercase only, matching this BASIC's keyword/variable convention) via
+; shift-and-OR, then floats it in one shot through GIVAYF - no per-digit
+; float math needed the way decimal FIN above does. Extra digits past 4
+; simply shift out the top, wrapping mod $10000, same as real hardware -
+; not treated as an error. A run of zero hex digits (e.g. bare "$" followed
+; by a non-hex character) evaluates as 0, TXTPTR left at the offending
+; character for the caller to handle as it would any other token.
+;
+; Reuses TMPEXP/EXPON as a throwaway 16-bit accumulator - FIN's own scratch
+; pair, safe here since FIN and FINH are never in flight at the same time
+; (one numeric literal is either decimal or hex, never both). Placed after
+; the whole FIN/GETEXP cluster (not spliced into the middle of it) since
+; FIN's own internal branches to FIN9/GETEXP are 8-bit relative and can't
+; reach over a block inserted between them.
+; ----------------------------------------------------------------------------
+FINH:
+        lda     #$00
+        sta     TMPEXP
+        sta     EXPON
+@next:  jsr     CHRGET
+        bcc     @digit                  ; C=0 -> ASCII '0'-'9', A=that char
+        jsr     ISLETC                  ; C=1 -> A-Z letter, A preserved
+        bcc     @done                   ; not a letter -> literal ends here
+        cmp     #$47                    ; 'G'
+        bcs     @done                   ; 'G'-'Z' -> not hex, literal ends
+        sec
+        sbc     #$37                    ; 'A'-10 -> A-F becomes 10-15
+        jmp     @accum                  ; plain 6502 here - msbasic.s sets
+                                         ; .setcpu "6502" for this unit, BRA
+                                         ; isn't available
+@digit: sec
+        sbc     #$30                    ; '0' -> 0-9
+@accum: pha
+        asl     TMPEXP
+        rol     EXPON
+        asl     TMPEXP
+        rol     EXPON
+        asl     TMPEXP
+        rol     EXPON
+        asl     TMPEXP
+        rol     EXPON
+        pla
+        ora     TMPEXP
+        sta     TMPEXP
+        jmp     @next
+@done:  lda     EXPON                   ; high byte
+        ldy     TMPEXP                  ; low byte
+        jmp     GIVAYF
+.endif
+
 ; ----------------------------------------------------------------------------
 .ifdef CONFIG_SMALL
 ; these values are /1000 of what the labels say

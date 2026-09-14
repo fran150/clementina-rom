@@ -10,18 +10,17 @@
 ; primitives translate to/from the kernel's plain-ASCII console.
 ;
 ; Linked into the combined image and reached through the kernel jump table at
-; KERN_WOZMON ($BFFA); enter with `JMP WOZMON` (or BASIC `MON`/`USR`). Quit back
-; to BASIC by typing `Q` (or run the warm-start vector manually with `BFD3R`).
-; The jump table is top-anchored at KERN_BASE=$BFD0 (2026-09 RAM/ROM reorg) -
-; see docs/memory-map.md.
+; KERN_WOZMON ($04E1); enter with `JMP WOZMON` (or BASIC `MON`/`USR`). Quit back
+; to BASIC by typing `Q` (or run the warm-start vector manually with `04BAR`).
+; The jump table is bottom-anchored at KERN_BASE=$04B7 - see docs/memory-map.md.
 ; ============================================================================
 
 .setcpu "65C02"
 
 ; Kernel jump table (keep in sync with ../kernel/kernel.inc).
-KERN_WARMSTART  = $BFD3
-KERN_CHROUT     = $BFD6
-KERN_CHRIN      = $BFD9
+KERN_WARMSTART  = $04BA
+KERN_CHROUT     = $04BD
+KERN_CHRIN      = $04C0
 
 ; Page 0 variables (overlap BASIC's zero page; only one is active at a time).
 XAML            = $24           ; Last "opened" location Low
@@ -36,7 +35,11 @@ MODE            = $2B           ; $00=XAM, $7F=STOR, $AE=BLOCK XAM
 ; Line buffer (shared $0200 page).
 IN              = $0200         ; Input buffer to $027F
 
-.segment "CODE"
+; Own segment name ("WOZCODE"), not the shared "CODE" basic.s uses - keeps
+; WozMon grouped with kernel.s's own "KERNCODE" in the permanently-resident
+; KERNEL memory region (clementina.cfg), strictly below BASIC's reclaimable
+; territory. See kernel.s's segment comment and docs/memory-map.md.
+.segment "WOZCODE"
                 .export WOZMON
 
 WOZMON:
