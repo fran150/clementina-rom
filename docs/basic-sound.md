@@ -1,13 +1,15 @@
 # Clementina BASIC — Sound
 
 Clementina BASIC drives MIA's four‑voice PWM PSG with a small set of statements.
-They are thin: each one writes MIA's audio registers and returns. There is no
-background music player — you time note lengths yourself with `FOR`/`NEXT` or a
-delay loop.
+Most are thin: each one writes MIA's audio registers and returns. Background
+music is the exception — it runs entirely on MIA's own sequencer (see
+**Background sequencer** below), not a 6502-side interpreter, so once you
+start it, it costs the 6502 nothing.
 
 The chip model (waveforms, envelopes, the register block at `$12000`) is
-described in the `clementina-mia` repo, `docs/audio.md`. This page is the BASIC
-programmer's reference.
+described in the `clementina-mia` repo, `docs/audio.md`; the sequencer
+bytecode `TRACK` compiles to is in that repo's `docs/audio-sequencer.md`.
+This page is the BASIC programmer's reference.
 
 ## Model
 
@@ -33,14 +35,17 @@ programmer's reference.
 | `ADSR v,a,d,s,r` | each 0–15 | Envelope. `a` attack rate, `d` decay rate, `s` sustain **level**, `r` release rate. Lower rate = faster. `s=0` silent, `s=15` full. |
 | `PULSE v,pw` | `pw` 0–255 | Pulse duty. `128` ≈ square. Affects the pulse waveform only. |
 | `PAN v,p` | `p` −64..63 | Stereo position. `-64` hard left, `0` centre, `63` hard right. |
-| `PLAY s$` | music string | Play a sequence of notes described by `s$`. Blocks until the string finishes. See **PLAY** below. |
-| `PLAY s$,n` | `n` background flag | `n<>0` plays `s$` in the **background** and returns immediately; `n=0` is the same as `PLAY s$`. See **Background PLAY** below. |
-| `PLAY` | — | Stop the background player and silence its voices. |
-| `PLAYING(0)` | — (function) | `1` while a background `PLAY` is still going, else `0`. The `(0)` is a required dummy argument. |
+| `TRACK v,s$` | music string | Compile `s$` into voice `v`'s independent background-sequencer part. See **Background sequencer** below. |
+| `BAND n` | `n` 0 or 1 | Master switch: `1` starts every voice with a loaded track, `0` stops all four. |
+| `BAND v,n` | `v` 0–3, `n` 0 or 1 | Per-voice on/off, same `n` meaning. |
+| `VTAKE v` | `v` 0–3 | Freeze voice `v`'s track (without silencing it) so you can drive it directly. |
+| `VGIVE v` | `v` 0–3 | Release voice `v` back to its track. |
+| `PLAYING(v)` | `v` 0–3 (function) | `1` while voice `v` has an active background track, else `0`. |
+| `CUE(v)` | `v` 0–3 (function) | Voice `v`'s current note/rest index in its track (1-based; `0` = not started). |
 
 Out‑of‑range arguments raise `ILLEGAL QUANTITY`, exactly like `COLOR`.
 
-`SNDON`/`SNDOFF`/`SNDCLR`, the ten command words above, `PLAY`, and `PLAYING`
+`SNDON`/`SNDOFF`/`SNDCLR`, the sixteen command words above, and `PLAYING`/`CUE`
 are reserved — you cannot use them as variable names.
 
 ## Envelope, volume and gate
@@ -75,92 +80,98 @@ Pitch is equal temperament, A4 = 440 Hz. The top octaves are a couple of cents
 sharp (the table is built by doubling a rounded low‑octave value) — inaudible on
 a PSG. For an exact frequency use `FREQ`.
 
-## PLAY
+## Background sequencer
 
-`PLAY s$` plays a string of music commands. It **blocks** — the program stops at
-the `PLAY` until the whole string has played. Set the voices up first (`SNDON`,
-`WAVE`, `ADSR`, `PAN`, `VOL`); `PLAY` only writes the pitch and the gate.
+`TRACK v,s$` compiles a music string into voice `v`'s own part and writes it
+straight into MIA RAM; `BAND` starts and stops playback. From the moment
+`BAND` runs, MIA plays every assigned voice on its own — nothing here costs
+the 6502 anything, unlike a 6502-side player that has to keep parsing and
+timing a string itself.
 
 ```basic
 10 SNDON : WAVE 0,1 : ADSR 0,0,8,12,7
-20 PLAY "T80 L8 O4 C D E F G4 G4 A A A A G2 F F F F E2"
+20 TRACK 0,"T80 L8 O4 C D E F G4 G4 A A A A G2 F F F F E2"
+30 BAND 1
 ```
 
-Commands in the string (letters are case‑insensitive; spaces and commas are just
-separators):
+Set the voice up first (`SNDON`, `WAVE`, `ADSR`, `PAN`, `VOL`) — `TRACK`'s
+string only ever drives pitch, gate, and (via `W n`) waveform.
+
+`TRACK`'s string is the same mini-language as before, minus voice-switching
+(each `TRACK` call is already scoped to one voice) and plus `|` for a loop
+point (letters are case‑insensitive; spaces and commas are just separators):
 
 | | Meaning |
 | --- | --- |
-| `A`–`G` | Play a note in the current octave. May be followed by `#` or `+` (sharp), `-` (flat), then length digits, then `.` (dotted = ×1.5). |
+| `A`–`G` | A note in the current octave. May be followed by `#` or `+` (sharp), `-` (flat), then length digits, then `.` (dotted = ×1.5). |
 | `R`, `P` | Rest (silence) for one length. |
 | `O n` | Set octave, `0`–`7`. |
 | `<` `>` | Octave down / up (clamped to 0–7). |
 | `L n` | Default note length: `1 2 4 8 16 32` = whole, half, quarter, eighth, 16th, 32nd. |
-| `T n` | Tempo: **ticks per quarter note**, `1`–`255`. A tick is ≈ 1/160 s at 1 MHz PHI2 and scales with PHI2, so `T80` (the default) ≈ 120 BPM. |
-| `V n` | Send the following notes to voice `n` (`0`–`3`). |
+| `T n` | Tempo: **ticks per quarter note**, `1`–`255`. A tick is a fixed 1/160 s (`T80`, the default, ≈ 120 BPM) — resolved once when `TRACK` compiles the string, so playback speed never depends on the CPU's clock speed, unlike the old foreground/background `PLAY`. |
 | `W n` | Set the current voice's waveform (`0`–`4`). |
+| `\|` | Mark the loop point: everything before it plays once (an intro); everything from it to the end of the string repeats forever once `BAND` starts this voice. No `\|` means the whole string plays once and stops. |
 
-Defaults at the start of every `PLAY`: voice 0, octave 4, `T80`, `L4`.
+Defaults at the start of every `TRACK` string: octave 4, `T80`, `L4`.
 
-Every note re-triggers the current voice's envelope (a fresh attack), so
-repeated notes and scales sound as distinct notes. A rest releases the note, and
-the end of the string releases every voice. `PLAY` gives you the pitch and the
-gate; the shape of each note is whatever `ADSR` you set for that voice — a short
-decay/quick release for plucks, longer for pads.
+An unknown token raises `SYNTAX ERROR`; a bad number raises `ILLEGAL
+QUANTITY`. Either way nothing is silenced — `TRACK` only ever writes into
+MIA RAM, it never touches a live register, so a mistake here can't leave a
+stray note sounding.
 
-**Limits.** `PLAY` is monophonic per voice and serial — `"V0 C E G V1 C"` plays
-V0's three notes and *then* V1's note, not a chord. For chords, drive `NOTE`/`GATE`
-from your own loop. Because `PLAY` blocks, it also swallows keystrokes while it
-runs (except **Ctrl‑C**, which stops the music and returns to `READY`). An
-unknown command raises `SYNTAX ERROR`; a bad number raises `ILLEGAL QUANTITY`;
-either way every voice is silenced first.
+### `BAND`, `VTAKE`/`VGIVE`, and mixing music with sound effects
 
-## Background PLAY
+- `BAND 1` starts every voice that has a loaded track and isn't already
+  running; `BAND 0` stops and silences all four, whichever way they were
+  started. `BAND v,n` does the same for one voice.
+- Starting a voice (fresh `TRACK`, or `BAND`/`BAND v,1` after a stop) always
+  begins at the top of its track. Stopping (`BAND 0`/`BAND v,0`) freezes that
+  voice's position rather than resetting it, so starting it again resumes
+  exactly where it left off.
+- `VTAKE v` freezes voice `v`'s track **without** silencing it — the note it
+  was on keeps sounding until your own `NOTE`/`GATE`/`FREQ`/etc. writes land.
+  `VGIVE v` hands it back, catching up to wherever the track would be if it
+  had kept running the whole time (not just resuming where it paused) — so a
+  brief effect on a voice doesn't leave that voice permanently behind the
+  others.
+- `PLAYING(v)` and `CUE(v)` are safe to poll in a tight loop — they read
+  straight from MIA RAM, no command round-trip.
 
-`PLAY s$, n` (`n` any non‑zero value) plays `s$` **in the background** and
-returns immediately — the rest of your program keeps running, including a
-blocking `INPUT` or a tight `FOR/NEXT` loop, because the string is timed off
-the same Timer‑1 interrupt as `KJIFFY`, not the foreground interpreter.
-
-```basic
-10 SNDON : WAVE 0,1 : ADSR 0,0,8,12,7
-20 PLAY "T80 L8 O4 C D E F G4 G4 A A A A G2 F F F F E2",1
-30 PRINT "the tune keeps playing while this runs"
-40 INPUT "your name"; N$
-```
-
-- `PLAY s$` (no comma) and `PLAY s$,0` both still **block**, exactly as
-  above — unchanged, back‑compatible.
-- `PLAY` with **no argument at all** stops the background player and
-  silences its voices.
-- `PLAYING(0)` returns `1` while a background string is still playing, `0`
-  once it finishes (or after you stop it). The `(0)` is a required dummy
-  argument — every function in this BASIC is called as `NAME(expr)`, the same
-  as classic `FRE(0)`; there is no bare/niladic function form.
-- Starting a new background `PLAY` **replaces** whatever was already
-  playing in the background (silencing it first — no orphaned notes).
-- Ctrl‑C, `STOP`, `END`, `NEW`, and any runtime error all stop the
-  background player too. `RUN` and `CLEAR` currently do **not** — a
-  background tune from a previous run keeps playing across a `RUN` unless
-  the new program itself issues a `PLAY`.
-- A malformed background string (bad token or number) **does not** raise
-  `SYNTAX ERROR`/`ILLEGAL QUANTITY` the way blocking `PLAY` does — it can't;
-  the string is parsed one token at a time from inside an interrupt, and an
-  interrupt can never safely enter BASIC's error handler. It just stops
-  playing and silences its voice(s), silently. Get the string right with a
-  blocking `PLAY` first if you're unsure.
-- Only one background string plays at a time (monophonic per voice, serial,
-  same as blocking `PLAY`). A voice driven by a background `PLAY` and by your
-  own foreground `NOTE`/`FREQ`/`GATE` at the same time will fight each other —
-  pick one owner per voice.
-
-A scale, then the same idea split across two voices as call‑and‑response:
+A two-voice loop, with an explosion sound effect stealing the bass voice for
+a moment:
 
 ```basic
-10 SNDON : WAVE 0,2 : WAVE 1,1 : ADSR 0,0,6,10,6 : ADSR 1,0,6,10,6
-20 PLAY "T60 O4 C D E F G A B > C"
-30 PLAY "T60 V0 O4 L8 C E G > C  V1 O5 L8 E G > C E"
+10 SNDON
+20 WAVE 0,1 : ADSR 0,0,8,12,7 : TRACK 0,"T80 L8 O4 C D E F | G4 G4 A A A A G2 F F F F E2"
+30 WAVE 1,2 : ADSR 1,0,6,10,6 : TRACK 1,"T80 L4 O2 C G | C G C G C G"
+40 BAND 1
+50 REM ... game loop runs here while both voices loop forever ...
+100 VTAKE 1
+110 WAVE 1,4 : ADSR 1,0,2,0,3 : NOTE 1,24
+120 FOR T=1 TO 20 : NEXT
+130 VGIVE 1
 ```
+
+### Timing a change with `CUE`
+
+`CUE(v)` reports which note or rest voice `v` is currently on, within the
+current pass of its loop (1-based; it resets to the loop's own position, not
+1, each time a looping track wraps). Poll it to bring a new part in exactly
+on a beat, rather than as soon as you happen to ask:
+
+```basic
+10 SNDON : WAVE 0,1 : ADSR 0,0,6,10,6 : TRACK 0,"T80 L4 O4 C D E F | G A B > C"
+20 BAND 0,1
+30 IF CUE(0) <> 4 THEN 30      : REM wait for the start of the loop body
+40 WAVE 1,1 : ADSR 1,0,6,10,6 : TRACK 1,"T80 L4 O3 C G"
+50 BAND 1,1
+```
+
+Loading a new `TRACK` for a voice that's currently muted (`BAND v,0`) always
+starts that voice at the top the next time it's turned back on — so watching
+`CUE` on a voice that's still running, then swapping a *different*, currently
+stopped voice's `TRACK` and turning it on at the right moment, is how you
+change a melody in sync with the rest of the band.
 
 ## Examples
 
@@ -216,7 +227,3 @@ Fade a held pad out with the master volume:
   takes effect immediately; you do not need to re‑gate.
 - After `SNDCLR` every voice is back to: pulse wave, pulse width 128, envelope
   `SUSTAIN_RELEASE` `$F5`, centre pan, volume 255; master volume 15.
-- `PLAY` timing comes from the kernel tick (`KJIFFY`), which runs off the VIA
-  Timer 1 IRQ. It is roughly 1/160 s at 1 MHz PHI2 and follows PHI2, so a `PLAY`
-  string plays faster at a higher clock. `PLAY` blocks and does not need
-  `SNDON`‑style re‑enabling per note, but you still need `SNDON` once.

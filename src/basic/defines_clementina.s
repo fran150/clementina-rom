@@ -135,10 +135,10 @@ STYLE_SIDE_MAGIC1   := $FF
 ; regardless of how large the image grows).
 ;
 ; Working RAM is now one contiguous block at the bottom: zero page, stack,
-; line buffer, KVARS, then the BGP_* control block and DIR_NAME_BUF
-; (clementina_extra.s - relocated here from their old $5C00 spot; nothing
-; requires them to be anywhere specific, they're plain equates). RAMSTART2 is
-; a small, stable constant matching the image's own fixed low start
+; line buffer, KVARS, then DIR_NAME_BUF (clementina_extra.s - relocated here
+; from its old $5C00 spot; nothing requires it to be anywhere specific, it's
+; a plain equate). RAMSTART2 is a small, stable constant matching the image's
+; own fixed low start
 ; (KERN_BASE, kernel.inc) - kernel+WozMon+BASIC are loaded right above it.
 ; BASIC's heap fills everything above wherever the image currently ends
 ; (__BASICMEM_LAST__, read directly by init.s). See docs/memory-map.md.

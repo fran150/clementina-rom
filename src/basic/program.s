@@ -21,13 +21,13 @@ MEMERR:
 ERROR:
 .ifdef CLEMENTINA
         ; Any runtime error (any statement, anywhere) funnels through here
-        ; before STKINI resets the stack - stop any background PLAY and
-        ; release its voices before the message prints. X (the error-message
-        ; table offset) is the only significant input; preserve it across the
-        ; call via A (msbasic.s targets plain 6502 here - no phx/plx).
+        ; before STKINI resets the stack - stop the background sequencer
+        ; before the message prints. X (the error-message table offset) is
+        ; the only significant input; preserve it across the call via A
+        ; (msbasic.s targets plain 6502 here - no phx/plx).
         txa
         pha
-        jsr     bg_play_stop
+        jsr     seq_stop_all
         pla
         tax
 .endif
@@ -1161,7 +1161,7 @@ NEW:
         bne     L2520
 SCRTCH:
 .ifdef CLEMENTINA
-        jsr     bg_play_stop    ; starting fresh - stop any background PLAY and release its voices
+        jsr     seq_stop_all    ; starting fresh - stop the background sequencer
 .endif
         lda     #$00
         tay

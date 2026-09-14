@@ -268,14 +268,13 @@ RET2:
 STOP:
 .ifdef CLEMENTINA
         ; Ctrl-C (ISCNTC falls straight in here) and the STOP statement both
-        ; enter here (END has its own separate hook below) - stop any
-        ; background PLAY and release its voices before whichever of
-        ; STOP/break-message logic runs. php/plp because the incoming C
-        ; (STOP vs END-fallthrough) and Z (END2's own branch) flags are
-        ; significant and bg_play_stop's chain (play_all_off) does not
-        ; preserve them.
+        ; enter here (END has its own separate hook below) - stop the
+        ; background sequencer before whichever of STOP/break-message logic
+        ; runs. php/plp because the incoming C (STOP vs END-fallthrough) and Z
+        ; (END2's own branch) flags are significant and seq_stop_all's chain
+        ; (seq_cmd) does not preserve them.
         php
-        jsr     bg_play_stop
+        jsr     seq_stop_all
         plp
 .endif
         bcs     END2
@@ -286,8 +285,8 @@ STOP:
 END:
 .ifdef CLEMENTINA
         ; Entered directly by the "END" statement (STOP's own entry point
-        ; above handles Ctrl-C/STOP) - stop any background PLAY here too.
-        jsr     bg_play_stop
+        ; above handles Ctrl-C/STOP) - stop the background sequencer here too.
+        jsr     seq_stop_all
 .endif
         clc
 END2:

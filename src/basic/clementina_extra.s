@@ -11,7 +11,10 @@
 
 .segment "EXTRA"
 .export BASIC_COLD_START, BASIC_WARM_START, MONRDKEY, MONRDKEY_NB, MONCOUT, MONRDLINE
-.export bg_play_tick
+; mia_mem_write (src/kernel/memory.s): generic "poke one byte anywhere in MIA
+; RAM" - TRACK's encoder uses it to write bytecode into a voice's sequencer
+; track buffer, the same primitive MPOKE already uses (clementina_memory.s).
+.import mia_mem_write, km_dst, km_value
 .export mia_fileerr    ; KERN_LOAD (src/kernel/load.s) reaches this for any
                         ; error detected before it writes a destination byte -
                         ; safe, since BASIC's own code (this routine included)
@@ -137,6 +140,26 @@ AUDV_CONTROL      = $07
 AUDV_VOLUME       = $08
 AUD_GATE          = $01    ; CONTROL bit 0
 AUD_GATE_RETRIG   = $03    ; CONTROL: GATE | RESET_PHASE
+
+; Background sequencer (TRACK/BAND/VTAKE/VGIVE/CUE), see clementina-mia's
+; docs/audio-sequencer.md. Each voice's track buffer is 1024 bytes at
+; $13000 + voice*$400, starting with a 4-byte header (LOOP offset, 2
+; reserved) then its event stream.
+CMD_AUDIO_SEQ_LOAD      = $63  ; param0 = voice mask
+CMD_AUDIO_SEQ_START     = $64
+CMD_AUDIO_SEQ_STOP      = $65
+CMD_AUDIO_VOICE_TAKE    = $66
+CMD_AUDIO_VOICE_RELEASE = $67
+
+IIDX_AUDIO_SEQ_VOICE0 = $D6    ; +voice: parked at that voice's SEQ_NOTE_INDEX_L
+
+MIA_SEQ_OP_END       = $00
+MIA_SEQ_OP_NOTE      = $01     ; freq_l, freq_h, dur_l, dur_m, dur_h
+MIA_SEQ_OP_REST      = $02     ; dur_l, dur_m, dur_h
+MIA_SEQ_OP_SET_WAVE  = $03     ; waveform
+
+AUD_SEQ_STATUS_RUNNING = $01   ; SEQ_STATUS bit 0 (PLAYING)
+AUD_SEQ_STATUS_TAKEN   = $02   ; SEQ_STATUS bit 1
 
 ; Kernel free-running tick counter (16-bit LE, ~16 Hz at 1 MHz PHI2). Keep in
 ; sync with KJIFFY in src/kernel/kernel.inc. PLAY uses it for note timing.
@@ -1974,7 +1997,16 @@ BASIC_SPRPRI:
 ;   ADSR v,a,d,s,r            envelope: attack/decay/sustain/release, nibbles 0-15
 ;   PULSE v,pw                pulse duty 0-255 (affects the pulse waveform only)
 ;   PAN v,p                   stereo position -64..63 (0 = centre)
-;   PLAY s$                   blocking MML music string (handler further below)
+;
+; Background music is MIA's own sequencer, not a 6502-side player - see
+; docs/basic-sound.md and clementina-mia's docs/audio-sequencer.md:
+;   TRACK v,s$                assign voice v's independent MML part (see
+;                              BASIC_TRACK further below for the mini-language)
+;   BAND n / BAND v,n         master start/stop (n=1/0), global or per-voice
+;   VTAKE v / VGIVE v         borrow voice v for a foreground sound effect,
+;                              then hand it back
+;   PLAYING(v)                1 while voice v has an active track
+;   CUE(v)                    voice v's current note/rest index (1-based)
 ;
 ; Every MIA register write goes through index window B and is fenced with sei so
 ; a cursor-blink IRQ (which rebinds window A and shares CFG_SELECT/CFG_PORT)
@@ -2252,6 +2284,91 @@ snd_seek:
         sta     CFG_PORT
         rts
 
+; --- background sequencer helpers (BAND/VTAKE/VGIVE/PLAYING/CUE) -------------
+seq_voice_mask:
+        .byte   $01, $02, $04, $08       ; 1 << voice, voice 0-3
+
+; seq_cmd: A = command id, X = voice mask -> issues the command with
+; PARAM1=mask, PARAM2=PARAM3=0. Fenced like snd_cmd (A survives untouched -
+; stx/stz never clobber it, so it does not need to be stacked across them).
+seq_cmd:
+        php
+        sei
+        stx     CMD_PARAM1
+        stz     CMD_PARAM2
+        stz     CMD_PARAM3
+        sta     CMD_TRIGGER
+        plp
+        rts
+
+; seq_stop_all: stop and silence every background-sequencer voice. Called from
+; STOP/END/Ctrl-C/runtime-error/NEW's teardown hooks (flow1.s, program.s), so
+; a background track never survives a program that broke or was interrupted -
+; the same safety net the retired background PLAY used to provide.
+seq_stop_all:
+        lda     #CMD_AUDIO_SEQ_STOP
+        ldx     #$0F
+        jmp     seq_cmd
+
+; seq_status_seek: X = voice 0-3 -> selects that voice's dedicated sequencer
+; status index into window B, parked at SEQ_NOTE_INDEX_L. Must be called
+; inside a php/sei fence (matches snd_seek's own convention). Clobbers A.
+seq_status_seek:
+        txa
+        clc
+        adc     #IIDX_AUDIO_SEQ_VOICE0
+        sta     IDXB_SELECT
+        rts
+
+; BAND n : n=1 starts every voice with a loaded track; n=0 stops all 4.
+; BAND v,n : per-voice on/off (v 0-3, n 1/0 - freeze+silence / resume with no
+; catch-up). See docs/basic-sound.md.
+BASIC_BAND:
+        jsr     GETBYT                  ; X = first number; GETBYT leaves the
+        cmp     #','                    ; following char in A (see BASIC_VOL)
+        beq     @perVoice
+        lda     #$0F                    ; global form: every voice
+        bra     @haveMask
+@perVoice:
+        cpx     #4
+        jcs     snd_iqerr
+        lda     seq_voice_mask,x
+        pha
+        jsr     COMBYTE                 ; X = on/off flag
+        pla
+@haveMask:
+        sta     SEQ_MASK
+        cpx     #$00
+        beq     @stop
+        lda     #CMD_AUDIO_SEQ_START
+        bra     @issue
+@stop:
+        lda     #CMD_AUDIO_SEQ_STOP
+@issue:
+        ldx     SEQ_MASK
+        jmp     seq_cmd                 ; tail
+
+; VTAKE v : freeze voice v's track without silencing it, for driving it
+; directly with NOTE/GATE/FREQ/etc.
+BASIC_VTAKE:
+        jsr     GETBYT
+        cpx     #4
+        jcs     snd_iqerr
+        lda     seq_voice_mask,x
+        tax
+        lda     #CMD_AUDIO_VOICE_TAKE
+        jmp     seq_cmd
+
+; VGIVE v : release voice v back to its track, catching up to the shared clock.
+BASIC_VGIVE:
+        jsr     GETBYT
+        cpx     #4
+        jcs     snd_iqerr
+        lda     seq_voice_mask,x
+        tax
+        lda     #CMD_AUDIO_VOICE_RELEASE
+        jmp     seq_cmd
+
 ; note_freq: A = semitone 0-95 (0 = C0). Returns Hz * 16 in LINNUM (low) /
 ; LINNUM+1 (high) as octave0_table[note MOD 12] << (note DIV 12). Clobbers A/X/Y.
 note_freq:
@@ -2286,365 +2403,38 @@ note_freq_tbl:
         .word   370, 392, 415, 440, 466, 494
 
 ; ============================================================================
-; PLAY <string$> - blocking MML-style music player. See docs/basic-sound.md.
-;
-; Tokens (case-insensitive; spaces and commas separate):
-;   A-G   note in the current octave; optional # or + (sharp) / - (flat);
-;         optional length digits; optional trailing . (dotted, x1.5).
-;   R P   rest for one length.
-;   O n   set octave 0-7.        <   octave down.     >   octave up.
-;   L n   default note length: 1 2 4 8 16 32 (whole .. 32nd note).
-;   T n   tempo: ticks per quarter note, 1-255 (a tick is ~1/160 s at 1 MHz
-;         PHI2 and scales with PHI2; T80 ~= 120 BPM, the default).
-;   V n   route the following notes to voice n (0-3).
-;   W n   set the current voice's waveform 0-4.
-;
-; PLAY writes only FREQ and the gate - set WAVE/ADSR/PAN/VOL and issue SNDON
-; first. It is monophonic per voice and serial across voices. RUN/STOP (Ctrl-C)
-; aborts and silences every voice. An unknown token raises SYNTAX ERROR; a bad
-; number raises ILLEGAL QUANTITY; either way the voices are silenced first.
+; Shared MML parsing helpers (TRACK, below, and originally PLAY - PLAY itself
+; is retired, see docs/basic-sound.md and clementina-mia's
+; docs/audio-sequencer.md; TRACK reuses this note/length arithmetic unchanged,
+; only what happens with the result differs).
 ;
 ; Parser state lives in STYLE_SIDE_BUF ($03D3+), which the line tokenizer only
-; touches while a line is being typed - never during RUN, when PLAY executes.
-; The moving string pointer is INDEX; note_freq scratch is LINNUM.
+; touches while a line is being typed - never during RUN. The moving string
+; pointer is INDEX; note_freq scratch is LINNUM.
 ; ============================================================================
 PLAY_TEMPO_DEF  = 80            ; ticks per quarter note (~120 BPM at 1 MHz PHI2)
 PLAY_OCT_DEF    = 4
 PLAY_LDEF_DEF   = 4             ; quarter notes
 
 PLAY_LEN        = STYLE_SIDE_BUF + 0    ; chars left in the string
-PLAY_BASE       = STYLE_SIDE_BUF + 1    ; current voice record base ($10/$20/$30/$40)
 PLAY_OCT        = STYLE_SIDE_BUF + 2    ; current octave 0-7
 PLAY_TEMPO      = STYLE_SIDE_BUF + 3    ; ticks per quarter note
 PLAY_LDEF       = STYLE_SIDE_BUF + 4    ; default length code
 PLAY_DUR        = STYLE_SIDE_BUF + 5    ; note duration in ticks (16-bit) [5..6]
-PLAY_TGT        = STYLE_SIDE_BUF + 7    ; delay target tick value (16-bit) [7..8]
 PLAY_SEMI       = STYLE_SIDE_BUF + 9    ; scratch: semitone in octave (signed -1..12)
 PLAY_TMP        = STYLE_SIDE_BUF + 10   ; general 16-bit scratch [10..11]
 
-; BASIC_PLAY: "PLAY" with no argument (end of statement/line) stops the
-; background player. "PLAY s$" blocks, as before. "PLAY s$,n" with n<>0
-; starts s$ playing in the background (tail-jumps to bg_play_start with
-; INDEX/PLAY_LEN already set from FRESTR); n=0 is the same as no comma at
-; all - blocks. A holds the entry character (see the @ext dispatch comment
-; above); CHRGOT re-reads it after FRESTR repurposes A for the length.
-BASIC_PLAY:
-        cmp     #$00
-        jeq     @stop
-        cmp     #':'
-        jeq     @stop
-        jsr     FRMEVL                  ; evaluate the argument expression
-        jsr     FRESTR                  ; A = length, INDEX -> string character bytes
-        sta     PLAY_LEN
-        jsr     CHRGOT                  ; re-read the current char (A now := length)
-        cmp     #','
-        bne     @blocking
-        ; COMBYTE/GETBYT/FRMNUM parse the flag number and, like most of the
-        ; interpreter's numeric-parse path, are free to reuse INDEX as their
-        ; own scratch - save/restore it around the call so the string pointer
-        ; FRESTR just set (needed below, blocking or not) survives intact.
-        lda     INDEX
-        pha
-        lda     INDEX+1
-        pha
-        jsr     COMBYTE                 ; consume ',' -> X = background flag
-        pla
-        sta     INDEX+1
-        pla
-        sta     INDEX
-        cpx     #$00
-        jne     bg_play_start           ; n<>0 -> background (tail; INDEX/PLAY_LEN valid)
-@blocking:
-        lda     #$10
-        sta     PLAY_BASE               ; voice 0
-        lda     #PLAY_OCT_DEF
-        sta     PLAY_OCT
-        lda     #PLAY_TEMPO_DEF
-        sta     PLAY_TEMPO
-        lda     #PLAY_LDEF_DEF
-        sta     PLAY_LDEF
-@loop:
-        jsr     play_getc
-        bcc     @done
-        jsr     TOKEN_UPPER             ; keywords are case-insensitive
-        cmp     #' '
-        beq     @loop
-        cmp     #','
-        beq     @loop
-        cmp     #'A'
-        bcc     @sym
-        cmp     #'G'+1
-        bcs     @sym
-        jsr     play_do_note            ; A = 'A'..'G'
-        jmp     @loop
-@sym:
-        cmp     #'R'
-        jeq     @rest
-        cmp     #'P'
-        jeq     @rest
-        cmp     #'<'
-        jeq     @octdn
-        cmp     #'>'
-        jeq     @octup
-        cmp     #'O'
-        jeq     @oct
-        cmp     #'L'
-        jeq     @ldef
-        cmp     #'T'
-        jeq     @tempo
-        cmp     #'V'
-        jeq     @voice
-        cmp     #'W'
-        jeq     @wave
-        jsr     play_all_off
-        jmp     SYNERR
-@done:
-        jsr     play_all_off
-        rts
-@stop:
-        jmp     bg_play_stop            ; bare PLAY -> stop the background player (tail)
-
-@rest:
-        jsr     play_do_rest
-        jmp     @loop
-@octdn:
-        lda     PLAY_OCT
-        jeq     @loop
-        dec     PLAY_OCT
-        jmp     @loop
-@octup:
-        lda     PLAY_OCT
-        cmp     #7
-        jcs     @loop
-        inc     PLAY_OCT
-        jmp     @loop
-@oct:
-        jsr     play_num_req            ; X = value
-        cpx     #8
-        jcs     play_iq
-        stx     PLAY_OCT
-        jmp     @loop
-@tempo:
-        jsr     play_num_req
-        cpx     #$00
-        bne     :+
-        ldx     #$01                    ; T0 -> 1
-:       stx     PLAY_TEMPO
-        jmp     @loop
-@voice:
-        jsr     play_num_req
-        cpx     #4
-        jcs     play_iq
-        txa
-        asl     a
-        asl     a
-        asl     a
-        asl     a
-        clc
-        adc     #$10                    ; -> $10/$20/$30/$40
-        sta     PLAY_BASE
-        jmp     @loop
-@wave:
-        jsr     play_num_req
-        cpx     #5
-        jcs     play_iq
-        lda     PLAY_BASE
-        clc
-        adc     #AUDV_WAVEFORM
-        jsr     snd_wr1                 ; A = offset, X = value
-        jmp     @loop
-@ldef:
-        jsr     play_num_req
-        jsr     play_len_ok            ; X in {1,2,4,8,16,32} or IQERR
-        stx     PLAY_LDEF
-        jmp     @loop
-
-play_iq:
-        jsr     play_all_off
-        jmp     IQERR
-play_syn:
-        jsr     play_all_off
-        jmp     SYNERR
-
-; --- PLAY note / rest --------------------------------------------------------
-; play_do_note: A = 'A'..'G'. Emits FREQ + gate-on for one note, waits its
-; duration. Tail-jumps into play_delay.
-play_do_note:
-        sec
-        sbc     #'A'
-        tax
-        lda     play_note_semi,x
-        sta     PLAY_SEMI
-        jsr     play_peek
-        bcc     @len
-        cmp     #'#'
-        beq     @sharp
-        cmp     #'+'
-        beq     @sharp
-        cmp     #'-'
-        beq     @flat
-        jmp     @len
-@sharp:
-        jsr     play_adv
-        inc     PLAY_SEMI
-        jmp     @len
-@flat:
-        jsr     play_adv
-        dec     PLAY_SEMI
-@len:
-        jsr     play_num               ; C=1 & X=code if length digits present
-        bcs     @havelen
-        ldx     PLAY_LDEF
-@havelen:
-        jsr     play_len_ok
-        jsr     play_len_to_dur
-        jsr     play_maybe_dot
-        ldx     PLAY_OCT
-        lda     play_oct12,x
-        clc
-        adc     PLAY_SEMI              ; octave base + semitone (signed)
-        cmp     #96
-        bcc     @emit
-        cmp     #$80
-        bcs     @zero                  ; wrapped negative -> clamp low
-        lda     #95
-        bne     @emit
-@zero:
-        lda     #$00
-@emit:
-        jsr     play_note_on
-        jmp     play_delay             ; tail
-
-; play_do_rest: gate the current voice off, wait one length.
-play_do_rest:
-        jsr     play_num
-        bcs     @havelen
-        ldx     PLAY_LDEF
-@havelen:
-        jsr     play_len_ok
-        jsr     play_len_to_dur
-        jsr     play_maybe_dot
-        lda     PLAY_BASE
-        clc
-        adc     #AUDV_CONTROL
-        ldx     #$00
-        jsr     snd_wr1                ; CONTROL = 0 -> release
-        jmp     play_delay
-
-; play_note_on: A = absolute semitone 0-95 -> release the current voice, set
-; FREQ_L/H, then gate on with RESET_PHASE. The brief CONTROL=0 before the gate
-; forces an envelope low->high edge, so every PLAY note re-attacks (otherwise
-; the gate would stay high across the whole string and only the first note would
-; have an attack - repeated notes would be inaudible).
-play_note_on:
-        jsr     note_freq              ; LINNUM/LINNUM+1 = Hz * 16
-        lda     PLAY_BASE
-        tax                            ; X = voice base offset
-        php
-        sei
-        txa
-        clc
-        adc     #AUDV_CONTROL
-        jsr     snd_seek               ; base + AUDV_CONTROL
-        lda     #$00
-        sta     IDXB_PORT              ; CONTROL = 0: release any sounding note
-        txa
-        jsr     snd_seek               ; base + AUDV_FREQ_L ($00)
-        lda     LINNUM
-        sta     IDXB_PORT
-        lda     LINNUM+1
-        sta     IDXB_PORT
-        txa
-        clc
-        adc     #AUDV_CONTROL
-        jsr     snd_seek
-        lda     #AUD_GATE_RETRIG
-        sta     IDXB_PORT              ; CONTROL = GATE|RESET_PHASE: re-attack
-        plp
-        rts
-
-; --- PLAY timing -----------------------------------------------------------
-; play_delay: wait PLAY_DUR kernel ticks, polling for Ctrl-C. On Ctrl-C it
-; silences all voices and breaks to BASIC (never returns).
-play_delay:
-        jsr     play_jiffy             ; PLAY_TMP = coherent KJIFFY snapshot
-        lda     PLAY_TMP
-        clc
-        adc     PLAY_DUR
-        sta     PLAY_TGT
-        lda     PLAY_TMP+1
-        adc     PLAY_DUR+1
-        sta     PLAY_TGT+1
-@wait:
-        jsr     play_check_stop
-        jsr     play_jiffy
-        lda     PLAY_TMP
-        sec
-        sbc     PLAY_TGT
-        lda     PLAY_TMP+1
-        sbc     PLAY_TGT+1
-        bmi     @wait                  ; ticks - target still negative -> keep waiting
-        rts
-
-; play_jiffy: coherent 16-bit read of KJIFFY into PLAY_TMP. Reads high/low/high
-; and retries if the high byte changed - the Timer-1 IRQ can carry between the
-; two byte reads, and a torn read there would skew the wait by up to 256 ticks.
-play_jiffy:
-        lda     KJIFFY+1
-@r:
-        sta     PLAY_TMP+1
-        lda     KJIFFY
-        sta     PLAY_TMP
-        lda     KJIFFY+1
-        cmp     PLAY_TMP+1
-        bne     @r
-        rts
-
-play_check_stop:
-        jsr     MONRDKEY_NB            ; C=1 & A=key if one was queued (popped)
-        bcc     @none
-        cmp     #$03
-        beq     @break
-@none:
-        rts
-@break:
-        jsr     play_all_off
-        lda     #$03
-        cmp     #$03                   ; C=1, Z=1 - the state ISCNTC enters STOP with
-        jmp     STOP
-
-play_all_off:
-        lda     #$10 + AUDV_CONTROL
-        ldy     #$04
-@l:
-        pha
-        ldx     #$00
-        jsr     snd_wr1
-        pla
-        clc
-        adc     #$10
-        dey
-        bne     @l
-        rts
-
-; --- PLAY length -> duration --------------------------------------------------
-; play_len_ok: X in {1,2,4,8,16,32} -> return; else silence + ILLEGAL QUANTITY.
-play_len_ok:
-        cpx     #1
-        beq     @ok
-        cpx     #2
-        beq     @ok
-        cpx     #4
-        beq     @ok
-        cpx     #8
-        beq     @ok
-        cpx     #16
-        beq     @ok
-        cpx     #32
-        beq     @ok
-        jmp     play_iq
-@ok:
-        rts
+; TRACK's encoder state and BAND/VTAKE/VGIVE's mask scratch share the same
+; time-shared buffer, offsets 12-29 (PLAY_* above use 0-11; never concurrent -
+; see the header comment on PLAY_LEN).
+TRK_VOICE       = STYLE_SIDE_BUF + 12   ; voice being defined, 0-3
+TRK_BASE        = STYLE_SIDE_BUF + 13   ; this voice's track buffer base, 24-bit [13..15]
+TRK_ADDR        = STYLE_SIDE_BUF + 16   ; current write cursor, 24-bit [16..18]
+TRK_COUNT       = STYLE_SIDE_BUF + 19   ; event bytes emitted so far, 16-bit [19..20]
+TRK_LOOP        = STYLE_SIDE_BUF + 21   ; LOOP value to write at the end, 16-bit [21..22]
+TRK_SAMPLES     = STYLE_SIDE_BUF + 23   ; current event's duration in samples, 24-bit [23..25]
+MPCAND          = STYLE_SIDE_BUF + 26   ; trk_dur_to_samples multiply scratch, 24-bit [26..28]
+SEQ_MASK        = STYLE_SIDE_BUF + 29   ; BAND/VTAKE/VGIVE voice-mask scratch
 
 ; play_len_to_dur: X = valid length code -> PLAY_DUR (16-bit) ticks, from
 ; PLAY_TEMPO (ticks per quarter). k=1 -> T<<2, k=2 -> T<<1, k=4 -> T,
@@ -2787,16 +2577,364 @@ play_num:
         clc
         rts
 
-; play_num_req: play_num, but SYNTAX ERROR (voices silenced) if no digits.
-play_num_req:
-        jsr     play_num
-        jcc     play_syn
-        rts
-
 play_note_semi:                         ; A B C D E F G -> semitone within octave
         .byte   9, 11, 0, 2, 4, 5, 7
 play_oct12:                             ; octave 0..7 -> base semitone
         .byte   0, 12, 24, 36, 48, 60, 72, 84
+
+; ============================================================================
+; TRACK v, s$ - assign voice v's (0-3) independent background-sequencer part.
+; See clementina-mia's docs/audio-sequencer.md for the bytecode this compiles
+; to and docs/basic-sound.md for the BASIC-level picture.
+;
+; The mini-language is PLAY's, minus V n (each TRACK call is already scoped to
+; one voice, so there is no voice to switch to) and plus | for the loop point:
+;   A-G   note, optional #/+ (sharp) or - (flat), optional length, optional .
+;   R P   rest for one length.                   O n   set octave 0-7.
+;   < >   octave down/up.                         L n   default length.
+;   T n   tempo, ticks per quarter note.          W n   waveform 0-4.
+;   |     mark the loop point: everything from here to the end of the string
+;         repeats forever once BAND starts this voice; everything before it
+;         plays once. No | means the whole track plays once and stops.
+;
+; This reuses PLAY's pure computation (play_num/play_len_ok/play_len_to_dur/
+; play_maybe_dot/note_freq/the note/octave tables) unchanged, but never calls
+; play_iq/play_syn/play_num_req/play_all_off - those silence live voices on
+; error, which would be a surprising side effect here (TRACK never touches a
+; live register; it only writes bytes into MIA RAM). trk_iq/trk_syn/
+; trk_num_req/trk_len_ok are plain error jumps instead.
+;
+; Tempo/length are resolved here, at encode time, into a sample count (see
+; trk_dur_to_samples) - MIA's sequencer only ever sees "hold for N samples",
+; never ticks, tempo, or note names. This also means a TRACK's tempo is fixed
+; at whatever PHI2 speed happened to be live when it was encoded is NOT a
+; factor at all: unlike the retired background PLAY (timed off the live
+; PHI2-relative KJIFFY tick), the encoding fixes 1 tick = 1/160 s outright, so
+; playback speed never depends on the CPU's clock speed, then or later.
+; ============================================================================
+BASIC_TRACK:
+        jsr     GETBYT                  ; X = voice
+        cpx     #4
+        jcs     snd_iqerr
+        stx     TRK_VOICE
+        jsr     CHKCOM
+        jsr     FRMEVL                  ; evaluate the string expression
+        jsr     FRESTR                  ; A = length, INDEX -> string bytes
+        sta     PLAY_LEN
+        ; TRK_BASE = $013000 + voice * $000400
+        lda     #$00
+        sta     TRK_BASE
+        lda     #$01
+        sta     TRK_BASE+2
+        lda     TRK_VOICE
+        asl     a
+        asl     a                      ; voice * 4
+        clc
+        adc     #$30
+        sta     TRK_BASE+1
+        ; TRK_ADDR = TRK_BASE + 4 (event stream start)
+        lda     TRK_BASE
+        clc
+        adc     #$04
+        sta     TRK_ADDR
+        lda     TRK_BASE+1
+        adc     #$00
+        sta     TRK_ADDR+1
+        lda     TRK_BASE+2
+        adc     #$00
+        sta     TRK_ADDR+2
+        stz     TRK_COUNT
+        stz     TRK_COUNT+1
+        lda     #$FF
+        sta     TRK_LOOP                ; default: no loop
+        sta     TRK_LOOP+1
+        lda     #PLAY_OCT_DEF
+        sta     PLAY_OCT
+        lda     #PLAY_TEMPO_DEF
+        sta     PLAY_TEMPO
+        lda     #PLAY_LDEF_DEF
+        sta     PLAY_LDEF
+@loop:
+        jsr     play_getc               ; reuses PLAY's cursor (PLAY_LEN/INDEX)
+        jcc     @finish
+        jsr     TOKEN_UPPER
+        cmp     #' '
+        beq     @loop
+        cmp     #','
+        beq     @loop
+        cmp     #'|'
+        beq     @markloop
+        cmp     #'A'
+        bcc     @sym
+        cmp     #'G'+1
+        bcs     @sym
+        jsr     trk_do_note
+        jmp     @loop
+@sym:
+        cmp     #'R'
+        jeq     @rest
+        cmp     #'P'
+        jeq     @rest
+        cmp     #'<'
+        jeq     @octdn
+        cmp     #'>'
+        jeq     @octup
+        cmp     #'O'
+        jeq     @oct
+        cmp     #'L'
+        jeq     @ldef
+        cmp     #'T'
+        jeq     @tempo
+        cmp     #'W'
+        jeq     @wave
+        jmp     SYNERR
+@rest:
+        jsr     trk_do_rest
+        jmp     @loop
+@markloop:
+        lda     TRK_COUNT
+        sta     TRK_LOOP
+        lda     TRK_COUNT+1
+        sta     TRK_LOOP+1
+        jmp     @loop
+@octdn:
+        lda     PLAY_OCT
+        jeq     @loop
+        dec     PLAY_OCT
+        jmp     @loop
+@octup:
+        lda     PLAY_OCT
+        cmp     #7
+        jcs     @loop
+        inc     PLAY_OCT
+        jmp     @loop
+@oct:
+        jsr     trk_num_req
+        cpx     #8
+        jcs     snd_iqerr
+        stx     PLAY_OCT
+        jmp     @loop
+@tempo:
+        jsr     trk_num_req
+        cpx     #$00
+        bne     :+
+        ldx     #$01                    ; T0 -> 1
+:       stx     PLAY_TEMPO
+        jmp     @loop
+@wave:
+        jsr     trk_num_req
+        cpx     #5
+        jcs     snd_iqerr
+        txa
+        pha
+        lda     #MIA_SEQ_OP_SET_WAVE
+        jsr     trk_emit
+        pla
+        jsr     trk_emit
+        jmp     @loop
+@ldef:
+        jsr     trk_num_req
+        jsr     trk_len_ok
+        stx     PLAY_LDEF
+        jmp     @loop
+@finish:
+        lda     #MIA_SEQ_OP_END
+        jsr     trk_emit
+        ; write the LOOP header at TRK_BASE+0/+1
+        lda     TRK_BASE
+        sta     km_dst
+        lda     TRK_BASE+1
+        sta     km_dst+1
+        lda     TRK_BASE+2
+        sta     km_dst+2
+        lda     TRK_LOOP
+        sta     km_value
+        jsr     mia_mem_write
+        inc     km_dst
+        bne     :+
+        inc     km_dst+1
+:       lda     TRK_LOOP+1
+        sta     km_value
+        jsr     mia_mem_write
+        ; issue AUDIO_SEQ_LOAD so cursor/note-index/loop are (re)computed
+        ldx     TRK_VOICE
+        lda     seq_voice_mask,x
+        tax
+        lda     #CMD_AUDIO_SEQ_LOAD
+        jmp     seq_cmd                 ; tail
+
+trk_iq:
+        jmp     IQERR
+trk_syn:
+        jmp     SYNERR
+
+; trk_num_req/trk_len_ok: like play_num_req/play_len_ok, but a plain error
+; jump instead of play_all_off - see the header comment above.
+trk_num_req:
+        jsr     play_num
+        jcc     trk_syn
+        rts
+trk_len_ok:
+        cpx     #1
+        beq     @ok
+        cpx     #2
+        beq     @ok
+        cpx     #4
+        beq     @ok
+        cpx     #8
+        beq     @ok
+        cpx     #16
+        beq     @ok
+        cpx     #32
+        beq     @ok
+        jmp     trk_iq
+@ok:
+        rts
+
+; trk_emit: A = one byte to append to the track buffer at TRK_ADDR, then
+; advance TRK_ADDR/TRK_COUNT by 1. Clobbers A/X (mia_mem_write's own).
+trk_emit:
+        sta     km_value
+        lda     TRK_ADDR
+        sta     km_dst
+        lda     TRK_ADDR+1
+        sta     km_dst+1
+        lda     TRK_ADDR+2
+        sta     km_dst+2
+        jsr     mia_mem_write
+        inc     TRK_ADDR
+        bne     :+
+        inc     TRK_ADDR+1
+        bne     :+
+        inc     TRK_ADDR+2
+:       inc     TRK_COUNT
+        bne     :+
+        inc     TRK_COUNT+1
+:       rts
+
+; trk_do_note: A = 'A'..'G'. Computes pitch/duration exactly like PLAY's
+; play_do_note, then emits a NOTE event instead of writing live registers.
+trk_do_note:
+        sec
+        sbc     #'A'
+        tax
+        lda     play_note_semi,x
+        sta     PLAY_SEMI
+        jsr     play_peek
+        bcc     @len
+        cmp     #'#'
+        beq     @sharp
+        cmp     #'+'
+        beq     @sharp
+        cmp     #'-'
+        beq     @flat
+        jmp     @len
+@sharp:
+        jsr     play_adv
+        inc     PLAY_SEMI
+        jmp     @len
+@flat:
+        jsr     play_adv
+        dec     PLAY_SEMI
+@len:
+        jsr     play_num
+        bcs     @havelen
+        ldx     PLAY_LDEF
+@havelen:
+        jsr     trk_len_ok
+        jsr     play_len_to_dur
+        jsr     play_maybe_dot
+        jsr     trk_dur_to_samples      ; PLAY_DUR ticks -> TRK_SAMPLES
+        ldx     PLAY_OCT
+        lda     play_oct12,x
+        clc
+        adc     PLAY_SEMI               ; octave base + semitone (signed)
+        cmp     #96
+        bcc     @emit
+        cmp     #$80
+        bcs     @zero                   ; wrapped negative -> clamp low
+        lda     #95
+        bne     @emit
+@zero:
+        lda     #$00
+@emit:
+        jsr     note_freq               ; LINNUM/LINNUM+1 = Hz * 16
+        lda     #MIA_SEQ_OP_NOTE
+        jsr     trk_emit
+        lda     LINNUM
+        jsr     trk_emit
+        lda     LINNUM+1
+        jsr     trk_emit
+        lda     TRK_SAMPLES
+        jsr     trk_emit
+        lda     TRK_SAMPLES+1
+        jsr     trk_emit
+        lda     TRK_SAMPLES+2
+        jmp     trk_emit                ; tail
+
+; trk_do_rest: one length of silence.
+trk_do_rest:
+        jsr     play_num
+        bcs     @havelen
+        ldx     PLAY_LDEF
+@havelen:
+        jsr     trk_len_ok
+        jsr     play_len_to_dur
+        jsr     play_maybe_dot
+        jsr     trk_dur_to_samples
+        lda     #MIA_SEQ_OP_REST
+        jsr     trk_emit
+        lda     TRK_SAMPLES
+        jsr     trk_emit
+        lda     TRK_SAMPLES+1
+        jsr     trk_emit
+        lda     TRK_SAMPLES+2
+        jmp     trk_emit                ; tail
+
+; trk_dur_to_samples: PLAY_DUR (16-bit, in ticks) -> TRK_SAMPLES (24-bit, in
+; audio samples). A tick is fixed at exactly 1/160 s (matching PLAY's own
+; documented "a tick is ~1/160 s at 1 MHz PHI2" definition) and MIA's audio
+; engine runs at a fixed 24000 samples/s, so samples = ticks * 150 - by
+; design independent of whatever PHI2 speed is live right now, unlike the
+; retired background player's live-KJIFFY timing.
+;
+; Standard LSB-first shift-and-add multiply: TRK_SAMPLES accumulates a copy of
+; the (24-bit-extended) ticks value, doubled once per bit, whenever the next
+; bit of the constant 150 ($96 = %10010110) is 1.
+trk_dur_to_samples:
+        lda     PLAY_DUR
+        sta     MPCAND
+        lda     PLAY_DUR+1
+        sta     MPCAND+1
+        stz     MPCAND+2
+        stz     TRK_SAMPLES
+        stz     TRK_SAMPLES+1
+        stz     TRK_SAMPLES+2
+        ldx     #$00
+        ldy     #150
+@bit:
+        tya
+        lsr     a
+        tay
+        bcc     @noadd
+        lda     TRK_SAMPLES
+        clc
+        adc     MPCAND
+        sta     TRK_SAMPLES
+        lda     TRK_SAMPLES+1
+        adc     MPCAND+1
+        sta     TRK_SAMPLES+1
+        lda     TRK_SAMPLES+2
+        adc     MPCAND+2
+        sta     TRK_SAMPLES+2
+@noadd:
+        asl     MPCAND
+        rol     MPCAND+1
+        rol     MPCAND+2
+        inx
+        cpx     #$08
+        bne     @bit
+        rts
 
 .ifdef STYLED_STRINGS
 ; ----------------------------------------------------------------------------
@@ -3070,51 +3208,28 @@ styled_outc:
 .endif
 
 ; ============================================================================
-; Background PLAY - fixed RAM control block, part of the working-RAM block at
-; the bottom of the map (right after KVARS, below RAMSTART2 - see
-; defines_clementina.s). Plain equates, never part of the loaded image (same
-; pattern as KVARS/KJIFFY). Persists across arbitrary BASIC execution between
-; IRQ calls, so unlike blocking PLAY's STYLE_SIDE_BUF-based state, this can
-; never be time-shared with the tokenizer or anything else. See
-; docs/memory-map.md.
+; DIR's own scratch, part of the working-RAM block at the bottom of the map
+; (right after KVARS, below RAMSTART2/$04B7 - see defines_clementina.s and
+; docs/memory-map.md). A name must be fully read out of the MIA dir-entry
+; window into CPU RAM before any of it is printed: MONCOUT (kernel CHROUT)
+; draws to the screen through MIA's own indexed-RAM window mechanism (the
+; same IDXA_SELECT/IDXA_PORT pair DIR itself uses to read FS_READDIR
+; results), so interleaving a read with a MONCOUT call lets CHROUT's own use
+; of window A silently reposition it out from under DIR - confirmed the hard
+; way: only an entry's first character came out right, with the rest
+; replaced by whatever CHROUT had just left window A pointing at. 40 bytes
+; comfortably covers any filename this console can usefully display (a
+; 40-column screen).
+;
+; Fixed at $048F rather than following a previous block's own equate: this
+; used to sit right after the retired background PLAY's 143-byte control
+; block (also based at a fixed address, for the same "must survive arbitrary
+; interrupted code" reason DIR's own scratch does) - kept at the same address
+; rather than sliding down, so nothing else in this fixed low RAM region
+; needs to move.
 ; ============================================================================
-; BGP_IDX/BGP_LEN are a byte cursor/length into BGP_BUF, not a pointer pair,
-; because BGP_BUF is a fixed compile-time address read with absolute,X/Y
-; addressing (bg_peek) - (ptr),y indirect addressing (like INDEX in blocking
-; PLAY) only works for zero-page pointers, and BGP_BUF is deliberately NOT in
-; zero page (see the block header comment above).
-BGP_BASE        = $0400
-BGP_FLAGS       = BGP_BASE + $00       ; bit0: background player active
-BGP_IDX         = BGP_BASE + $01       ; read cursor into BGP_BUF (0-127)
-BGP_LEN         = BGP_BASE + $02       ; valid bytes in BGP_BUF
-BGP_TICKS       = BGP_BASE + $03       ; [2] ticks left on the current note/rest
-BGP_VOICE       = BGP_BASE + $05       ; current voice record base ($10/$20/$30/$40)
-BGP_OCTAVE      = BGP_BASE + $06
-BGP_TEMPO       = BGP_BASE + $07
-BGP_LDEF        = BGP_BASE + $08
-BGP_SEMI        = BGP_BASE + $09       ; scratch: semitone in octave (signed -1..12)
-BGP_FREQ        = BGP_BASE + $0A       ; [2] bg_note_freq result (private - NOT LINNUM,
-                                        ; which arbitrary interrupted foreground code
-                                        ; (POKE args, expressions) also uses as scratch)
-BGP_TMP         = BGP_BASE + $0C       ; [2] bg parser scratch (digits / dotted-length)
-BGP_SP          = BGP_BASE + $0E       ; saved 6502 stack pointer - see bg_next_event
-BGP_BUF         = BGP_BASE + $0F       ; [128] copied MML text
-BGP_BUF_SIZE    = 128
-
-; DIR's own scratch, in the free space between BGP_BUF and RAMSTART2 ($04B7) -
-; a name must be fully read out of the MIA dir-entry window into CPU RAM
-; before any of it is printed. MONCOUT (kernel CHROUT) draws to the screen
-; through MIA's own indexed-RAM window mechanism (the same IDXA_SELECT/
-; IDXA_PORT pair DIR itself uses to read FS_READDIR results), so interleaving
-; a read with a MONCOUT call lets CHROUT's own use of window A silently
-; reposition it out from under DIR - confirmed the hard way: only an entry's
-; first character came out right, with the rest replaced by whatever CHROUT
-; had just left window A pointing at. 40 bytes comfortably covers any
-; filename this console can usefully display (a 40-column screen).
-DIR_NAME_BUF      = BGP_BUF + BGP_BUF_SIZE
+DIR_NAME_BUF      = $048F
 DIR_NAME_BUF_SIZE = 40
-
-BGP_FLAG_PLAYING = $01
 
 ; ----------------------------------------------------------------------------
 ; EXTFN_DISPATCH - TOKEN_EXTFN two-byte function dispatch, mirrors
@@ -3159,526 +3274,50 @@ EXTFN_DISPATCH:
         jmp     SYNERR
 
 ; ----------------------------------------------------------------------------
-; PLAYING(0) - background PLAY status, 0 or 1. Dummy argument required: it is
-; registered in the EXTFN_NAME_TABLE / EXTFN_ADDRESS_TABLE (token.s) and
-; dispatched via TOKEN_EXTFN + EXTFN_DISPATCH above, which - like UNARY does
-; for every primary function - has already evaluated (and discarded) "(expr)"
-; by the time this body runs. Same idiom as classic MS BASIC's FRE(0); there
-; is no bare/niladic function form in this interpreter.
+; PLAYING(v) - 1 while voice v (0-3) has an active background-sequencer track,
+; else 0. Registered in EXTFN_NAME_TABLE/EXTFN_ADDRESS_TABLE (token.s) and
+; dispatched via TOKEN_EXTFN + EXTFN_DISPATCH above; the "(expr)" PARCHK
+; already evaluated leaves the voice number in FAC1, which CONINT converts to
+; a byte - same idiom BASIC_KEYDOWN uses (clementina_input.s).
 ; ----------------------------------------------------------------------------
 BASIC_PLAYING:
+        jsr     CONINT                  ; X = voice
+        cpx     #4
+        jcs     IQERR
+        php
+        sei
+        jsr     seq_status_seek
+        lda     IDXB_PORT               ; SEQ_NOTE_INDEX_L (unused)
+        lda     IDXB_PORT               ; SEQ_NOTE_INDEX_H (unused)
+        lda     IDXB_PORT               ; SEQ_STATUS
+        plp
+        and     #AUD_SEQ_STATUS_RUNNING
+        beq     @zero                   ; ldy would clobber AND's flags - test first
+        ldy     #$01
+        bra     @done
+@zero:
         ldy     #$00
-        lda     BGP_FLAGS
-        and     #BGP_FLAG_PLAYING
-        beq     @done
-        iny
 @done:
         jmp     SNGFLT
 
 ; ----------------------------------------------------------------------------
-; bg_play_start: PLAY s$,n (n<>0) tail-jumps here with INDEX -> string bytes
-; and PLAY_LEN = length (both set by FRESTR in BASIC_PLAY). Silences whatever
-; was playing (foreground or background - a stuck orphaned note from a
-; replaced background song must not survive), copies the string into
-; BGP_BUF (truncating to BGP_BUF_SIZE), resets the parser state to the PLAY
-; defaults, and starts the sequencer. BGP_FLAGS is cleared first and set last
-; so bg_play_tick (not yet wired - lands in a later step) never sees a
-; half-written buffer.
+; CUE(v) - voice v's (0-3) current note/rest index within the current pass of
+; its track: 1-based, 0 if never started. Resets to the loop's own note index
+; (not 1) each time a looping track wraps - see docs/audio-sequencer.md. Same
+; dispatch idiom as PLAYING(v) above.
 ; ----------------------------------------------------------------------------
-bg_play_start:
-        lda     #$00
-        sta     BGP_FLAGS
-        jsr     play_all_off
-        lda     PLAY_LEN
-        cmp     #BGP_BUF_SIZE+1
-        bcc     @lenok
-        lda     #BGP_BUF_SIZE           ; truncate an over-long string
-@lenok:
-        sta     BGP_TMP                 ; byte count to copy (temp use before playback starts)
-        ldy     #$00
-@copy:
-        cpy     BGP_TMP
-        beq     @copied
-        lda     (INDEX),y
-        sta     BGP_BUF,y
-        iny
-        bne     @copy
-@copied:
-        sty     BGP_LEN                 ; Y = count copied
-        lda     #$00
-        sta     BGP_IDX
-        lda     #PLAY_OCT_DEF
-        sta     BGP_OCTAVE
-        lda     #PLAY_TEMPO_DEF
-        sta     BGP_TEMPO
-        lda     #PLAY_LDEF_DEF
-        sta     BGP_LDEF
-        lda     #$10
-        sta     BGP_VOICE               ; voice 0
-        lda     #$00
-        sta     BGP_TICKS
-        sta     BGP_TICKS+1             ; 0 ticks left -> the first IRQ tick advances at once
-        lda     #BGP_FLAG_PLAYING
-        sta     BGP_FLAGS
-        rts
-
-; ----------------------------------------------------------------------------
-; bg_play_stop: stop the background player and release its voices. Callable
-; from foreground (bare PLAY) or from a teardown hook (STOP/END/Ctrl-C, ERROR,
-; NEW - added in a later step).
-; ----------------------------------------------------------------------------
-bg_play_stop:
-        lda     #$00
-        sta     BGP_FLAGS
-        jmp     play_all_off            ; tail: silence all 4 voices, then rts
-
-; ============================================================================
-; Background PLAY sequencer - called from the Timer-1 IRQ (interrupts.s), once
-; per tick, after KJIFFY is bumped. Mirrors BASIC_PLAY's parser/emitter
-; (@loop, play_do_note, play_do_rest, play_note_on, play_len_to_dur,
-; play_maybe_dot, play_num/peek/adv/getc, play_len_ok, note_freq) but as
-; standalone bg_* routines over BGP_PTR/BGP_END/BGP_BUF instead of
-; INDEX/PLAY_LEN/STYLE_SIDE_BUF, because this runs with interrupts masked and
-; can be "between" arbitrary interrupted foreground code:
-;   - STYLE_SIDE_BUF-based PLAY_* state is safe only because blocking PLAY
-;     monopolizes execution; this needs its own dedicated RAM (BGP_*).
-;   - note_freq writes LINNUM/LINNUM+1, which interrupted foreground code
-;     (a POKE argument, an expression) may be mid-use of - bg_note_freq
-;     writes BGP_FREQ instead.
-;   - snd_seek/snd_wr1 ARE reused unchanged: every foreground burst that
-;     touches MIA index window B is already php/sei/plp-fenced, so it can
-;     never be mid-burst when this IRQ runs.
-;   - play_iq/play_syn (SYNTAX ERROR/ILLEGAL QUANTITY) must never run here -
-;     they call STKINI, which resets the 6502 stack and jumps back into the
-;     interpreter, abandoning this IRQ's own return address (never RTI's).
-;     A bad token or number here just stops the player instead of erroring.
-; ============================================================================
-
-; bg_play_tick: advance the background player by one kernel tick. If a
-; note/rest is still counting down, decrement BGP_TICKS (16-bit) and return;
-; at zero, parse the next event via bg_next_event. No-op if not playing.
-bg_play_tick:
-        lda     BGP_FLAGS
-        beq     @out
-        lda     BGP_TICKS
-        ora     BGP_TICKS+1
-        beq     @advance
-        lda     BGP_TICKS
-        bne     @decok
-        dec     BGP_TICKS+1
-@decok:
-        dec     BGP_TICKS
-        rts
-@advance:
-        jsr     bg_next_event
-@out:
-        rts
-
-; bg_next_event: parse and act on MML tokens starting at BGP_PTR until a
-; note/rest is emitted (sets BGP_TICKS; the caller above then lets the IRQ
-; count it down over later ticks) or the string ends. O/</>/L/T/V/W apply
-; immediately and the loop continues within this same call - they consume no
-; time.
-;
-; Sub-parsers (bg_num_req, bg_len_ok, ...) are called with jsr and abort a bad
-; token/number by jumping to bg_next_event_bad rather than returning - on
-; purpose, so a single bad token stops everything instead of unwinding one
-; jsr at a time. But that jmp does not pop the return address its own jsr
-; pushed, and callers can be nested several deep (e.g. bg_do_note -> bg_num ->
-; bg_len_ok), so left alone each abort leaks one stack slot per jsr level -
-; corrupting the very next rts (observed: it returned into the middle of the
-; aborted command instead of back to bg_play_tick, replaying the rest of the
-; string). Fix: snapshot S once here, on entry - constant across the O/L/T/V/W
-; loop-back below, since that only ever jmps - and reload it in
-; bg_next_event_bad/_done before the final rts, discarding whatever the
-; abort left on the stack no matter how deep it happened.
-bg_next_event:
-        tsx
-        stx     BGP_SP
-        jsr     bg_getc
-        jcc     bg_next_event_done      ; end of string
-        jsr     TOKEN_UPPER             ; keywords are case-insensitive
-        cmp     #' '
-        beq     bg_next_event
-        cmp     #','
-        beq     bg_next_event
-        cmp     #'A'
-        bcc     @sym
-        cmp     #'G'+1
-        bcs     @sym
-        jmp     bg_do_note              ; A = 'A'..'G'; sets BGP_TICKS and returns
-@sym:
-        cmp     #'R'
-        beq     @rest
-        cmp     #'P'
-        beq     @rest
-        cmp     #'<'
-        beq     @octdn
-        cmp     #'>'
-        beq     @octup
-        cmp     #'O'
-        beq     @oct
-        cmp     #'L'
-        beq     @ldef
-        cmp     #'T'
-        beq     @tempo
-        cmp     #'V'
-        beq     @voice
-        cmp     #'W'
-        beq     @wave
-        jmp     bg_next_event_bad       ; unknown token
-@rest:
-        jmp     bg_do_rest              ; sets BGP_TICKS and returns
-@octdn:
-        lda     BGP_OCTAVE
-        beq     bg_next_event
-        dec     BGP_OCTAVE
-        jmp     bg_next_event
-@octup:
-        lda     BGP_OCTAVE
-        cmp     #7
-        bcs     bg_next_event
-        inc     BGP_OCTAVE
-        jmp     bg_next_event
-@oct:
-        jsr     bg_num_req              ; X = value
-        cpx     #8
-        bcs     bg_next_event_bad
-        stx     BGP_OCTAVE
-        jmp     bg_next_event
-@tempo:
-        jsr     bg_num_req
-        cpx     #$00
-        bne     :+
-        ldx     #$01                    ; T0 -> 1
-:       stx     BGP_TEMPO
-        jmp     bg_next_event
-@voice:
-        jsr     bg_num_req
+BASIC_CUE:
+        jsr     CONINT                  ; X = voice
         cpx     #4
-        bcs     bg_next_event_bad
-        txa
-        asl     a
-        asl     a
-        asl     a
-        asl     a
-        clc
-        adc     #$10                    ; -> $10/$20/$30/$40
-        sta     BGP_VOICE
-        jmp     bg_next_event
-@wave:
-        jsr     bg_num_req
-        cpx     #5
-        bcs     bg_next_event_bad
-        lda     BGP_VOICE
-        clc
-        adc     #AUDV_WAVEFORM
-        jsr     snd_wr1                 ; A = offset, X = value
-        jmp     bg_next_event
-@ldef:
-        jsr     bg_num_req
-        jsr     bg_len_ok
-        stx     BGP_LDEF
-        jmp     bg_next_event
-
-; End of string, or a malformed token/number: unlike blocking PLAY neither
-; case can raise an error here (see the header note above) - both just stop
-; the player and silence every voice. Reload S from the bg_next_event-entry
-; snapshot first - discards any stack slots left by a jsr'd sub-parser that
-; aborted here mid-nesting (see the comment on bg_next_event above), so the
-; jmp below returns cleanly to bg_play_tick regardless of how deep this was
-; reached from.
-bg_next_event_done:
-bg_next_event_bad:
-        ldx     BGP_SP
-        txs
-        jmp     bg_play_stop
-
-; --- bg PLAY note / rest -----------------------------------------------------
-; bg_do_note: A = 'A'..'G'. Emits FREQ + gate-on for one note and sets
-; BGP_TICKS to its duration. Mirrors play_do_note (clementina_extra.s).
-bg_do_note:
-        sec
-        sbc     #'A'
-        tax
-        lda     play_note_semi,x
-        sta     BGP_SEMI
-        jsr     bg_peek
-        bcc     @len
-        cmp     #'#'
-        beq     @sharp
-        cmp     #'+'
-        beq     @sharp
-        cmp     #'-'
-        beq     @flat
-        jmp     @len
-@sharp:
-        jsr     bg_adv
-        inc     BGP_SEMI
-        jmp     @len
-@flat:
-        jsr     bg_adv
-        dec     BGP_SEMI
-@len:
-        jsr     bg_num                  ; C=1 & X=code if length digits present
-        bcs     @havelen
-        ldx     BGP_LDEF
-@havelen:
-        jsr     bg_len_ok
-        jsr     bg_len_to_dur
-        jsr     bg_maybe_dot
-        ldx     BGP_OCTAVE
-        lda     play_oct12,x
-        clc
-        adc     BGP_SEMI                ; octave base + semitone (signed)
-        cmp     #96
-        bcc     @emit
-        cmp     #$80
-        bcs     @zero                   ; wrapped negative -> clamp low
-        lda     #95
-        bne     @emit
-@zero:
-        lda     #$00
-@emit:
-        jmp     bg_note_on              ; tail: sets FREQ/gate, rts's to bg_play_tick
-
-; bg_do_rest: gate the current voice off; BGP_TICKS already holds one length.
-bg_do_rest:
-        jsr     bg_num
-        bcs     @havelen
-        ldx     BGP_LDEF
-@havelen:
-        jsr     bg_len_ok
-        jsr     bg_len_to_dur
-        jsr     bg_maybe_dot
-        lda     BGP_VOICE
-        clc
-        adc     #AUDV_CONTROL
-        ldx     #$00
-        jmp     snd_wr1                 ; tail: CONTROL = 0 -> release, rts
-
-; bg_note_on: A = absolute semitone 0-95 -> release the current voice, set
-; FREQ_L/H, then gate on with RESET_PHASE. Mirrors play_note_on, minus the
-; php/sei/plp fence: this already runs with interrupts masked (it IS the
-; IRQ), so nothing else can interleave a partial MIA index-window B burst.
-bg_note_on:
-        jsr     bg_note_freq            ; BGP_FREQ = Hz * 16
-        lda     BGP_VOICE
-        tax
-        txa
-        clc
-        adc     #AUDV_CONTROL
-        jsr     snd_seek                ; base + AUDV_CONTROL
-        lda     #$00
-        sta     IDXB_PORT               ; CONTROL = 0: release any sounding note
-        txa
-        jsr     snd_seek                ; base + AUDV_FREQ_L ($00)
-        lda     BGP_FREQ
-        sta     IDXB_PORT
-        lda     BGP_FREQ+1
-        sta     IDXB_PORT
-        txa
-        clc
-        adc     #AUDV_CONTROL
-        jsr     snd_seek
-        lda     #AUD_GATE_RETRIG
-        sta     IDXB_PORT               ; CONTROL = GATE|RESET_PHASE: re-attack
-        rts
-
-; bg_note_freq: A = semitone 0-95 -> BGP_FREQ/BGP_FREQ+1 = Hz*16. Private
-; twin of note_freq (clementina_extra.s), which must not run here - it uses
-; LINNUM, shared with interrupted foreground expression evaluation. Shares
-; note_freq_tbl (pure RODATA, no mutable state).
-bg_note_freq:
-        sec
-        ldx     #$FF
-@div:
-        inx
-        sbc     #12
-        bcs     @div
-        adc     #12
-        asl     a
-        tay
-        lda     note_freq_tbl,y
-        sta     BGP_FREQ
-        lda     note_freq_tbl+1,y
-        sta     BGP_FREQ+1
-@shift:
-        cpx     #$00
-        beq     @done
-        asl     BGP_FREQ
-        rol     BGP_FREQ+1
-        dex
-        bne     @shift
-@done:
-        rts
-
-; --- bg PLAY length -> duration ----------------------------------------------
-; bg_len_ok: X in {1,2,4,8,16,32} -> return; else stop the player (no error -
-; see the header note above).
-bg_len_ok:
-        cpx     #1
-        beq     @ok
-        cpx     #2
-        beq     @ok
-        cpx     #4
-        beq     @ok
-        cpx     #8
-        beq     @ok
-        cpx     #16
-        beq     @ok
-        cpx     #32
-        beq     @ok
-        jmp     bg_next_event_bad
-@ok:
-        rts
-
-; bg_len_to_dur: X = valid length code -> BGP_TICKS (16-bit), from BGP_TEMPO.
-; Mirrors play_len_to_dur.
-bg_len_to_dur:
-        lda     BGP_TEMPO
-        sta     BGP_TICKS
-        lda     #$00
-        sta     BGP_TICKS+1
-        cpx     #4
-        beq     @min
-        bcs     @right
-        cpx     #1
-        bne     @one
-        jsr     @shl                    ; k=1: two left shifts
-@one:
-        jsr     @shl                    ; k=1 or k=2: one more
-        jmp     @min
-@right:
-        jsr     @shr
-        cpx     #8
-        beq     @min
-        jsr     @shr
-        cpx     #16
-        beq     @min
-        jsr     @shr
-@min:
-        lda     BGP_TICKS
-        ora     BGP_TICKS+1
-        bne     @ret
-        lda     #$01
-        sta     BGP_TICKS
-@ret:
-        rts
-@shl:
-        asl     BGP_TICKS
-        rol     BGP_TICKS+1
-        rts
-@shr:
-        lsr     BGP_TICKS+1
-        ror     BGP_TICKS
-        rts
-
-; bg_maybe_dot: if the next char is '.', consume it and BGP_TICKS += BGP_TICKS/2.
-bg_maybe_dot:
-        jsr     bg_peek
-        bcc     @no
-        cmp     #'.'
-        bne     @no
-        jsr     bg_adv
-        lda     BGP_TICKS+1
-        lsr     a
-        sta     BGP_TMP+1
-        lda     BGP_TICKS
-        ror     a
-        sta     BGP_TMP
-        lda     BGP_TICKS
-        clc
-        adc     BGP_TMP
-        sta     BGP_TICKS
-        lda     BGP_TICKS+1
-        adc     BGP_TMP+1
-        sta     BGP_TICKS+1
-@no:
-        rts
-
-; --- bg PLAY string cursor ---------------------------------------------------
-; bg_peek: C=0 at end (BGP_IDX = BGP_LEN); else C=1 and A = next char. BGP_BUF
-; is a fixed address, so this is plain absolute,X addressing - no zero-page
-; pointer needed (see the BGP_IDX/BGP_LEN comment above the control block).
-bg_peek:
-        ldx     BGP_IDX
-        cpx     BGP_LEN
-        bcs     @end
-        lda     BGP_BUF,x
-        sec
-        rts
-@end:
-        clc
-        rts
-
-; bg_adv: consume one char (after a kept peek).
-bg_adv:
-        inc     BGP_IDX
-        rts
-
-; bg_getc: C=0 at end; else C=1 and A = char (consumed).
-bg_getc:
-        jsr     bg_peek
-        bcc     @e
-        pha
-        jsr     bg_adv
-        pla
-        sec
-        rts
-@e:
-        clc
-        rts
-
-; --- bg PLAY number scan -----------------------------------------------------
-; bg_num: read a run of decimal digits. Returns X = value (mod 256), C=1 if
-; >= 1 digit was read, else C=0. Uses BGP_TMP.
-bg_num:
-        lda     #$00
-        sta     BGP_TMP
-        sta     BGP_TMP+1
-@l:
-        jsr     bg_peek
-        bcc     @end
-        cmp     #'0'
-        bcc     @end
-        cmp     #'9'+1
-        bcs     @end
-        jsr     bg_adv
-        and     #$0F
-        pha
-        lda     BGP_TMP
-        asl     a
-        pha
-        asl     a
-        asl     a
-        sta     BGP_TMP
-        pla
-        clc
-        adc     BGP_TMP
-        sta     BGP_TMP
-        pla
-        clc
-        adc     BGP_TMP
-        sta     BGP_TMP
-        lda     #$01
-        sta     BGP_TMP+1
-        jmp     @l
-@end:
-        ldx     BGP_TMP
-        lda     BGP_TMP+1
-        beq     @none
-        sec
-        rts
-@none:
-        clc
-        rts
-
-; bg_num_req: bg_num, but stop the player (no error) if no digits were read.
-bg_num_req:
-        jsr     bg_num
-        jcc     bg_next_event_bad
-        rts
+        jcs     IQERR
+        php
+        sei
+        jsr     seq_status_seek
+        lda     IDXB_PORT               ; SEQ_NOTE_INDEX_L
+        tay                             ; Y = low byte (GIVAYF wants A=high, Y=low)
+        lda     IDXB_PORT               ; SEQ_NOTE_INDEX_H -> A = high byte
+        plp
+        jmp     GIVAYF                  ; tail: float A:Y
 
 ; ============================================================================
 ; File I/O (see docs/basic-file.md): OPEN/CLOSE/BGET#/BPUT# against MIA's

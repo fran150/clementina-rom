@@ -227,7 +227,12 @@ MATHTBL:
         ext_keyword_rts "ADSR",   BASIC_ADSR
         ext_keyword_rts "PULSE",  BASIC_PULSE
         ext_keyword_rts "PAN",    BASIC_PAN
-        ext_keyword_rts "PLAY",   BASIC_PLAY
+        ; PLAY is retired (see docs/basic-sound.md and clementina-mia's
+        ; docs/audio-sequencer.md): background music now runs on MIA's own
+        ; sequencer via TRACK/BAND (EXT2 table, below), not a 6502-side
+        ; interpreter. The old blocking PLAY and the background-PLAY IRQ
+        ; player have both been removed (clementina_extra.s); note_freq and
+        ; the note/length parsing helpers they shared with TRACK live on.
         ; Video Phase 1 (see docs/basic-video.md): background/sprite layer,
         ; CHR bank, and palette control. Direct register wrappers, same shape
         ; as BCOLOR/the sound statements above; handlers in clementina_extra.s.
@@ -347,6 +352,14 @@ MATHTBL:
         ; the classic primary-table SYS slot is dead code for Clementina
         ; (CONFIG_FILE is undefined), so this doesn't collide with anything.
         ext2_keyword_rts "SYS", BASIC_SYS
+        ; Background sequencer (see docs/basic-sound.md and clementina-mia's
+        ; docs/audio-sequencer.md): TRACK assigns one voice's independent MML
+        ; part; BAND is the master start/stop, global or per-voice; VTAKE/
+        ; VGIVE borrow a voice for a foreground sound effect and hand it back.
+        ext2_keyword_rts "TRACK", BASIC_TRACK
+        ext2_keyword_rts "BAND",  BASIC_BAND
+        ext2_keyword_rts "VTAKE", BASIC_VTAKE
+        ext2_keyword_rts "VGIVE", BASIC_VGIVE
         end_ext2_token_tables
 
 ; ----------------------------------------------------------------------------
@@ -380,5 +393,9 @@ EXTFN_RAW_END:
         extfn_keyword_addr "FPOS", BASIC_FPOS
         extfn_keyword_addr "FSIZE", BASIC_FSIZE
         extfn_keyword_addr "DISKFREE", BASIC_DISKFREE
+        ; CUE(v) - the background sequencer's per-voice note/rest index, for
+        ; timing BAND/TRACK changes to a running voice. See BASIC_CUE's own
+        ; comment in clementina_extra.s and docs/basic-sound.md.
+        extfn_keyword_addr "CUE", BASIC_CUE
         end_extfn_token_tables
 .endif
