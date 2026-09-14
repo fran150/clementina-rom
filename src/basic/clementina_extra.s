@@ -70,6 +70,7 @@ CMD_VIDEO_SET_MODE  = $43
 
 ; LAYER_ENABLE bits (bit0 background, bit1 overlay, bit2 sprite)
 LAYER_BACKGROUND    = %00000001
+LAYER_OVERLAY       = %00000010
 LAYER_SPRITE         = %00000100
 
 ; VIDEO_MODE: bit0 = video enable.
@@ -83,6 +84,8 @@ RC_SCROLL_X_L       = $24  ; +1 = high byte
 RC_SCROLL_Y_L       = $26  ; +1 = high byte
 RC_BG_CHR_BANK      = $28
 RC_BG_ALT_CHR_BANK  = $29
+RC_OVERLAY_CHR_BANK = $2A
+RC_OVERLAY_ALT_CHR  = $2B
 RC_SPRITE_CHR_BANK  = $2C
 RC_CHR_1BPP_MASK    = $2D
 RC_CHR_1BPP_PLANES  = $2E
@@ -123,6 +126,7 @@ AUD_GATE_RETRIG   = $03    ; CONTROL: GATE | RESET_PHASE
 KJIFFY            = $00F7
 
 BASIC_COLD_START:
+        jsr basic_input_reset
         jmp COLD_START
 
 ; Warm restart: keep the current program/variables and return to the READY
@@ -327,6 +331,14 @@ BASIC_BGOFF:
         lda     #LAYER_BACKGROUND
         jmp     vid_layer_clear
 
+; Overlay visibility does not clear the console or change its cursor state.
+BASIC_OVLON:
+        lda     #LAYER_OVERLAY
+        jmp     vid_layer_set
+BASIC_OVLOFF:
+        lda     #LAYER_OVERLAY
+        jmp     vid_layer_clear
+
 ; SPRON / SPROFF - sprite layer on/off (LAYER_ENABLE bit 2). Per-sprite
 ; show/hide is a field of the SPRITE statement (Phase 2), not a separate verb -
 ; this pair is only the whole-layer switch.
@@ -389,6 +401,21 @@ BASIC_BGALT:
         cpx     #$08
         jcs     snd_iqerr
         lda     #RC_BG_ALT_CHR_BANK
+        jmp     vid_wr1
+
+; Overlay bank selection is independent of the shared bank's CHRMODE.
+BASIC_OVLBANK:
+        jsr     GETBYT
+        cpx     #$08
+        jcs     snd_iqerr
+        lda     #RC_OVERLAY_CHR_BANK
+        jmp     vid_wr1
+
+BASIC_OVLALT:
+        jsr     GETBYT
+        cpx     #$08
+        jcs     snd_iqerr
+        lda     #RC_OVERLAY_ALT_CHR
         jmp     vid_wr1
 
 ; SPRBANK n : CHR bank 0-7 sprites draw from.
@@ -3043,7 +3070,9 @@ BGP_FLAG_PLAYING = $01
 ; eval.s's primary-expression dispatch instead of the statement dispatcher.
 ; Entered with A = TOKEN_EXTFN (just fetched, TXTPTR past it). Reads the
 ; subtoken, evaluates the mandatory "(expr)" via PARCHK exactly like every
-; primary function (UNARY, eval.s) does, then jsr's the looked-up body and
+; primary function (UNARY, eval.s) does. The EXTFN_RAW_START..END entries
+; parse their own argument lists, allowing nested two-argument functions.
+; Dispatch then calls the looked-up body and
 ; falls into the same CHKNUM tail UNARY uses, so the function's result (left
 ; in FAC1, e.g. by SNGFLT) is validated like any other numeric factor.
 ; ----------------------------------------------------------------------------
@@ -3053,10 +3082,19 @@ EXTFN_DISPATCH:
         sbc     #$80
         cmp     #NUM_EXTFN_TOKENS
         bcs     @synerr                 ; unknown subtoken -> SYNTAX ERROR
-        pha
+        cmp     #(EXTFN_RAW_START-EXTFN_ADDRESS_TABLE)/2
+        bcc     @unary
+        cmp     #(EXTFN_RAW_END-EXTFN_ADDRESS_TABLE)/2
+        bcc     @raw
+@unary: pha
         jsr     CHRGET                  ; step past the subtoken -> A = the char after it
         jsr     PARCHK                  ; consume "(expr)": CHKOPN+FRMEVL+CHKCLS
         pla
+        jmp     @dispatch
+@raw:   pha
+        jsr     CHRGET
+        pla
+@dispatch:
         asl     a
         tay
         lda     EXTFN_ADDRESS_TABLE+1,y
@@ -4610,3 +4648,9 @@ BASIC_EOF:
         iny
 @done:
         jmp     SNGFLT
+
+.include "clementina_input.s"
+
+.include "clementina_timing.s"
+
+.include "clementina_memory.s"

@@ -24,3 +24,6 @@ BASIC `READY.` prompt without clearing the current program.
   location-by-location map of the address space and the kernel ABI.
 - [docs/basic-sound.md](docs/basic-sound.md) — BASIC sound statements (`SNDON`,
   `VOL`, `WAVE`, `NOTE`, `FREQ`, `GATE`, `ADSR`, `PULSE`, `PAN`) for MIA's PSG.
+- [BASIC input](docs/basic-input.md) — keyboard, mouse, gamepad and repeat configuration.
+- [BASIC timing](docs/basic-timing.md) — millisecond delays and the 60 Hz TI clock.
+- [BASIC MIA memory](docs/basic-memory.md) — byte access, overlapping copies, and block fills.

@@ -46,6 +46,7 @@ same as `COLOR`), write MIA's render-control page or palette RAM.
 
 | Statement | Arguments | Effect |
 | --- | --- | --- |
+| `OVLON` / `OVLOFF` | — | Overlay visibility (`LAYER_ENABLE` bit 1). Preserves text, attributes, and other layer enables. |
 | `BGON` / `BGOFF` | — | Background layer on/off (`LAYER_ENABLE` bit 0). |
 | `SPRON` / `SPROFF` | — | Sprite layer on/off (`LAYER_ENABLE` bit 2). Per-sprite show/hide is a `SPRITE` field (Phase 2), not a separate verb. |
 | `VIDON` / `VIDOFF` | — | Whole video output on/off (`VIDEO_MODE` bit 0). |
@@ -53,6 +54,7 @@ same as `COLOR`), write MIA's render-control page or palette RAM.
 | `BGSET n` | `n` 0 or 1 | Selects which of the two BG table sets the current `BGMODE` arrangement reads. |
 | `SCROLL x,y` | `x,y` 0-65535 | BG layer pixel scroll. Wraps at the current mode's canvas size. |
 | `BGBANK n` / `BGALT n` | `n` 0-7 | CHR bank the BG layer draws from normally / where a cell's `CHR_ALT` bit is set. |
+| `OVLBANK n` / `OVLALT n` | `n` 0-7 | Primary / alternate overlay CHR bank. `ALT` on each cell selects between them. |
 | `SPRBANK n` | `n` 0-7 | CHR bank sprites draw from. |
 | `SPRCOUNT n` | `n` 0-255 | Highest OAM index the renderer scans each frame. |
 | `CHRMODE bank,flag` | `bank` 0-7, `flag` 0/non-zero | Mark a CHR bank as 1bpp (`flag<>0`) or 3bpp (`flag=0`). |
@@ -60,8 +62,27 @@ same as `COLOR`), write MIA's render-control page or palette RAM.
 | `PALETTE bank,index,r,g,b` | `bank` 0-15, `index` 0-7, `r`/`b` 0-31, `g` 0-63 | Write one palette RGB565 entry directly (palette fades/cycling at runtime - nothing else can change palette RAM after boot). |
 
 Boot state (`video_init`, `src/kernel/video.s`): overlay layer on, background
-and sprites off; CHR banks 0/1 both 1bpp (overlay plane 1); BG/sprite CHR
-banks default to bank 0.
+and sprites off; CHR banks 0/1 both 1bpp (overlay plane 0); primary/alternate overlay banks
+are 0/1 and BG/sprite CHR banks default to bank 0.
+
+`OVLBANK` and `OVLALT` select graphics; they do not load a font or change
+`CHRMODE` or `CHRPLANE`. Any CHR bank can serve any layer, and changing a
+bank's decoding mode affects every layer using it. Invalid bank numbers are
+rejected before the register is changed.
+
+`OVLOFF` hides the entire console, including prompts and the cursor. Console
+output still updates the hidden overlay. `OVLON` displays its current contents
+again; returning to READY does not automatically enable it. The overlay stays
+fixed at 40×25 cells regardless of background scrolling.
+
+```basic
+10 OVLOFF
+20 PRINT "THIS TEXT IS HIDDEN"
+30 OVLON
+```
+
+Use `OVLBANK 0:OVLALT 1` to restore the default bank selections. Existing
+`COLOR`, `FLIPX`, `FLIPY`, and `ALT` continue to control per-cell attributes.
 
 ## Statements — Phase 2 (implemented)
 
@@ -244,3 +265,10 @@ layout):
   above). Emulator-validated: `basic_video_phase2b_test.go` (updated) and
   `basic_video_phase2_test.go` (updated) in `clementina-6502`
   `pkg/computers/clementina`.
+
+## Overlay regression tests
+
+Run `python3 tests/run_input.py --run 'TestBasicOverlay|TestBasicVideo'` to
+boot the freshly built ROM in the sibling emulator and check overlay controls
+alongside existing video operations. The runner uses a source overlay and does
+not install the image.

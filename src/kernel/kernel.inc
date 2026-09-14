@@ -108,6 +108,8 @@ KIDX_SCROLL_NT_SRC   = $F0
 KIDX_SCROLL_NT_DST   = $F1
 KIDX_SCROLL_ATTR_SRC = $F2
 KIDX_SCROLL_ATTR_DST = $F3
+KIDX_MEMORY_SRC      = $F4
+KIDX_MEMORY_DST      = $F5
 
 ; Index descriptor flag bits
 IXF_R_STP          = %00000001 ; step after read

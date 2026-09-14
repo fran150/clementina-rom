@@ -13,6 +13,10 @@
 ; 1 -- FOR TOKEN ($81)
 ; ----------------------------------------------------------------------------
 FOR:
+.ifdef CLEMENTINA
+        jsr     basic_is_ti
+        jcs     IQERR            ; a system clock is not a loop variable
+.endif
         lda     #$80
         sta     SUBFLG
         jsr     LET

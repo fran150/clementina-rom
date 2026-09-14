@@ -28,6 +28,13 @@ DIM:
 ;		= $40 IF CALLED FROM "GETARYPT"
 ; ----------------------------------------------------------------------------
 PTRGET:
+.ifdef CLEMENTINA
+        ; TI reads and LET assignments have dedicated paths. Reject its use
+        ; as FOR/READ/INPUT/GET or device-output storage rather than silently
+        ; creating a normal variable with a hidden, ineffective value.
+        jsr     basic_is_ti
+        jcs     IQERR
+.endif
         ldx     #$00
         jsr     CHRGOT
 PTRGET2:

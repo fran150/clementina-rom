@@ -500,3 +500,17 @@ the firmware needs to know or recompute.
 - Keep "open items" inline as block quotes so they are easy to find and clear.
 - Prefer absolute, concrete addresses over "somewhere around" once a thing is
   pinned down by the build.
+
+## MIA wall-time clock
+
+`TI`, `TICKS(0)`, and `DELAY` use command-latched MIA timer snapshots, independently
+of KJIFFY and PHI2. The snapshot occupies MIA RAM `$11078–$1107F` (not CPU RAM).
+Kernel snapshot and delay scratch storage are linked into the loaded image; no
+fixed workspace addresses change. See [BASIC timing](basic-timing.md).
+
+## General MIA RAM operations
+
+BASIC `MPEEK`, `MPOKE`, `MCOPY`, and `MFILL` address MIA RAM `$00000–$3FFFF`,
+independently of CPU RAM and VIA bank selection. Kernel scratch descriptors
+`$F4` and `$F5` are reserved for these operations; argument and temporary bytes
+are linked into the loaded image. See [BASIC MIA memory](basic-memory.md).

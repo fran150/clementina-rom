@@ -55,6 +55,12 @@ L28EC:
 ; <VAR> = <EXP>
 ; ----------------------------------------------------------------------------
 LET:
+.ifdef CLEMENTINA
+        jsr     basic_is_ti
+        bcc     @ordinary
+        jmp     BASIC_SET_TI
+@ordinary:
+.endif
         jsr     PTRGET
         sta     FORPNT
         sty     FORPNT+1

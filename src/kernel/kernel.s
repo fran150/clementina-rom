@@ -155,6 +155,8 @@ warmstart:
 .include "video.s"
 .include "console.s"
 .include "input.s"
+.include "timing.s"
+.include "memory.s"
 .include "editor.s"
 .include "print.s"
 .include "interrupts.s"

@@ -316,6 +316,21 @@ MATHTBL:
         ; free, no changes needed to any of them.
         ext2_keyword_rts "CD",       BASIC_CD
         ext2_keyword_rts "DIR",      BASIC_DIR
+        ext2_keyword_rts "INPUTMODE", BASIC_INPUTMODE
+        ext2_keyword_rts "KEYCLEAR", BASIC_KEYCLEAR
+        ext2_keyword_rts "KEYREPEAT", BASIC_KEYREPEAT
+        ext2_keyword_rts "KEYRPT", BASIC_KEYRPT
+        ext2_keyword_rts "MOUSE", BASIC_MOUSE
+        ext2_keyword_rts "PADREAD", BASIC_PADREAD
+        ; Append to preserve existing saved-program token numbers.
+        ext2_keyword_rts "OVLON",   BASIC_OVLON
+        ext2_keyword_rts "OVLOFF",  BASIC_OVLOFF
+        ext2_keyword_rts "OVLBANK", BASIC_OVLBANK
+        ext2_keyword_rts "OVLALT",  BASIC_OVLALT
+        ext2_keyword_rts "DELAY", BASIC_DELAY
+        ext2_keyword_rts "MPOKE", BASIC_MPOKE
+        ext2_keyword_rts "MCOPY", BASIC_MCOPY
+        ext2_keyword_rts "MFILL", BASIC_MFILL
         end_ext2_token_tables
 
 ; ----------------------------------------------------------------------------
@@ -330,5 +345,21 @@ MATHTBL:
         extfn_keyword_addr "PLAYING", BASIC_PLAYING
         ; EOF(n) - see docs/basic-file.md.
         extfn_keyword_addr "EOF",     BASIC_EOF
+        extfn_keyword_addr "KEYDOWN", BASIC_KEYDOWN
+        extfn_keyword_addr "CONSDOWN", BASIC_CONSDOWN
+        extfn_keyword_addr "INPUTDEV", BASIC_INPUTDEV
+        extfn_keyword_addr "PADON", BASIC_PADON
+        extfn_keyword_addr "PADDIR", BASIC_PADDIR
+        extfn_keyword_addr "PADSTICK", BASIC_PADSTICK
+        ; These functions parse their argument lists (EXTFN_DISPATCH).
+        .segment "EXTFNVEC"
+EXTFN_RAW_START:
+        extfn_keyword_addr "PADBTN", BASIC_PADBTN
+        extfn_keyword_addr "PADAXIS", BASIC_PADAXIS
+        extfn_keyword_addr "PADTRIG", BASIC_PADTRIG
+        .segment "EXTFNVEC"
+EXTFN_RAW_END:
+        extfn_keyword_addr "TICKS", BASIC_TICKS
+        extfn_keyword_addr "MPEEK", BASIC_MPEEK
         end_extfn_token_tables
 .endif

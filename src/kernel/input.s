@@ -53,3 +53,55 @@ getkey_nb:
 stop:
         lda #$01                ; Z=0 -> "no break"
         rts
+
+; Indexed input services are link exports; the fixed public jump table is full.
+; A = input-block offset ($00-$7F), returns A = byte, preserves X/Y.
+; Explicit seek is essential: selecting a descriptor does not rewind it.
+.export input_read_byte, input_clear_text, input_command
+input_read_byte:
+        php
+        sei
+        pha
+        lda #$60
+        sta IDXA_SELECT
+        lda #CFG_IDXA_ADDR_H
+        sta CFG_SELECT
+        lda #$01
+        sta CFG_PORT
+        lda #CFG_IDXA_ADDR_M
+        sta CFG_SELECT
+        lda #$10
+        sta CFG_PORT
+        lda #CFG_IDXA_ADDR_L
+        sta CFG_SELECT
+        pla
+        sta CFG_PORT
+        lda IDXA_PORT
+        plp
+        rts
+
+; Drain the currently queued bytes; bounded even if new input keeps arriving.
+input_clear_text:
+        ldx INPUT_CHAR_COUNT
+        beq @done
+@next:  lda INPUT_CHAR
+        dex
+        bne @next
+@done:  rts
+
+; A=command, X/Y=parameters 1/2; parameter 3 is zero.
+; Foreground-only, uses the normal synchronous MIA command handshake.
+input_command:
+        pha
+@wait:  lda STATUS_L
+        and #MIA_STAT_CMD_RUNNING
+        bne @wait
+        stx CMD_PARAM1
+        sty CMD_PARAM2
+        stz CMD_PARAM3
+        pla
+        sta CMD_TRIGGER
+@done:  lda STATUS_L
+        and #MIA_STAT_CMD_RUNNING
+        bne @done
+        rts

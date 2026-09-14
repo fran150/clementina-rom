@@ -454,6 +454,12 @@ EQUL:
         jmp     L2CA4
 ; ----------------------------------------------------------------------------
 FRM_VARIABLE:
+.ifdef CLEMENTINA
+        jsr     basic_is_ti
+        bcc     @ordinary
+        jmp     BASIC_TI
+@ordinary:
+.endif
         jsr     PTRGET
 FRM_VARIABLE_CALL	= *-1
         sta     FAC_LAST-1
