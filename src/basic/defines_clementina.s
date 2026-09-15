@@ -124,24 +124,25 @@ STYLE_SIDE_MAGIC1   := $FF
 
 ; memory layout
 ; ----------------------------------------------------------------------------
-; 2026-09 RAM/ROM reorg: the loaded kernel+BASIC+WozMon image no longer sits
-; between working RAM and the heap. It now lives at the *top* of the flat
-; address space, ending exactly at $BFFF (immediately below I/O), placed there
-; by clementina.cfg's MAIN region (start = __CODE_START__, computed by the
-; Makefile's two-pass link so the image's last byte always lands on $BFFF) and
-; loaded by a *descending* MIA bootstrap (kernel_target_address/
-; kernel_load_top_address in clementina-mia's mia.c and the mirrored constants
-; in clementina-6502's registers.go - both fixed at $BFD0/$BFFF forever,
-; regardless of how large the image grows).
+; 2026-09-14 bottom-anchor rework (reversing the 2026-09-13 top-anchored/
+; descending-loader design this comment used to describe): the loaded
+; kernel+BASIC+WozMon image sits between working RAM and the heap again, but
+; anchored to a fixed *low* start, $04B7, instead of a fixed high end. It's
+; placed there by clementina.cfg's KERNEL/BASICMEM regions (KERNEL starts at
+; the fixed constant $04B7; BASICMEM starts wherever KERNEL ends,
+; __KERNEL_LAST__) and loaded by an *ascending* MIA bootstrap
+; (kernel_load_bottom_address/kernel_target_address in clementina-mia's
+; mia.c and the mirrored constants in clementina-6502's registers.go - both
+; fixed at $04B7 forever, regardless of how large the image grows).
 ;
-; Working RAM is now one contiguous block at the bottom: zero page, stack,
-; line buffer, KVARS, then DIR_NAME_BUF (clementina_extra.s - relocated here
-; from its old $5C00 spot; nothing requires it to be anywhere specific, it's
-; a plain equate). RAMSTART2 is a small, stable constant matching the image's
-; own fixed low start
+; Working RAM is one contiguous block at the bottom: zero page, stack, line
+; buffer, KVARS, then DIR_NAME_BUF (clementina_extra.s - nothing requires it
+; to be anywhere specific, it's a plain equate). RAMSTART2 is a small, stable
+; constant matching the image's own fixed low start
 ; (KERN_BASE, kernel.inc) - kernel+WozMon+BASIC are loaded right above it.
 ; BASIC's heap fills everything above wherever the image currently ends
-; (__BASICMEM_LAST__, read directly by init.s). See docs/memory-map.md.
+; (__BASICMEM_LAST__, read directly by init.s) up through $BFFF. See
+; docs/memory-map.md.
 RAMSTART2        := $04B7
 
 ; LOAD/SAVE: a BASIC program's own tokenized text to/from an SD file - see

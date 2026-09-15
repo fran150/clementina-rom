@@ -39,11 +39,16 @@ For TI elapsed time, similarly add 5,184,000 after a negative difference. Such
 measurements assume no intervening clock assignment and less than one full
 counter period between samples.
 
-DELAY leaves interrupts enabled so background PLAY keeps advancing. It polls
-BASIC's normal Ctrl-C check; interruption produces BREAK and stops background
-PLAY as usual. That existing check also consumes non-Ctrl-C queued text.
-The older KJIFFY/VIA clock used by PLAY and cursor blinking is unchanged and
-still scales with CPU speed. The new wall-time clock does not retime music.
+DELAY leaves interrupts enabled and polls BASIC's normal Ctrl-C check, so it
+can still be interrupted with BREAK; that existing check also consumes
+non-Ctrl-C queued text. Background music (`TRACK`/`BAND`, `docs/basic-sound.md`)
+runs entirely on MIA's own sequencer and needs none of this to keep advancing
+through DELAY - the 6502 isn't involved once it starts. Ctrl-C, `STOP`, `END`,
+a runtime error, and `NEW` all still stop it, the same safety net the old
+foreground/background `PLAY` had (now `seq_stop_all`, issuing `AUDIO_SEQ_STOP`
+for every voice instead of clearing 6502-side player state). The older
+KJIFFY/VIA clock is unchanged and still scales with CPU speed; it now drives
+only cursor blink. The new wall-time clock does not retime anything.
 
 ## TI variable semantics
 

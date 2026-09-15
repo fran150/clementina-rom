@@ -45,7 +45,7 @@ This page is the BASIC programmer's reference.
 
 Out‑of‑range arguments raise `ILLEGAL QUANTITY`, exactly like `COLOR`.
 
-`SNDON`/`SNDOFF`/`SNDCLR`, the sixteen command words above, and `PLAYING`/`CUE`
+`SNDON`/`SNDOFF`/`SNDCLR`, the twelve command words above, and `PLAYING`/`CUE`
 are reserved — you cannot use them as variable names.
 
 ## Envelope, volume and gate

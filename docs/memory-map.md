@@ -38,7 +38,7 @@ CPU: **65C02S** (the `STZ`, `BRA`, `PHX/PLX`, etc. extensions are available).
 | `$0100–$01FF` | CPU stack (§3) |
 | `$0200–$02FF` | Line input buffer (§4) |
 | `$0300–$03FF` | Kernel variables and vectors (§5) |
-| `$0400–$04B6` | Background-PLAY control block + `DIR_NAME_BUF` (§7.5) |
+| `$0400–$04B6` | Free working RAM (formerly the background-`PLAY` control block) + `DIR_NAME_BUF` (§7.5) |
 | `$04B7–…` | Kernel+WozMon+BASIC image (§6, §7), starting exactly at `$04B7` |
 | `…–$BFFF` | BASIC's free workspace / heap (§8), filling everything above the image |
 
@@ -90,7 +90,7 @@ Defined in the `ZEROPAGE` segment of [`src/kernel/kernel.s`](../src/kernel/kerne
 | `$F2` | `KTMP` | 2 | Scratch. Holds the computed overlay offset `P = CURSOR_Y*40 + CURSOR_X`, then the 24-bit overlay address low/mid. |
 | `$F4` | `KCNT` | 2 | 16-bit loop counter for screen fills. |
 | `$F6` | `KCHR` | 1 | Scratch copy of the byte passed to `CHROUT`, so the routine can preserve A/X/Y while still repositioning MIA indexes. |
-| `$F7` | `KJIFFY` | 2 | Free-running 16-bit LE tick counter, `+1` per VIA Timer 1 IRQ (≈160 Hz at 1 MHz PHI2, scales with PHI2). Wraps silently. Published in `kernel.inc`; read-only for clients. BASIC `PLAY` times notes off it. |
+| `$F7` | `KJIFFY` | 2 | Free-running 16-bit LE tick counter, `+1` per VIA Timer 1 IRQ (≈160 Hz at 1 MHz PHI2, scales with PHI2). Wraps silently. Published in `kernel.inc`; read-only for clients. |
 | `$F9–$FB` | — | 3 | Reserved for the kernel. |
 
 > Allocation rule: BASIC must not extend past `$EF`; the kernel must not use
@@ -152,7 +152,7 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 | `$03D0` | `EDIT_MODE` | 1 | Phase 5 glyph mode (`0..2`), used by the editor to map typed `$20-$7E` to alternate tile ranges. |
 | `$03D1` | `EDIT_PAINT` | 1 | Nonzero while Paint mode is active. |
 | `$03D2` | `EDIT_CMD_PENDING` | 1 | Nonzero between `ESC` and its command key. |
-| `$03D3–$03FC` | `STYLE_SIDE_BUF` | 42 | BASIC tokenizer scratch for Phase 6 styled program-literal sidecars. Captures compact literal attribute records before appending them to the stored program line. `$03D3–$03D4` are also reused as a transient LIST line-pointer save, and `$03D3–$03DE` as `PLAY`'s parser state at RUN time (tokenizer and `PLAY` never run at the same moment). |
+| `$03D3–$03FC` | `STYLE_SIDE_BUF` | 42 | BASIC tokenizer scratch for Phase 6 styled program-literal sidecars. Captures compact literal attribute records before appending them to the stored program line. `$03D3–$03D4` are also reused as a transient LIST line-pointer save, and `$03D3–$03F0` (30 bytes) as `TRACK`'s MML-compile-time state and `BAND`/`VTAKE`/`VGIVE`'s voice-mask scratch (tokenizer and `TRACK`/`BAND`/`VTAKE`/`VGIVE` never run at the same moment). |
 | `$03FD` | `BASIC_DEFAULT_ATTR` | 1 | BASIC default output attribute set by `COLOR`, `FLIPX`, `FLIPY`, and `ALT`. |
 | `$03FE` | `BASIC_STYLE_MASK` | 1 | BASIC style override mask set by `STYLE n`, stored in overlay-attribute bit form (`$0F`, `$10`, `$20`, `$80`). |
 | `$03FF` | `STYLE_BASE_LEN` | 1 | BASIC tokenizer scratch: tokenized line length before any style sidecar is appended. |
@@ -240,46 +240,26 @@ internal routines:
 
 ---
 
-## 7.5. Background-PLAY control block (`$0400–$048E`)
+## 7.5. `DIR_NAME_BUF` (`$048F–$04B6`) and free working RAM (`$0400–$048E`)
 
-Fixed working RAM right after `KVARS` (moved here from the old `$5C00` spot in
-the 2026-09 RAM/ROM reorg — nothing requires it to be anywhere specific),
-defined as plain equates in `src/basic/clementina_extra.s` (`BGP_*`) exactly
-like `KVARS`/`KJIFFY` — never part of the loaded image, so it costs no ROM
-bytes. Holds the state
-the Timer-1 IRQ needs to run `PLAY s$,n`'s background sequencer (`bg_play_tick`
-et al.) independently of whatever the foreground interpreter is doing:
+`$0400–$048E` (143 bytes) is fixed working RAM right after `KVARS`, currently
+unused. It used to hold the background-`PLAY` control block (`BGP_*` in
+`src/basic/clementina_extra.s`) — the state the Timer-1 IRQ needed to run
+`PLAY s$,n`'s background sequencer independently of the foreground
+interpreter. `PLAY`, its background player, and `BGP_*` were all retired
+(2026-09-14): background music now runs entirely on MIA's own sequencer, so
+nothing on the 6502 side needs a fixed, IRQ-safe control block for it any
+more. See `docs/basic-sound.md` and `clementina-mia`'s
+`docs/audio-sequencer.md`.
 
-| Offset | Name | Size | Description |
-| --- | --- | --- | --- |
-| `+$00` | `BGP_FLAGS` | 1 | Bit 0: background player active. |
-| `+$01` | `BGP_IDX` | 1 | Read cursor into `BGP_BUF` (0–127). Plain index, not a pointer — `(ptr),y` indirect addressing only works in zero page, and this block deliberately isn't. |
-| `+$02` | `BGP_LEN` | 1 | Valid bytes in `BGP_BUF`. |
-| `+$03` | `BGP_TICKS` | 2 | Ticks left on the current note/rest. |
-| `+$05` | `BGP_VOICE` | 1 | Current voice record base (`$10/$20/$30/$40`). |
-| `+$06` | `BGP_OCTAVE` | 1 | Current octave 0–7. |
-| `+$07` | `BGP_TEMPO` | 1 | Ticks per quarter note. |
-| `+$08` | `BGP_LDEF` | 1 | Default note length code. |
-| `+$09` | `BGP_SEMI` | 1 | Scratch: semitone within the octave. |
-| `+$0A` | `BGP_FREQ` | 2 | `bg_note_freq` result — private, not `LINNUM` (which interrupted foreground code may be mid-use of). |
-| `+$0C` | `BGP_TMP` | 2 | General parser scratch (digit accumulation, dotted-length halving). |
-| `+$0E` | `BGP_BUF` | 128 | The background MML string, copied here from BASIC's string heap at `PLAY s$,n` time so it survives independently of GC/reassignment/`CLR`. |
-
-Right after this block (`$048F–$04B6`, still below `RAMSTART2`, same
-"costs no ROM bytes" reasoning): `DIR_NAME_BUF` (40 bytes), a transient
-scratch buffer `DIR` (`docs/basic-file.md`) reads one directory entry's name
-into before printing any of it. It is unrelated to the background player —
-placed here only because this was the free space available — and is not
-"live" the way `BGP_*` is: nothing needs it to survive between `DIR`
-invocations.
-
-`PLAY s$,n` (`n<>0`) copies `s$` in here and sets `BGP_FLAGS`; `bg_play_tick`
-(called from `irq_handler` right after the `KJIFFY` bump) counts `BGP_TICKS`
-down and, at zero, parses the next MML token via a private mirror of blocking
-`PLAY`'s parser (`bg_next_event`, `bg_do_note`, …) that never touches
-`STYLE_SIDE_BUF`/`INDEX`/`LINNUM` and never raises `SYNTAX ERROR`/`ILLEGAL
-QUANTITY` (an ISR can't safely enter `STKINI`) — a malformed background
-string just stops the player. See `docs/basic-sound.md`.
+`DIR_NAME_BUF` (40 bytes, `$048F–$04B6`), defined as a plain equate in
+`src/basic/clementina_extra.s` exactly like `KVARS`/`KJIFFY` — never part of
+the loaded image, so it costs no ROM bytes — is a transient scratch buffer
+`DIR` (`docs/basic-file.md`) reads one directory entry's name into before
+printing any of it. It kept its address (rather than sliding down into the
+freed `$0400–$048E` space) when the background-`PLAY` block was removed, so
+nothing else in this fixed low-RAM region needs to move; nothing needs
+`DIR_NAME_BUF` to survive between `DIR` invocations.
 
 ---
 
@@ -321,13 +301,10 @@ can hit (`ld65` fails loudly if it ever does) - ordinary BASIC-side growth
 (new statements, bigger tables) only ever eats into free heap bytes, never a
 hand-maintained budget.
 
-Two other repos mirror pieces of this in test code and need updating
-whenever addresses in this section move again: `clementina-6502`
-`pkg/computers/clementina/background_play_test.go` (`addrBGPFlags`,
-`BGP_FLAGS`'s address, `$0400` - fixed working RAM, unaffected by anchor
-direction) and `guessing_game_test.go` (a CPU-runaway sanity check's
-valid-PC range) — grep both for the current hex values before moving
-`KERN_BASE` or `BGP_BASE` again.
+`clementina-6502` mirrors a piece of this in test code and needs updating
+whenever addresses in this section move again: `pkg/computers/clementina/
+guessing_game_test.go` (a CPU-runaway sanity check's valid-PC range) — grep
+that repo for the current hex value before moving `KERN_BASE` again.
 
 > **Known landmine — avoid `TXTTAB` in ~`[$39FE, $3AC0]`.** A pre-existing latent
 > bug (present on the stock baseline, independent of the extension tokens) makes

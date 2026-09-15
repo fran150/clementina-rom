@@ -9,7 +9,7 @@ This repository contains the 6502-side software for Clementina:
 ## Build
 
 ```sh
-make            # build build/kernel.bin (top-anchored, ends at $BFFF)
+make            # build build/kernel.bin (bottom-anchored, starts at $04B7)
 make install    # copy kernel.bin into the emulator's embedded asset
 ```
 
@@ -23,7 +23,8 @@ BASIC `READY.` prompt without clearing the current program.
 - [docs/memory-map.md](docs/memory-map.md) — *Mapping the Clementina*, a living,
   location-by-location map of the address space and the kernel ABI.
 - [docs/basic-sound.md](docs/basic-sound.md) — BASIC sound statements (`SNDON`,
-  `VOL`, `WAVE`, `NOTE`, `FREQ`, `GATE`, `ADSR`, `PULSE`, `PAN`) for MIA's PSG.
+  `VOL`, `WAVE`, `NOTE`, `FREQ`, `GATE`, `ADSR`, `PULSE`, `PAN`) for MIA's PSG,
+  plus the `TRACK`/`BAND`/`VTAKE`/`VGIVE`/`PLAYING`/`CUE` background sequencer.
 - [BASIC input](docs/basic-input.md) — keyboard, mouse, gamepad and repeat configuration.
 - [BASIC timing](docs/basic-timing.md) — millisecond delays and the 60 Hz TI clock.
 - [BASIC MIA memory](docs/basic-memory.md) — byte access, overlapping copies, and block fills.

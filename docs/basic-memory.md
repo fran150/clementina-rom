@@ -57,9 +57,11 @@ regions, growing the copy size up to 65,535 bytes. Large fills require only a
 small number of DMA commands; no 6502 byte-by-byte fill loop is used.
 
 Commands are synchronous and wait for both command and DMA completion. Interrupts
-remain available between descriptor updates and while waiting, so background
-PLAY continues when its data is not overwritten. Block operations run to
-completion; they do not poll Ctrl-C partway through a copy or fill.
+remain available between descriptor updates and while waiting, so cursor blink
+keeps ticking (background music, `docs/basic-sound.md`, runs entirely on MIA's
+own sequencer and needs no 6502 interrupt to keep advancing regardless). Block
+operations run to completion; they do not poll Ctrl-C partway through a copy or
+fill.
 
 Kernel link exports are `mia_mem_read`, `mia_mem_write`, `mia_mem_copy`, and
 `mia_mem_fill`, with little-endian `km_src`, `km_dst`, `km_count`, and `km_value`

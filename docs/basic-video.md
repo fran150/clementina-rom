@@ -151,31 +151,18 @@ col/40` for mode 5, `(row/25)*2` for mode 2, always `0` for mode 0), add
 
 ### Fitting it: growing the ROM's code budget
 
-The ROM's combined kernel+BASIC code image has a fixed ceiling before a
-background-PLAY control block and BASIC's own workspace (`RAMSTART2`) - **not**
-a 6502/65C02 hardware limit (the CPU addresses a full 64K; the linker's own
-`MAIN` region allows up to 31 KiB) but a deliberately-chosen, and deliberately
-movable, software convention: see `Makefile`'s `MAX_KERNEL_BYTES`,
-`defines_clementina.s`'s `RAMSTART2`, and `clementina_extra.s`'s `BGP_BASE` -
-all three carry a comment inviting exactly this. The first Phase 2 pass landed
-`OAMLOAD`/`SPRITE` at the old ceiling (`$4400`/16384 bytes) with zero bytes to
-spare, cutting five other commands to fit. Rather than keep squeezing, the
-boundary was raised by 2 KiB (`$4400`→`$4C00`, `MAX_KERNEL_BYTES`
-16384→18432), trading a small, deliberately generous slice of BASIC's ~29 KiB
-free workspace for headroom, and every cut command was restored plus `BGCHAR`
-(never previously implemented) and the five single-field sprite setters. Two
-other repos mirror this boundary in test code and needed the same bump:
-`clementina-6502` `pkg/computers/clementina/background_play_test.go`
-(`addrBGPFlags`) and `guessing_game_test.go` (the CPU-runaway sanity check's
-upper bound) - grep both repos for the old hex value before moving it again.
-
-Bump `MAX_KERNEL_BYTES`/`RAMSTART2`/`BGP_BASE` together, in lockstep, if more
-commands land later.
-
-> **Since raised again** (2026-09, `$4C00`→`$5C00`/`18432`→`22528`) for the
-> SD/FS file I/O command set - see [docs/basic-file.md](basic-file.md) and
-> [memory-map.md §7.5/§8](memory-map.md). The `$4400`/`$4C00`/`18432`/`16384`
-> figures above are that step's own history, not the current values.
+**History, not the current design** — early on, the combined kernel+BASIC code
+image had a fixed ceiling (`Makefile`'s `MAX_KERNEL_BYTES`) before a background-
+`PLAY` control block and BASIC's own workspace, and every new command had to be
+budgeted against it: it started at `$4400` (16384 bytes), was raised to `$4C00`
+(18432) to fit `OAMLOAD`/`SPRITE`/`BGCHAR`, then to `$5C00` (22528) for the
+SD/FS file I/O command set. `MAX_KERNEL_BYTES` no longer exists in the build at
+all: the 2026-09-14 bottom-anchor rework (`docs/memory-map.md` §8) removed the
+hand-maintained ceiling entirely, along with the background-`PLAY` control
+block it used to budget against (`PLAY` itself was later retired too - see
+`docs/basic-sound.md`). Today the image is anchored to a fixed **low** start
+(`$04B7`) and simply grows upward into free heap space as commands are added;
+there is nothing to bump when a new command lands.
 
 ## Register reference
 
