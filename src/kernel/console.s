@@ -331,6 +331,19 @@ scroll_up:
         bne @link_scroll
         lda #LINK_START
         sta LINE_LINK + (SCR_ROWS-1)
+
+        ; Keep EDIT_START_Y (the row edit_line snapshotted when this input line
+        ; began, see editor.s) pointing at the same screen row as everything else
+        ; just shifted: a line long enough to wrap while already on the bottom
+        ; row scrolls mid-entry, and a stale EDIT_START_Y would then land inside
+        ; the wrapped line's new [EDIT_RS, EDIT_RE] range, making harvest_line
+        ; start from that (wrong) row instead of the line's true first row and
+        ; silently drop everything typed before the scroll. Idle between inputs
+        ; this is harmless: edit_line overwrites EDIT_START_Y before it's read.
+        lda EDIT_START_Y
+        beq @start_pinned
+        dec EDIT_START_Y
+@start_pinned:
         rts
 
 dma_copy_indexes:
