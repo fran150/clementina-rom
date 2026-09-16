@@ -265,6 +265,17 @@ layout):
   above). Emulator-validated: `basic_video_phase2b_test.go` (updated) and
   `basic_video_phase2_test.go` (updated) in `clementina-6502`
   `pkg/computers/clementina`.
+- **`OAMLOAD`/`OAMSAVE` count-unit fix - IMPLEMENTED (2026-09-16).** The
+  rename above left `OAMLOAD`/`OAMSAVE`'s `count` meaning raw bytes (passed
+  straight into `VID_COUNT`) while `OAMREAD`'s `count` means sprites
+  (`VID_STRIDE`=5, multiplied internally by `vid_bulk_run`) - every other
+  `*LOAD`/`*SAVE`/`*READ` family has stride 1, where bytes and items
+  coincide, so only OAM's 5-byte stride exposed the mismatch. Not by
+  design: both docs and the `; as OAMREAD` comments already promised
+  matching units. Fixed by multiplying `count` by 5 (new `oam_count_x5`
+  helper, shared by `OAMLOAD`/`OAMSAVE`) before it reaches
+  `mia_sd_load_trigger`/`mia_sd_save_trigger`, so `OAMLOAD 0,4,"S.OAM"` now
+  loads 4 sprites (20 bytes), matching `OAMREAD 0,4`.
 
 ## Overlay regression tests
 

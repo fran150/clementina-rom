@@ -933,6 +933,29 @@ oam_seek_n:
         sta     VID_ADDR+2
         rts
 
+; oam_count_x5: X = count (of sprites, 0-255). Sets VID_COUNT = count*5
+; (16-bit byte length), via count*5 = (count<<2)+count - same trick as
+; oam_seek_n's index math. Used by OAMLOAD/OAMSAVE so their `count` means
+; sprites, matching OAMREAD: mia_sd_load_trigger/mia_sd_save_trigger take
+; VID_COUNT as a plain byte length, unlike vid_bulk_run's VID_STRIDE, which
+; multiplies internally.
+oam_count_x5:
+        stx     TEMP2
+        lda     #$00
+        sta     VID_COUNT+1
+        txa
+        asl     a
+        rol     VID_COUNT+1
+        asl     a
+        rol     VID_COUNT+1             ; A,VID_COUNT+1 = count*4 (16-bit)
+        clc
+        adc     TEMP2                   ; + count = count*5
+        sta     VID_COUNT
+        bcc     @nocarry
+        inc     VID_COUNT+1
+@nocarry:
+        rts
+
 ; vid_addr_add_small: A = a small (0-4) offset to add to VID_ADDR (24-bit).
 ; Used by the single-field sprite setters to nudge VID_ADDR from oam_seek_n's
 ; base (the tile byte) to whichever OAM field they touch.
@@ -1670,10 +1693,8 @@ BASIC_OAMLOAD:
         jsr     GETBYT                  ; X = n
         txa
         jsr     oam_seek_n
-        jsr     COMBYTE                 ; X = count
-        stx     VID_COUNT
-        lda     #0
-        sta     VID_COUNT+1
+        jsr     COMBYTE                 ; X = count (of sprites), 0-255
+        jsr     oam_count_x5            ; VID_COUNT = count*5 bytes
         jsr     mia_parse_path_arg
         jmp     mia_sd_load_trigger
 
@@ -1682,10 +1703,8 @@ BASIC_OAMSAVE:
         jsr     GETBYT                  ; X = n
         txa
         jsr     oam_seek_n
-        jsr     COMBYTE                 ; X = count
-        stx     VID_COUNT
-        lda     #0
-        sta     VID_COUNT+1
+        jsr     COMBYTE                 ; X = count (of sprites), 0-255
+        jsr     oam_count_x5            ; VID_COUNT = count*5 bytes
         jsr     mia_parse_path_arg
         jmp     mia_sd_save_trigger
 
