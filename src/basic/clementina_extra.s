@@ -128,7 +128,7 @@ MIA_OAM_BASE_H      = $01
 CMD_AUDIO_ENABLE  = $60
 CMD_AUDIO_STOP    = $61
 CMD_AUDIO_RESET   = $62
-IIDX_AUDIO_ALL    = $D0    ; MIA index spanning the whole audio block
+IIDX_AUDIO_ALL    = $E6    ; MIA index spanning the whole audio block
 
 AUD_HDR_VOLUME    = $01    ; block offset: master volume (0-15)
 AUDV_FREQ_L       = $00    ; voice-record field offsets
@@ -151,7 +151,7 @@ CMD_AUDIO_SEQ_STOP      = $65
 CMD_AUDIO_VOICE_TAKE    = $66
 CMD_AUDIO_VOICE_RELEASE = $67
 
-IIDX_AUDIO_SEQ_VOICE0 = $D6    ; +voice: parked at that voice's SEQ_NOTE_INDEX_L
+IIDX_AUDIO_SEQ_VOICE0 = $EC    ; +voice: parked at that voice's SEQ_NOTE_INDEX_L
 
 MIA_SEQ_OP_END       = $00
 MIA_SEQ_OP_NOTE      = $01     ; freq_l, freq_h, dur_l, dur_m, dur_h
@@ -2263,7 +2263,7 @@ snd_wr1:
         plp
         rts
 
-; snd_seek: bind MIA index window B ($D0, whole audio block) to $12000 + A
+; snd_seek: bind MIA index window B ($E6, whole audio block) to $12000 + A
 ; (A = 0..$4F) and leave it ready for IDXB_PORT reads/writes. Must be called
 ; inside an sei fence (it walks CFG_SELECT/CFG_PORT). Clobbers A.
 snd_seek:
