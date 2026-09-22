@@ -142,14 +142,22 @@ AUD_GATE          = $01    ; CONTROL bit 0
 AUD_GATE_RETRIG   = $03    ; CONTROL: GATE | RESET_PHASE
 
 ; Background sequencer (TRACK/BAND/VTAKE/VGIVE/CUE), see clementina-mia's
-; docs/audio-sequencer.md. Each voice's track buffer is 1024 bytes at
-; $13000 + voice*$400, starting with a 4-byte header (LOOP offset, 2
-; reserved) then its event stream.
+; docs/audio-sequencer.md. A voice's track is just bytes in MIA RAM, decoded
+; live from wherever its track_base points until an END/JUMP-off-into-the-
+; past-of-nowhere or a run off the top of RAM stops it - no header, no
+; declared length. TRACK defaults to the per-voice spacing ($14000 +
+; voice*$1000) unless given an explicit base.
 CMD_AUDIO_SEQ_LOAD      = $63  ; param0 = voice mask
 CMD_AUDIO_SEQ_START     = $64
 CMD_AUDIO_SEQ_STOP      = $65
 CMD_AUDIO_VOICE_TAKE    = $66
 CMD_AUDIO_VOICE_RELEASE = $67
+; AUDIO_SEQ_SET_BASE<voice>: one command id per voice; param0-2 = 24-bit
+; little-endian MIA RAM address, this voice's new track_base.
+CMD_AUDIO_SEQ_SET_BASE0 = $68
+CMD_AUDIO_SEQ_SET_BASE1 = $69
+CMD_AUDIO_SEQ_SET_BASE2 = $6A
+CMD_AUDIO_SEQ_SET_BASE3 = $6B
 
 IIDX_AUDIO_SEQ_VOICE0 = $EC    ; +voice: parked at that voice's SEQ_NOTE_INDEX_L
 
@@ -157,6 +165,10 @@ MIA_SEQ_OP_END       = $00
 MIA_SEQ_OP_NOTE      = $01     ; freq_l, freq_h, dur_l, dur_m, dur_h
 MIA_SEQ_OP_REST      = $02     ; dur_l, dur_m, dur_h
 MIA_SEQ_OP_SET_WAVE  = $03     ; waveform
+; JUMP: offset_l, offset_m, offset_h - signed 24-bit, relative to the byte
+; right after this 4-byte record. "Loop the whole track" is just a JUMP back
+; to the top; there is no separate loop opcode or header field.
+MIA_SEQ_OP_JUMP      = $08
 
 AUD_SEQ_STATUS_RUNNING = $01   ; SEQ_STATUS bit 0 (PLAYING)
 AUD_SEQ_STATUS_TAKEN   = $02   ; SEQ_STATUS bit 1
@@ -2288,6 +2300,10 @@ snd_seek:
 seq_voice_mask:
         .byte   $01, $02, $04, $08       ; 1 << voice, voice 0-3
 
+seq_set_base_cmd:
+        .byte   CMD_AUDIO_SEQ_SET_BASE0, CMD_AUDIO_SEQ_SET_BASE1
+        .byte   CMD_AUDIO_SEQ_SET_BASE2, CMD_AUDIO_SEQ_SET_BASE3
+
 ; seq_cmd: A = command id, X = voice mask -> issues the command with
 ; PARAM1=mask, PARAM2=PARAM3=0. Fenced like snd_cmd (A survives untouched -
 ; stx/stz never clobber it, so it does not need to be stacked across them).
@@ -2297,6 +2313,25 @@ seq_cmd:
         stx     CMD_PARAM1
         stz     CMD_PARAM2
         stz     CMD_PARAM3
+        sta     CMD_TRIGGER
+        plp
+        rts
+
+; seq_cmd_addr: A = command id, TRK_BASE = 24-bit value -> issues the command
+; with PARAM1/2/3 = TRK_BASE (little-endian). Fenced like seq_cmd. Command id
+; is stashed in X (not the stack) since A is needed as scratch for the
+; TRK_BASE loads.
+seq_cmd_addr:
+        tax
+        php
+        sei
+        lda     TRK_BASE
+        sta     CMD_PARAM1
+        lda     TRK_BASE+1
+        sta     CMD_PARAM2
+        lda     TRK_BASE+2
+        sta     CMD_PARAM3
+        txa
         sta     CMD_TRIGGER
         plp
         rts
@@ -2428,13 +2463,16 @@ PLAY_TMP        = STYLE_SIDE_BUF + 10   ; general 16-bit scratch [10..11]
 ; time-shared buffer, offsets 12-29 (PLAY_* above use 0-11; never concurrent -
 ; see the header comment on PLAY_LEN).
 TRK_VOICE       = STYLE_SIDE_BUF + 12   ; voice being defined, 0-3
-TRK_BASE        = STYLE_SIDE_BUF + 13   ; this voice's track buffer base, 24-bit [13..15]
+TRK_BASE        = STYLE_SIDE_BUF + 13   ; this voice's track base, 24-bit [13..15]
 TRK_ADDR        = STYLE_SIDE_BUF + 16   ; current write cursor, 24-bit [16..18]
 TRK_COUNT       = STYLE_SIDE_BUF + 19   ; event bytes emitted so far, 16-bit [19..20]
-TRK_LOOP        = STYLE_SIDE_BUF + 21   ; LOOP value to write at the end, 16-bit [21..22]
-TRK_SAMPLES     = STYLE_SIDE_BUF + 23   ; current event's duration in samples, 24-bit [23..25]
-MPCAND          = STYLE_SIDE_BUF + 26   ; trk_dur_to_samples multiply scratch, 24-bit [26..28]
-SEQ_MASK        = STYLE_SIDE_BUF + 29   ; BAND/VTAKE/VGIVE voice-mask scratch
+TRK_HAS_LOOP    = STYLE_SIDE_BUF + 21   ; nonzero if | was seen
+TRK_LOOP_ABS    = STYLE_SIDE_BUF + 22   ; absolute address | was seen at, 24-bit [22..24]
+TRK_SAMPLES     = STYLE_SIDE_BUF + 25   ; current event's duration in samples, 24-bit [25..27]
+MPCAND          = STYLE_SIDE_BUF + 28   ; trk_dur_to_samples multiply scratch, 24-bit [28..30]
+TRK_JTMP        = STYLE_SIDE_BUF + 31   ; JUMP delta scratch, 24-bit [31..33]
+TRK_STRPTR      = STYLE_SIDE_BUF + 34   ; saved INDEX (string char pointer), 16-bit [34..35]
+SEQ_MASK        = STYLE_SIDE_BUF + 36   ; BAND/VTAKE/VGIVE voice-mask scratch
 
 ; play_len_to_dur: X = valid length code -> PLAY_DUR (16-bit) ticks, from
 ; PLAY_TEMPO (ticks per quarter). k=1 -> T<<2, k=2 -> T<<1, k=4 -> T,
@@ -2583,9 +2621,15 @@ play_oct12:                             ; octave 0..7 -> base semitone
         .byte   0, 12, 24, 36, 48, 60, 72, 84
 
 ; ============================================================================
-; TRACK v, s$ - assign voice v's (0-3) independent background-sequencer part.
-; See clementina-mia's docs/audio-sequencer.md for the bytecode this compiles
-; to and docs/basic-sound.md for the BASIC-level picture.
+; TRACK v, s$ [, addr%] - assign voice v's (0-3) independent background-
+; sequencer part. See clementina-mia's docs/audio-sequencer.md for the
+; bytecode this compiles to and docs/basic-sound.md for the BASIC-level
+; picture.
+;
+; addr% is optional: omitted, the track lands at the default per-voice
+; address ($14000 + voice*$1000); given, it's issued as that voice's
+; track_base via AUDIO_SEQ_SET_BASE<voice> instead, so a track can live
+; anywhere in MIA RAM - there is no per-track size limit to outgrow.
 ;
 ; The mini-language is PLAY's, minus V n (each TRACK call is already scoped to
 ; one voice, so there is no voice to switch to) and plus | for the loop point:
@@ -2596,6 +2640,8 @@ play_oct12:                             ; octave 0..7 -> base semitone
 ;   |     mark the loop point: everything from here to the end of the string
 ;         repeats forever once BAND starts this voice; everything before it
 ;         plays once. No | means the whole track plays once and stops.
+;         Compiles to a single JUMP back to the marked point, emitted after
+;         the last event instead of an END.
 ;
 ; This reuses PLAY's pure computation (play_num/play_len_ok/play_len_to_dur/
 ; play_maybe_dot/note_freq/the note/octave tables) unchanged, but never calls
@@ -2621,33 +2667,58 @@ BASIC_TRACK:
         jsr     FRMEVL                  ; evaluate the string expression
         jsr     FRESTR                  ; A = length, INDEX -> string bytes
         sta     PLAY_LEN
-        ; TRK_BASE = $013000 + voice * $000400
+        ; save INDEX (the string's char pointer) before evaluating an
+        ; optional trailing ",addr%" - FRMNUM/mia_getadr24 use INDEX as
+        ; their own scratch and would otherwise clobber it.
+        lda     INDEX
+        sta     TRK_STRPTR
+        lda     INDEX+1
+        sta     TRK_STRPTR+1
+        jsr     CHRGOT                  ; peek: is a trailing ",addr" present?
+        cmp     #','
+        bne     @defaultbase
+        jsr     CHRGET
+        jsr     FRMNUM
+        jsr     mia_getadr24            ; VID_ADDR = 24-bit address
+        lda     VID_ADDR
+        sta     TRK_BASE
+        lda     VID_ADDR+1
+        sta     TRK_BASE+1
+        lda     VID_ADDR+2
+        sta     TRK_BASE+2
+        jmp     @gotbase
+@defaultbase:
+        ; TRK_BASE = $014000 + voice * $001000 (see clementina-mia's
+        ; MIA_SEQ_DEFAULT_BASE_OFFSET: $13000 overlapped live SD/FS state)
         lda     #$00
         sta     TRK_BASE
         lda     #$01
         sta     TRK_BASE+2
         lda     TRK_VOICE
         asl     a
-        asl     a                      ; voice * 4
+        asl     a
+        asl     a
+        asl     a                      ; voice * 16
         clc
-        adc     #$30
+        adc     #$40
         sta     TRK_BASE+1
-        ; TRK_ADDR = TRK_BASE + 4 (event stream start)
+@gotbase:
+        ; restore INDEX -> string bytes (PLAY_LEN itself lives in our own
+        ; scratch and was never at risk)
+        lda     TRK_STRPTR
+        sta     INDEX
+        lda     TRK_STRPTR+1
+        sta     INDEX+1
+        ; TRK_ADDR = TRK_BASE (event stream starts immediately - no header)
         lda     TRK_BASE
-        clc
-        adc     #$04
         sta     TRK_ADDR
         lda     TRK_BASE+1
-        adc     #$00
         sta     TRK_ADDR+1
         lda     TRK_BASE+2
-        adc     #$00
         sta     TRK_ADDR+2
         stz     TRK_COUNT
         stz     TRK_COUNT+1
-        lda     #$FF
-        sta     TRK_LOOP                ; default: no loop
-        sta     TRK_LOOP+1
+        stz     TRK_HAS_LOOP            ; default: no loop
         lda     #PLAY_OCT_DEF
         sta     PLAY_OCT
         lda     #PLAY_TEMPO_DEF
@@ -2692,10 +2763,14 @@ BASIC_TRACK:
         jsr     trk_do_rest
         jmp     @loop
 @markloop:
-        lda     TRK_COUNT
-        sta     TRK_LOOP
-        lda     TRK_COUNT+1
-        sta     TRK_LOOP+1
+        lda     #$01
+        sta     TRK_HAS_LOOP
+        lda     TRK_ADDR
+        sta     TRK_LOOP_ABS
+        lda     TRK_ADDR+1
+        sta     TRK_LOOP_ABS+1
+        lda     TRK_ADDR+2
+        sta     TRK_LOOP_ABS+2
         jmp     @loop
 @octdn:
         lda     PLAY_OCT
@@ -2738,25 +2813,48 @@ BASIC_TRACK:
         stx     PLAY_LDEF
         jmp     @loop
 @finish:
+        lda     TRK_HAS_LOOP
+        beq     @noloop
+        ; emit JUMP back to TRK_LOOP_ABS: delta = TRK_LOOP_ABS - (TRK_ADDR+4),
+        ; the address right after this 4-byte JUMP record.
+        lda     TRK_ADDR
+        clc
+        adc     #4
+        sta     TRK_JTMP
+        lda     TRK_ADDR+1
+        adc     #0
+        sta     TRK_JTMP+1
+        lda     TRK_ADDR+2
+        adc     #0
+        sta     TRK_JTMP+2
+        sec
+        lda     TRK_LOOP_ABS
+        sbc     TRK_JTMP
+        sta     TRK_JTMP
+        lda     TRK_LOOP_ABS+1
+        sbc     TRK_JTMP+1
+        sta     TRK_JTMP+1
+        lda     TRK_LOOP_ABS+2
+        sbc     TRK_JTMP+2
+        sta     TRK_JTMP+2
+        lda     #MIA_SEQ_OP_JUMP
+        jsr     trk_emit
+        lda     TRK_JTMP
+        jsr     trk_emit
+        lda     TRK_JTMP+1
+        jsr     trk_emit
+        lda     TRK_JTMP+2
+        jsr     trk_emit
+        jmp     @setbase
+@noloop:
         lda     #MIA_SEQ_OP_END
         jsr     trk_emit
-        ; write the LOOP header at TRK_BASE+0/+1
-        lda     TRK_BASE
-        sta     km_dst
-        lda     TRK_BASE+1
-        sta     km_dst+1
-        lda     TRK_BASE+2
-        sta     km_dst+2
-        lda     TRK_LOOP
-        sta     km_value
-        jsr     mia_mem_write
-        inc     km_dst
-        bne     :+
-        inc     km_dst+1
-:       lda     TRK_LOOP+1
-        sta     km_value
-        jsr     mia_mem_write
-        ; issue AUDIO_SEQ_LOAD so cursor/note-index/loop are (re)computed
+@setbase:
+        ; issue AUDIO_SEQ_SET_BASE<voice> with TRK_BASE, then AUDIO_SEQ_LOAD
+        ; so cursor/note-index are (re)computed from it
+        ldx     TRK_VOICE
+        lda     seq_set_base_cmd,x
+        jsr     seq_cmd_addr
         ldx     TRK_VOICE
         lda     seq_voice_mask,x
         tax

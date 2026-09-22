@@ -152,7 +152,7 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 | `$03D0` | `EDIT_MODE` | 1 | Phase 5 glyph mode (`0..2`), used by the editor to map typed `$20-$7E` to alternate tile ranges. |
 | `$03D1` | `EDIT_PAINT` | 1 | Nonzero while Paint mode is active. |
 | `$03D2` | `EDIT_CMD_PENDING` | 1 | Nonzero between `ESC` and its command key. |
-| `$03D3–$03FC` | `STYLE_SIDE_BUF` | 42 | BASIC tokenizer scratch for Phase 6 styled program-literal sidecars. Captures compact literal attribute records before appending them to the stored program line. `$03D3–$03D4` are also reused as a transient LIST line-pointer save, and `$03D3–$03F0` (30 bytes) as `TRACK`'s MML-compile-time state and `BAND`/`VTAKE`/`VGIVE`'s voice-mask scratch (tokenizer and `TRACK`/`BAND`/`VTAKE`/`VGIVE` never run at the same moment). |
+| `$03D3–$03FC` | `STYLE_SIDE_BUF` | 42 | BASIC tokenizer scratch for Phase 6 styled program-literal sidecars. Captures compact literal attribute records before appending them to the stored program line. `$03D3–$03D4` are also reused as a transient LIST line-pointer save, and `$03D3–$03F7` (37 bytes) as `TRACK`'s MML-compile-time state (including its optional explicit-address parse and JUMP-delta scratch) and `BAND`/`VTAKE`/`VGIVE`'s voice-mask scratch (tokenizer and `TRACK`/`BAND`/`VTAKE`/`VGIVE` never run at the same moment). |
 | `$03FD` | `BASIC_DEFAULT_ATTR` | 1 | BASIC default output attribute set by `COLOR`, `FLIPX`, `FLIPY`, and `ALT`. |
 | `$03FE` | `BASIC_STYLE_MASK` | 1 | BASIC style override mask set by `STYLE n`, stored in overlay-attribute bit form (`$0F`, `$10`, `$20`, `$80`). |
 | `$03FF` | `STYLE_BASE_LEN` | 1 | BASIC tokenizer scratch: tokenized line length before any style sidecar is appended. |

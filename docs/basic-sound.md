@@ -35,7 +35,7 @@ This page is the BASIC programmer's reference.
 | `ADSR v,a,d,s,r` | each 0–15 | Envelope. `a` attack rate, `d` decay rate, `s` sustain **level**, `r` release rate. Lower rate = faster. `s=0` silent, `s=15` full. |
 | `PULSE v,pw` | `pw` 0–255 | Pulse duty. `128` ≈ square. Affects the pulse waveform only. |
 | `PAN v,p` | `p` −64..63 | Stereo position. `-64` hard left, `0` centre, `63` hard right. |
-| `TRACK v,s$` | music string | Compile `s$` into voice `v`'s independent background-sequencer part. See **Background sequencer** below. |
+| `TRACK v,s$[,addr%]` | music string, optional MIA RAM address | Compile `s$` into voice `v`'s independent background-sequencer part. `addr%` places it anywhere in MIA RAM instead of the default per-voice slot; a track has no length limit to outgrow. See **Background sequencer** below. |
 | `BAND n` | `n` 0 or 1 | Master switch: `1` starts every voice with a loaded track, `0` stops all four. |
 | `BAND v,n` | `v` 0–3, `n` 0 or 1 | Per-voice on/off, same `n` meaning. |
 | `VTAKE v` | `v` 0–3 | Freeze voice `v`'s track (without silencing it) so you can drive it directly. |
@@ -154,10 +154,12 @@ a moment:
 
 ### Timing a change with `CUE`
 
-`CUE(v)` reports which note or rest voice `v` is currently on, within the
-current pass of its loop (1-based; it resets to the loop's own position, not
-1, each time a looping track wraps). Poll it to bring a new part in exactly
-on a beat, rather than as soon as you happen to ask:
+`CUE(v)` reports how many notes and rests voice `v` has played since its
+track was last loaded (1-based; `0` before it starts). It keeps counting
+across a `|` loop rather than resetting each pass — the loop point compiles
+to a `JUMP`, which (like any jump) doesn't reset the count, so `CUE` is really
+a running total, not "position within this pass." That's exactly what a
+one-time wait for a specific transition wants:
 
 ```basic
 10 SNDON : WAVE 0,1 : ADSR 0,0,6,10,6 : TRACK 0,"T80 L4 O4 C D E F | G A B > C"
@@ -166,6 +168,12 @@ on a beat, rather than as soon as you happen to ask:
 40 WAVE 1,1 : ADSR 1,0,6,10,6 : TRACK 1,"T80 L4 O3 C G"
 50 BAND 1,1
 ```
+
+This waits correctly because `CUE(0)` only ever equals `4` once — the moment
+the 5th note (the loop body's first, `G`) starts, `CUE` becomes `5` and never
+returns to `4`. To check *repeatedly* for "the start of each pass" instead
+(not just the first), compute it yourself from the body's length, e.g.
+`(CUE(0)-4) MOD 4 = 1` for a 4-note body starting at index 5.
 
 Loading a new `TRACK` for a voice that's currently muted (`BAND v,0`) always
 starts that voice at the top the next time it's turned back on — so watching
