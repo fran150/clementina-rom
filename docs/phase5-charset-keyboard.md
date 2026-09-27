@@ -47,7 +47,7 @@ are independent planes (this is why "restyle without retyping" is natural).
 ### 2.2 Attribute byte layout
 
 From the renderer
-([clementina-video-client `internal/render/renderer.go:49-52`](../../go/clementina-video-client/internal/render/renderer.go#L49-L52),
+([clementina-video-client `internal/render/renderer.go:49-52`](../../clementina-video-client/internal/render/renderer.go#L49-L52),
 applied at `renderer.go:240-269`):
 
 | bits 0–3 | bit 4 | bit 5 | bit 6 | bit 7 |
@@ -69,7 +69,7 @@ applied at `renderer.go:240-269`):
 ### 2.3 Charset = 256 glyphs in two banks
 
 A charset image split-loads into CHR banks (256 glyphs / 2048-byte plane each,
-[`pkg/components/mia/video.go:754-766`](../../go/clementina-6502/pkg/components/mia/video.go#L754-L766)).
+[`pkg/components/mia/video.go:754-766`](../../clementina-6502/pkg/components/mia/video.go#L754-L766)).
 Clementina uses **256 distinct glyphs**, laid out as:
 
 - **bank 0 plane 0** — the 256 glyphs, normal.
@@ -87,12 +87,12 @@ reversed cell shows; if a bank-1 slot is blank, reversing that glyph shows blank
 `assets/computer/mia/charsets/clascii.bin`, a **flat dump of the whole CHR region**
 (8 banks × 6144 B = 49152 B), exactly as `tools/tile-editor.html` exports "CHR —
 all 8 banks". The emulator's `videoLoadDefaultFont`
-([`pkg/components/mia/video.go`](../../go/clementina-6502/pkg/components/mia/video.go))
+([`pkg/components/mia/video.go`](../../clementina-6502/pkg/components/mia/video.go))
 now detects this: a file whose length is a nonzero multiple of a full 6144-B bank
 is copied **flat** into CHR memory (every plane of every bank); the older
 plane-0-blocks layout (e.g. `openroms.bin`, 4096 B) still split-loads as before.
 The Clementina CLI now defaults to `--charset clascii`
-([`cmd/clementina.go`](../../go/clementina-6502/cmd/clementina.go)); the cursor
+([`cmd/clementina.go`](../../clementina-6502/cmd/clementina.go)); the cursor
 indicator art at `$F8–$FF` (§4.6) assumes clascii. Note the editor exports
 `clascii.chr-all.bin`; the asset must be named `clascii.bin` for `--charset clascii`
 to resolve.
@@ -171,7 +171,7 @@ already drain this FIFO.
 
 Non-printable editing keys are decoded **in the MIA** (not the client), so every
 source produces the same bytes
-([`pkg/components/mia/input.go:646-681`](../../go/clementina-6502/pkg/components/mia/input.go#L646-L681)):
+([`pkg/components/mia/input.go:646-681`](../../clementina-6502/pkg/components/mia/input.go#L646-L681)):
 
 | key | byte | key | byte |
 | --- | --- | --- | --- |
@@ -193,7 +193,7 @@ the FIFO as text (so it must *not* decode here, or it would double-enqueue).
 | **Console** | raw bytes (serial/dev) | injected straight into FIFO, text-only, no decode (`input.go:831-840`) | **no** |
 
 The WiFi client filters its *text* channel to printable `$20–$7E`
-([`forwarder.go:340-344`](../../go/clementina-video-client/internal/input/forwarder.go#L340-L344));
+([`forwarder.go:340-344`](../../clementina-video-client/internal/input/forwarder.go#L340-L344));
 non-ASCII/composed keys (e.g. Mac Option+A → `å`) are dropped and ride the HID path
 instead. This is deliberate: the host gives *Unicode*, only ASCII maps cleanly, and
 the **high glyph codes (`$80–$FF`) are synthesized by the kernel** (§4.2), not the

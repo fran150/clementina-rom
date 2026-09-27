@@ -48,7 +48,7 @@ to a fixed **low** start, `$04B7` (right after working RAM), and grows
 upward — **KERNEL → WOZMON → BASIC**, in that order, so the jump table (§6)
 always starts exactly at `$04B7` no matter how large the rest of the image
 grows. The heap fills everything above the image, up through `$BFFF`; since
-the image (kernel+WozMon+BASIC, ~23 KiB today) fits entirely below `$8000`
+the image (kernel+WozMon+BASIC, ~24 KiB today) fits entirely below `$8000`
 but the heap above it does not, BASIC's logical workspace continues into
 Extended RAM bank 0 at `$8000-$BFFF` for its upper part — bank 0 must stay
 selected while BASIC runs (§9). See §8 and §13 for why and how. The
@@ -206,7 +206,7 @@ freely.
 
 Internal routines (`KERNCODE`/`RODATA`/`WOZCODE` segments). These addresses
 are **not** ABI; reach them only through the jump table. The kernel+WozMon
-portion of the image is ~3.9 KiB (`$04B7`-`$1446` today); see §8 for the
+portion of the image is ~4.4 KiB (`$04B7`-`$1620` today); see §8 for the
 combined kernel+WozMon+BASIC image size and how it's anchored. Notable
 internal routines:
 
@@ -236,7 +236,11 @@ internal routines:
   and Timer 1 free-runs as the kernel cursor blink tick.
 - `irq_handler` / `nmi_handler` — `irq_handler` read-clears MIA `IRQ_STATUS_L`,
   dispatches VIA Timer 1 ticks, and toggles the cursor only while `CHRIN` is
-  polling for input.
+  polling for input. The toggle is bracketed by `MIA_CTX` push and pop (§11),
+  so the code it interrupts finds window A and `CFG_SELECT` as it left them.
+- `mia_mem_*` (`memory.s`) — raw MIA RAM read, write, copy, fill, and the
+  rectangle copy and fill behind BASIC's `MCOPY`/`MFILL`; see
+  `docs/basic-memory.md`.
 
 ---
 
@@ -279,7 +283,7 @@ loader that makes this possible with zero wasted address space, in a single
 *end*, which needs the start computed backward from the total size first).
 
 Concretely: `KERNEL` (`clementina.cfg`) is a generously-sized MEMORY region
-(`$04B7`, size `$1000`) holding kernel+WozMon; `BASICMEM` starts immediately
+(`$04B7`, size `$1200`) holding kernel+WozMon; `BASICMEM` starts immediately
 after it ends (`__KERNEL_LAST__`, ld65-defined) and holds BASIC's own
 core+tables+extensions, growing up to `$C000` (immediately below I/O).
 `TXTTAB` (bottom of the heap) is set directly from `__BASICMEM_LAST__`, a
@@ -291,11 +295,11 @@ since that probe writes test patterns byte-by-byte and would corrupt the
 live, running image if it ever reached it (the image now sits *below* the
 heap, not above it, so there's nothing to discover at runtime either way).
 
-With the current ~23.4 KiB image (kernel+WozMon+BASIC, `$04B7`-`$62F4`
-today), this gives BASIC **23,819 bytes free** (`$62F5` to `$BFFF`,
-confirmed against the boot banner's own "BYTES FREE" line) - an image that
+With the current ~24.0 KiB image (kernel+WozMon+BASIC, `$04B7`-`$64BE`
+today), this gives BASIC **23,361 bytes free** (`$64BF` to `$BFFF`) - an
+image that
 needs no manual boundary maintenance as commands are added: there is no
-`MAX_KERNEL_BYTES`-style hand-maintained ceiling. `KERNEL`'s own `$1000`
+`MAX_KERNEL_BYTES`-style hand-maintained ceiling. `KERNEL`'s own `$1200`
 region size in `clementina.cfg` is a soft ceiling only kernel+WozMon growth
 can hit (`ld65` fails loudly if it ever does) - ordinary BASIC-side growth
 (new statements, bigger tables) only ever eats into free heap bytes, never a
@@ -310,13 +314,13 @@ that repo for the current hex value before moving `KERN_BASE` again.
 > bug (present on the stock baseline, independent of the extension tokens) makes
 > `INPUT` misread its buffer and re-prompt `??` when the program text begins in
 > that ~200-byte window. `TXTTAB` (`__BASICMEM_LAST__`) currently sits far above
-> it (`$62F5` today) and moves only as the image itself grows/shrinks, but the
+> it (`$64BF` today) and moves only as the image itself grows/shrinks, but the
 > root cause is still not diagnosed - re-check this if the image's size changes
 > enough to approach that window.
 
 Bank 0 must remain selected while BASIC is active - the image itself
-(kernel+WozMon+BASIC, ~23.4 KiB) fits entirely below `$8000` today, but the
-**heap** above it does not: `TXTTAB`..`MEMSIZ` spans from `$62F5` up through
+(kernel+WozMon+BASIC, ~24.0 KiB) fits entirely below `$8000` today, but the
+**heap** above it does not: `TXTTAB`..`MEMSIZ` spans from `$64BF` up through
 `$BFFF`, so its upper ~16 KiB (program text/variables/arrays/strings, once
 the heap grows that far) lives in Extended RAM bank 0. Changing PA0-PA4 away
 from bank 0 while BASIC is still running would therefore replace part of the
@@ -387,7 +391,8 @@ All 32 registers, mirrored in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc
 | `$FFF2` | `INPUT_STATUS` | Text availability, held-input summaries, active source. Bit 0 = `INPUT_STATUS_TEXT_READY`. |
 | `$FFF3` | `INPUT_CHAR` | Read-to-pop text FIFO. Returns `$00` when empty. PETSCII-compatible bytes. |
 | `$FFF4` | `INPUT_CHAR_COUNT` | Number of bytes queued in the text FIFO. |
-| `$FFF5–$FFF9` | reserved | Read as zero. |
+| `$FFF5` | `MIA_CTX` | Context stack for interrupt handlers: write `$01` to save the index-window, CFG and command-parameter state, `$02` to restore it. See clementina-mia's README, "Context stack". |
+| `$FFF6–$FFF9` | reserved | Read as zero. |
 | `$FFFA` | `NMI_VEC` (L) | 6502 NMI vector low. **MIA-backed** — the kernel writes its handler here. |
 | `$FFFB` | `NMI_VEC` (H) | 6502 NMI vector high. |
 | `$FFFC` | `RESET_VEC` (L) | 6502 RESET vector low. MIA sets this to the load base after loading the kernel. |

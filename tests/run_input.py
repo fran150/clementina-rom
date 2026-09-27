@@ -8,7 +8,7 @@ import tempfile
 
 repo = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('--emulator', type=Path, default=Path('/Users/fran150/development/go/clementina-6502'))
+parser.add_argument('--emulator', type=Path, default=repo.parent / 'clementina-6502')
 parser.add_argument('--run', default='TestBasic|TestProgramTextIntegrityDuringSeek32|TestEmulatedMiaFSFileInfo', help='Go test name filter')
 args = parser.parse_args()
 emulator = args.emulator.resolve()

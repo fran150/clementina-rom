@@ -59,14 +59,22 @@ func TestBasicTimingRanges(t *testing.T) {
 func TestBasicTimingBackgroundMusic(t *testing.T) {
 	c, step := bootClementinaToPrompt(t)
 	typeLine(c, step, "SNDON:WAVE 0,1:ADSR 0,0,4,10,4")
-	typeLine(c, step, `10 PLAY "T80 L4 C D E F",1`)
+	// PLAY is retired: background music is a TRACK on MIA's sequencer. The
+	// emulator only renders audio - and so only advances the sequencer - when
+	// a test drives it, so render samples explicitly (see track_band_test.go).
+	typeLine(c, step, `10 TRACK 0,"T80 L4 C D E F":BAND 0,1`)
 	typeLine(c, step, "20 DELAY 60000")
 	injectKeys(c, []byte("RUN")...)
 	injectKeys(c, keyCR)
 	editorTickN(c, step, 300_000)
-	lo, hi := peekAudio(c, voiceField(0, 0)), peekAudio(c, voiceField(0, 1))
+	audio := c.chips.mia.(audioAdvancer)
+	audio.DebugSetAudioActive(true)
+	audio.DebugAudioReadPCM(2000) // inside the first quarter note (T80: 80 ticks x 150 samples)
+	first, _, _, _ := audio.DebugAudioVoiceState(0)
 	editorTickN(c, step, 600_000)
-	if lo == peekAudio(c, voiceField(0, 0)) && hi == peekAudio(c, voiceField(0, 1)) {
+	audio.DebugAudioReadPCM(12000) // cumulative 14000: inside the second note
+	second, _, _, _ := audio.DebugAudioVoiceState(0)
+	if first == second {
 		t.Fatal("music stopped advancing during delay")
 	}
 	injectKeys(c, 3)

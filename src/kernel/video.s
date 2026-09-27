@@ -69,7 +69,8 @@ video_init:
 ; selector is enough - no refresh command needed. The two-register window A
 ; write is fenced with sei so a cursor-blink IRQ (cursor_show/hide rebind
 ; window A to the overlay index) can't land between the select and the data
-; write. Preserves X/Y; returns with A = selector.
+; write; the IRQ also restores window A through MIA_CTX, so the fence is a
+; second guard. Preserves X/Y; returns with A = selector.
 ; ----------------------------------------------------------------------------
 set_backdrop:
         php                     ; save the caller's interrupt-enable state

@@ -32,10 +32,11 @@ BASIC_SRC   := $(BASIC_DIR)/msbasic.s
 # WOZ monitor, linked into the image and reachable via KERN_WOZMON.
 MONITOR_SRC := $(MONITOR_DIR)/wozmon-clementina.s
 
-# Destinations for the kernel image. Override on the command line if your
-# checkouts live elsewhere, e.g.  make install MIA_DIR=... EMU_DIR=...
-MIA_DIR ?= /Users/fran150/development/pico/clementina-mia
-EMU_DIR ?= /Users/fran150/development/go/clementina-6502
+# Destinations for the kernel image: the sibling checkouts next to this one.
+# Override on the command line if yours live elsewhere, e.g.
+#   make install MIA_DIR=... EMU_DIR=...
+MIA_DIR ?= $(abspath $(CURDIR)/../clementina-mia)
+EMU_DIR ?= $(abspath $(CURDIR)/../clementina-6502)
 EMU_KERNEL := $(EMU_DIR)/assets/computer/mia/kernel.bin
 MIA_KERNEL := $(MIA_DIR)/kernel.bin
 

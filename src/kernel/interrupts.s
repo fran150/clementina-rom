@@ -85,7 +85,13 @@ irq_handler:
         bne @done
         lda #CURSOR_BLINK_TICKS
         sta CURSOR_BLINK_COUNT
+        ; The cursor moves window A and CFG_SELECT; save whatever the
+        ; interrupted code had there and put it back afterwards.
+        lda #MIA_CTX_PUSH
+        sta MIA_CTX
         jsr cursor_toggle
+        lda #MIA_CTX_POP
+        sta MIA_CTX
 
 @done:
         ply

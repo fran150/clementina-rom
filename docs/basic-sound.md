@@ -35,7 +35,7 @@ This page is the BASIC programmer's reference.
 | `ADSR v,a,d,s,r` | each 0–15 | Envelope. `a` attack rate, `d` decay rate, `s` sustain **level**, `r` release rate. Lower rate = faster. `s=0` silent, `s=15` full. |
 | `PULSE v,pw` | `pw` 0–255 | Pulse duty. `128` ≈ square. Affects the pulse waveform only. |
 | `PAN v,p` | `p` −64..63 | Stereo position. `-64` hard left, `0` centre, `63` hard right. |
-| `TRACK v,s$[,addr%]` | music string, optional MIA RAM address | Compile `s$` into voice `v`'s independent background-sequencer part. `addr%` places it anywhere in MIA RAM instead of the default per-voice slot; a track has no length limit to outgrow. See **Background sequencer** below. |
+| `TRACK v,s$[,addr%]` | music string, optional MIA RAM address | Compile `s$` into voice `v`'s independent background-sequencer part. `addr%` places it anywhere in MIA RAM instead of BASIC's default per-voice address, `$14000 + v × $1000`; a track has no length limit to outgrow. See **Background sequencer** below. |
 | `BAND n` | `n` 0 or 1 | Master switch: `1` starts every voice with a loaded track, `0` stops all four. |
 | `BAND v,n` | `v` 0–3, `n` 0 or 1 | Per-voice on/off, same `n` meaning. |
 | `VTAKE v` | `v` 0–3 | Freeze voice `v`'s track (without silencing it) so you can drive it directly. |

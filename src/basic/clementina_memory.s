@@ -1,7 +1,13 @@
 ; Full 256 KiB MIA RAM, distinct from CPU PEEK/POKE and external banked RAM.
 .setcpu "65C02"
 .import mia_mem_read, mia_mem_write, mia_mem_copy, mia_mem_fill
+.import mia_mem_rect, mia_mem_fill_rect
 .import km_src, km_dst, km_count, km_value
+.import km_rows, km_sstride, km_dstride
+
+; Nonzero while MCOPY/MFILL parse their rectangle form. Statements can't nest,
+; so nothing else touches it between parsing and the copy.
+mem_rect: .byte 0
 
 ; Convert the numeric FAC to a nonnegative 24-bit integer; fractions truncate.
 mem_integer24:
@@ -59,8 +65,29 @@ BASIC_MPOKE:
         sta km_dst
         jmp mia_mem_write
 
+; ",n" -> A:X = n, 0-65535.
+mem_word_arg:
+        jsr CHKCOM
+        jsr FRMNUM
+        jsr GETADR
+        lda LINNUM
+        ldx LINNUM+1
+        rts
+; ",rows" -> km_rows, and mark the statement as the rectangle form.
+mem_rect_rows:
+        jsr mem_word_arg
+        sta km_rows
+        stx km_rows+1
+        lda #1
+        sta mem_rect
+        rts
+
 ; Keep earlier arguments on the CPU stack during expression evaluation:
 ; nested MPEEK calls use the same kernel scratch and must not overwrite them.
+; km_count, km_rows and the strides are safe: MPEEK only writes km_src.
+;
+; MCOPY src, dst, len[, rows, srcstride, dststride]: with rows, copy rows of
+; len bytes, each row starting srcstride (dststride) bytes after the last.
 BASIC_MCOPY:
         jsr FRMNUM
         jsr mem_address
@@ -79,7 +106,18 @@ BASIC_MCOPY:
         sta km_count
         stx km_count+1
         sty km_count+2
-        ply
+        stz mem_rect
+        jsr CHRGOT
+        cmp #','
+        bne @pop
+        jsr mem_rect_rows
+        jsr mem_word_arg
+        sta km_sstride
+        stx km_sstride+1
+        jsr mem_word_arg
+        sta km_dstride
+        stx km_dstride+1
+@pop:   ply
         sty km_dst+2
         plx
         stx km_dst+1
@@ -91,10 +129,17 @@ BASIC_MCOPY:
         stx km_src+1
         pla
         sta km_src
+        lda mem_rect
+        bne @rect
         jsr mia_mem_copy
         jcc IQERR
         rts
+@rect:  jsr mia_mem_rect
+        jcc IQERR
+        rts
 
+; MFILL addr, len, value[, rows, stride]: with rows, fill rows of len bytes,
+; each row starting stride bytes after the last.
 BASIC_MFILL:
         jsr FRMNUM
         jsr mem_address
@@ -109,7 +154,15 @@ BASIC_MFILL:
         phy
         jsr COMBYTE
         stx km_value
-        ply
+        stz mem_rect
+        jsr CHRGOT
+        cmp #','
+        bne @pop
+        jsr mem_rect_rows
+        jsr mem_word_arg
+        sta km_dstride
+        stx km_dstride+1
+@pop:   ply
         sty km_count+2
         plx
         stx km_count+1
@@ -121,6 +174,11 @@ BASIC_MFILL:
         stx km_dst+1
         pla
         sta km_dst
+        lda mem_rect
+        bne @rect
         jsr mia_mem_fill
+        jcc IQERR
+        rts
+@rect:  jsr mia_mem_fill_rect
         jcc IQERR
         rts

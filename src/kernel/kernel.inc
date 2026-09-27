@@ -32,12 +32,18 @@ IRQ_STATUS_H       = $FFF1     ; passive read; sample before $FFF0
 INPUT_STATUS       = $FFF2     ; input status
 INPUT_CHAR         = $FFF3     ; read-to-pop text FIFO ($00 when empty)
 INPUT_CHAR_COUNT   = $FFF4     ; characters in input fifo queue
+MIA_CTX            = $FFF5     ; context stack: write MIA_CTX_PUSH / MIA_CTX_POP
 NMI_VEC            = $FFFA     ; MIA-backed 6502 NMI vector
 RESET_VEC          = $FFFC     ; MIA-backed 6502 RESET vector
 IRQ_VEC            = $FFFE     ; MIA-backed 6502 IRQ/BRK vector
 
 ; INPUT_STATUS bits
 INPUT_STATUS_TEXT_READY      = %00000001
+
+; MIA_CTX values. PUSH saves both window selections, CFG_SELECT, CMD_PARAM1-3
+; and the two descriptors bound to the windows; POP restores them.
+MIA_CTX_PUSH       = $01
+MIA_CTX_POP        = $02
 INPUT_STATUS_SOURCE_CONSOLE  = %00100000
 INPUT_STATUS_SOURCE_WIFI     = %01000000
 INPUT_STATUS_SOURCE_USB_HOST = %10000000
@@ -124,6 +130,7 @@ IXF_WRAP_IRQ       = %00010000 ; raise wrap IRQ
 CMD_IDX_RESET_A    = $00
 CMD_IDX_RESET_B    = $01
 CMD_COPY_INDEXES   = $10
+CMD_COPY_RECT      = $11
 CMD_VIDEO_FULL_REFRESH = $42
 CMD_VIDEO_SET_MODE = $43
 

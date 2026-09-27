@@ -38,7 +38,7 @@ repo, `docs/sd.md` and `docs/sd-programmer-guide.md`.
 | `CD "path"` | — | Change the current directory. |
 | `DIR` | — | List the current directory. |
 | `DIR "path"` | — | List `path` without changing the current directory. |
-| `MIALOAD "path", addr[, maxlen]` | `addr` 0–16777215 | Load a file straight into MIA RAM at a raw address, no CPU byte-touching. Omitted/zero `maxlen` reads until EOF or the end of MIA RAM. |
+| `MIALOAD "path", addr[, len[, offset[, rows, filestride, ramstride]]]` | `addr`, `len`, `ramstride` 0–16777215; `offset`, `filestride` 0–4294967295; `rows` 0–65535 | Load a file straight into MIA RAM at a raw address, no CPU byte-touching. Omitted/zero `len` reads until EOF or the end of MIA RAM. `offset` starts that far into the file. `rows`, `filestride` and `ramstride` load a rectangle: `rows` rows of `len` bytes, each `filestride` bytes further into the file and `ramstride` bytes further on in MIA RAM. See [Partial loads](#partial-loads). |
 | `MIASAVE "path", addr, len` | | Save `len` bytes of MIA RAM starting at `addr` to a file. |
 | `LOAD "path"` | — | Replace the current program with a saved one. |
 | `SAVE "path"` | — | Save the current program. |
@@ -198,6 +198,25 @@ calling a subroutine and getting control back.
 20 SYS 24576                     ' call it
 30 PRINT "back in BASIC"         ' SYS returned - this line still runs
 ```
+
+## Partial loads
+
+`MIALOAD` with an `offset` or a `rows` argument loads part of a file with MIA's
+`FS_LOAD_PART` command (SD protocol 7). The plain forms use `FS_LOAD_TO_MIA_RAM`
+as before, except that a `len` over 65535 now works too.
+
+```basic
+10 REM bytes 256-295 of the file, to MIA RAM 98304
+20 MIALOAD "LEVEL1.BG",98304,40,256
+30 REM the same 40 columns from each of 25 rows of a 1024-wide map, packed
+40 MIALOAD "LEVEL1.BG",98304,40,256,25,1024,40
+```
+
+- A `len` of 0 with an `offset` loads to the end of the file, or to the end of
+  MIA RAM.
+- A load that runs into the end of the file stops there without an error.
+- A rectangle whose last row would run past the top of MIA RAM fails with a file
+  error before anything is written. So does one with a `len` of 0.
 
 ## Video/audio asset family
 

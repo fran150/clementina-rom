@@ -179,7 +179,10 @@ func TestBasicMemoryFullFill(t *testing.T) {
 }
 
 func TestBasicMemoryRanges(t *testing.T) {
-	for _, cmd := range []string{"MPOKE 262144,7", "MPOKE -1,7", "MPOKE 200000,256", "PRINT MPEEK(262144)", "PRINT MPEEK(-1)", "MFILL 262143,2,7", "MCOPY 262143,200000,2", "MCOPY 200000,262143,2", "MFILL 200000,-1,7", "MFILL 0,262145,7"} {
+	for _, cmd := range []string{"MPOKE 262144,7", "MPOKE -1,7", "MPOKE 200000,256", "PRINT MPEEK(262144)", "PRINT MPEEK(-1)", "MFILL 262143,2,7", "MCOPY 262143,200000,2", "MCOPY 200000,262143,2", "MFILL 200000,-1,7", "MFILL 0,262145,7",
+		// Rectangles are checked whole: a later row past the end, a row over
+		// 65535 bytes or a stride over 65535 writes nothing at all.
+		"MCOPY 200000,262143,1,2,1,1", "MFILL 262143,1,7,2,1", "MCOPY 0,100000,65536,1,0,0", "MFILL 0,1,7,2,65536"} {
 		t.Run(cmd, func(t *testing.T) {
 			c, step := bootClementinaToPrompt(t)
 			vr := c.chips.mia.(videoReader)
@@ -197,4 +200,41 @@ func TestBasicMemoryRanges(t *testing.T) {
 			require_eq(t, 88, vr.DebugReadVideo(262143), "overflow wrote partial block")
 		})
 	}
+}
+
+// MFILL and MCOPY with rows and strides go through the kernel's COPY_RECT
+// service, at most 256 rows per command.
+func TestBasicMemoryRectangles(t *testing.T) {
+	c, step := bootClementinaToPrompt(t)
+	vr := c.chips.mia.(videoReader)
+	for _, line := range []string{
+		"10 MFILL 200000,4,7,3,10",
+		"20 MPOKE 201000,1", "22 MPOKE 201001,2", "24 MPOKE 201008,3",
+		"26 MPOKE 201009,4", "28 MPOKE 201016,5", "30 MPOKE 201017,6",
+		"40 MCOPY 201000,202000,2,3,8,2",
+		"50 MFILL 210000,1,5,300,2",
+		"60 MFILL 203000,4,9,0,10",
+		"70 POKE 512,42", "80 GOTO 80",
+	} {
+		typeLine(c, step, line)
+	}
+	typeLine(c, step, "RUN")
+	editorTickN(c, step, 1_000_000)
+	require_eq(t, 42, peek(c, 512), "rectangle program finished")
+	for _, row := range []uint32{0, 10, 20} {
+		for i := uint32(0); i < 4; i++ {
+			require_eq(t, 7, vr.DebugReadVideo(200000+row+i), fmt.Sprintf("fill row %d byte %d", row/10, i))
+		}
+		require_eq(t, 0, vr.DebugReadVideo(200000+row+4), fmt.Sprintf("gap after fill row %d", row/10))
+	}
+	require_eq(t, 0, vr.DebugReadVideo(200030), "no fourth fill row")
+	for i, want := range []int{1, 2, 3, 4, 5, 6} {
+		require_eq(t, want, vr.DebugReadVideo(uint32(202000+i)), fmt.Sprintf("copied block byte %d", i))
+	}
+	for _, r := range []uint32{0, 255, 256, 299} {
+		require_eq(t, 5, vr.DebugReadVideo(210000+2*r), fmt.Sprintf("row %d of 300", r))
+		require_eq(t, 0, vr.DebugReadVideo(210000+2*r+1), fmt.Sprintf("gap after row %d of 300", r))
+	}
+	require_eq(t, 0, vr.DebugReadVideo(210600), "no 301st row")
+	require_eq(t, 0, vr.DebugReadVideo(203000), "zero rows fill nothing")
 }

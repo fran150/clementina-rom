@@ -4,13 +4,13 @@ This repository is the 6502-side system software for Clementina.
 
 ## External Context
 
-MIA firmware:
+MIA firmware (a sibling checkout):
 
-- `/Users/fran150/development/pico/clementina-mia`
+- `../clementina-mia` (`/Users/fran150/development/clementina/clementina-mia`)
 
-Go emulator:
+Go emulator (a sibling checkout):
 
-- `/Users/fran150/development/go/clementina-6502`
+- `../clementina-6502` (`/Users/fran150/development/clementina/clementina-6502`)
 
 Use firmware definitions as the source of truth for MIA registers, commands,
 status bits, IRQ bits, fixed indexes, and MIA RAM layouts. Use the emulator to
