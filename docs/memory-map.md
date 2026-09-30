@@ -349,12 +349,16 @@ Eight 1 KiB device slots decoded from this 8 KiB region.
 
 | Range | Slot | Device |
 | --- | --- | --- |
-| `$C000–$C3FF` | 0 | **65C22 VIA**. Port A drives Extended RAM banking; Port B is free. Registers repeat every 16 bytes within the slot. Timer 1 is configured by the kernel as a free-running IRQ source for cursor blink. |
-| `$C400–$DFFF` | 1–7 | Free I/O slots. |
+| `$C000–$C3FF` | 0 | **65C22 VIA**. Port A drives Extended RAM banking; Port B, CA1/CA2 and CB1/CB2 are free and wired to the user port header. Registers repeat every 16 bytes within the slot. Timer 1 is configured by the kernel as a free-running IRQ source for cursor blink. |
+| `$C400–$DFFF` | 1–7 | Free I/O slots, one per `IOCS1`–`IOCS7` line on the expansion bus headers. A card claims a slot by jumpering one of those lines. |
 
-> Hardware note: the W65C22S IRQB pin is a totem-pole output, not an
-> open-drain output. Sharing `IRQB` with MIA needs external isolation or a MIA
-> idle state that releases the line, not a strong high output.
+> Hardware note: `IRQB` is a wired-AND line. MIA and the VIA each pull it low
+> through a Schottky diode against a 4.7 kΩ pull-up, so neither output can fight
+> the other. Expansion cards join the same way (their own Schottky diode or an
+> open-drain output). `NMIB` (4.7 kΩ) and `RDY` (1 kΩ) are also pulled up on the
+> board and exposed on the expansion headers, so cards can pull them low too.
+> The IRQ handler has to poll each possible source (VIA `IFR`, MIA, any cards)
+> to find out which one asserted the line.
 
 ---
 
