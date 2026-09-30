@@ -2653,9 +2653,9 @@ play_oct12:                             ; octave 0..7 -> base semitone
 ; live register; it only writes bytes into MIA RAM). trk_iq/trk_syn/
 ; trk_num_req/trk_len_ok are plain error jumps instead.
 ;
-; Tempo/length are resolved here, at encode time, into a sample count (see
-; trk_dur_to_samples) - MIA's sequencer only ever sees "hold for N samples",
-; never ticks, tempo, or note names. This also means a TRACK's tempo is fixed
+; Tempo/length are resolved here, at encode time, into a count of MIA
+; sequencer ticks (see trk_dur_to_samples) - MIA's sequencer only ever sees
+; "hold for N", never kernel ticks, tempo, or note names. This also means a TRACK's tempo is fixed
 ; at whatever PHI2 speed happened to be live when it was encoded is NOT a
 ; factor at all: unlike the retired background PLAY (timed off the live
 ; PHI2-relative KJIFFY tick), the encoding fixes 1 tick = 1/160 s outright, so
@@ -2993,9 +2993,10 @@ trk_do_rest:
         jmp     trk_emit                ; tail
 
 ; trk_dur_to_samples: PLAY_DUR (16-bit, in ticks) -> TRK_SAMPLES (24-bit, in
-; audio samples). A tick is fixed at exactly 1/160 s (matching PLAY's own
-; documented "a tick is ~1/160 s at 1 MHz PHI2" definition) and MIA's audio
-; engine runs at a fixed 24000 samples/s, so samples = ticks * 150 - by
+; MIA sequencer ticks). A tick is fixed at exactly 1/160 s (matching PLAY's own
+; documented "a tick is ~1/160 s at 1 MHz PHI2" definition) and MIA's
+; sequencer counts a fixed 24000 ticks/s (the header's AUDIO_TICK_RATE, which
+; stays 24 kHz whatever MIA's output sample rate), so samples = ticks * 150 - by
 ; design independent of whatever PHI2 speed is live right now, unlike the
 ; retired background player's live-KJIFFY timing.
 ;
