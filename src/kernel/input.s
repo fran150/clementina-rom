@@ -53,7 +53,7 @@ input_read_byte:
         php
         sei
         pha
-        lda #$60
+        lda #IIDX_INPUT_STATE
         sta IDXA_SELECT
         lda #CFG_IDXA_ADDR_H
         sta CFG_SELECT

@@ -109,13 +109,17 @@ MIA_STAT_CMD_RUNNING = %00000100
 MIA_STAT_DMA_RUNNING = %00001000
 
 ; Kernel/system-reserved MIA index descriptors. User code must leave $F0-$FF
-; alone while using kernel services.
+; alone while using kernel services. Programs own $00-$4F; MIA owns $50-$EF
+; (full table in docs/memory-map.md section 12).
 KIDX_SCROLL_NT_SRC   = $F0
 KIDX_SCROLL_NT_DST   = $F1
 KIDX_SCROLL_ATTR_SRC = $F2
 KIDX_SCROLL_ATTR_DST = $F3
 KIDX_MEMORY_SRC      = $F4
 KIDX_MEMORY_DST      = $F5
+
+; MIA-owned input index the kernel borrows (re-seeked before every read).
+IIDX_INPUT_STATE     = $60      ; 128-byte input state block @ $11000
 
 ; Index descriptor flag bits
 IXF_R_STP          = %00000001 ; step after read
