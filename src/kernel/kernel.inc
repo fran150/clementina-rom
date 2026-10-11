@@ -262,24 +262,22 @@ CHR_INSERT          = $94      ; editor: open a gap at the cursor (insert space)
 ; program can safely overwrite once it no longer needs BASIC. See
 ; docs/memory-map.md.
 ; ----------------------------------------------------------------------------
-KERN_JUMPTAB_SIZE  = $30       ; 16 entries x 3 bytes - keep in sync with kernel.s
+KERN_JUMPTAB_SIZE  = $2A       ; 14 entries x 3 bytes - keep in sync with kernel.s
 KERN_BASE          = $04B7
 KERN_COLDSTART     = KERN_BASE + $00   ; reset entry (MIA points RESET here)
 KERN_WARMSTART     = KERN_BASE + $03   ; re-enter the system
 KERN_CHROUT        = KERN_BASE + $06   ; A = char -> console
 KERN_CHRIN         = KERN_BASE + $09   ; blocking read -> A
 KERN_GETKEY_NB     = KERN_BASE + $0C   ; non-blocking; C=1 if A holds a char
-KERN_STOP          = KERN_BASE + $0F   ; ISCNTC: Z=1 if break (Ctrl-C) pending
-KERN_CLRSCR        = KERN_BASE + $12   ; clear screen, home cursor
-KERN_PRHEX         = KERN_BASE + $15   ; A low nibble -> hex digit via CHROUT
-KERN_PRBYTE        = KERN_BASE + $18   ; A -> two hex digits via CHROUT
-KERN_PRSTR         = KERN_BASE + $1B   ; print $00-terminated string at (KPTR)
-KERN_LOAD          = KERN_BASE + $1E   ; load (stub for now)
-KERN_SAVE          = KERN_BASE + $21   ; save (stub for now)
-KERN_EDITKEY       = KERN_BASE + $24   ; screen editor: next char of edited line
-KERN_CHROUT_GLYPH  = KERN_BASE + $27   ; A = tile -> console as a raw glyph (no ctrl)
-KERN_WOZMON        = KERN_BASE + $2A   ; enter the WOZ monitor (see src/monitor)
-KERN_SET_BACKDROP  = KERN_BASE + $2D   ; A = backdrop selector -> VIDX_BACKDROP_COLOR
+KERN_CLRSCR        = KERN_BASE + $0F   ; clear screen, home cursor
+KERN_PRHEX         = KERN_BASE + $12   ; A low nibble -> hex digit via CHROUT
+KERN_PRBYTE        = KERN_BASE + $15   ; A -> two hex digits via CHROUT
+KERN_PRSTR         = KERN_BASE + $18   ; print $00-terminated string at (KPTR)
+KERN_LOAD          = KERN_BASE + $1B   ; stream a PRG file into CPU RAM (load.s)
+KERN_EDITKEY       = KERN_BASE + $1E   ; screen editor: next char of edited line
+KERN_CHROUT_GLYPH  = KERN_BASE + $21   ; A = tile -> console as a raw glyph (no ctrl)
+KERN_WOZMON        = KERN_BASE + $24   ; enter the WOZ monitor (see src/monitor)
+KERN_SET_BACKDROP  = KERN_BASE + $27   ; A = backdrop selector -> VIDX_BACKDROP_COLOR
 
 ; ----------------------------------------------------------------------------
 ; Kernel zero page ($00F0-$00FF, see clementina.cfg KZP). Clients touch only

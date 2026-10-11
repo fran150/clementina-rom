@@ -1,5 +1,5 @@
 ; ============================================================================
-; input.s - keyboard input from the MIA FIFO and the ISCNTC (break) hook
+; input.s - keyboard input from the MIA FIFO
 ; ----------------------------------------------------------------------------
 ; Included by kernel.s into the single kernel translation unit (after
 ; kernel.inc).
@@ -45,16 +45,7 @@ getkey_nb:
         clc
         rts
 
-; ----------------------------------------------------------------------------
-; stop - ISCNTC: report whether a Ctrl-C (break) is pending. Z=1 if break.
-; Milestone-1 placeholder: never reports a break. Real break handling lands
-; with BASIC.
-; ----------------------------------------------------------------------------
-stop:
-        lda #$01                ; Z=0 -> "no break"
-        rts
-
-; Indexed input services are link exports; the fixed public jump table is full.
+; Indexed input services are link exports (internal), not jump-table entries.
 ; A = input-block offset ($00-$7F), returns A = byte, preserves X/Y.
 ; Explicit seek is essential: selecting a descriptor does not rewind it.
 .export input_read_byte, input_clear_text, input_command

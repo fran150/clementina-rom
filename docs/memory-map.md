@@ -159,15 +159,15 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 
 ---
 
-## 6. Kernel jump table (`$04B7–$04E6`)
+## 6. Kernel jump table (`$04B7–$04E0`)
 
 The **stable ABI**. Each entry is a 3-byte `JMP`. Callers (BASIC, WozMon, user
 programs) bind to these fixed addresses; the routines behind them may move
 freely.
 
 > **2026-09-14 bottom-anchor rework**: the jump table is placed **first** in
-> `clementina.cfg`'s `SEGMENTS` list, so it lands on the bottom 48 bytes of
-> the image — always `$04B7-$04E6`, right after working RAM — no matter how
+> `clementina.cfg`'s `SEGMENTS` list, so it lands on the bottom 42 bytes of
+> the image — always `$04B7-$04E0`, right after working RAM — no matter how
 > large the rest of the image grows. `KERN_BASE` (`kernel.inc`) is the plain
 > fixed constant `$04B7`, a true compile-time constant that never needs
 > bumping. See §8 and §13 for the full picture and the single-pass build
@@ -180,17 +180,21 @@ freely.
 | `$04BD` | `KERN_CHROUT` | `A`=char | A/X/Y preserved | Write one character to the console at the cursor. Handles CR (`$0D`, newline), LF (`$0A`, ignored), BS (`$08`), FF (`$0C`, clear), the cursor moves (`$11`/`$91`/`$1D`/`$9D`) and HOME (`$13`), printable bytes. |
 | `$04C0` | `KERN_CHRIN` | — | `A`=char | Blocking read of one raw text byte from the MIA FIFO (single key; used by BASIC `GET`). Shows the cursor while waiting and updates `LAST_KEY`. |
 | `$04C3` | `KERN_GETKEY_NB` | — | `C`=1 & `A`=char, or `C`=0 | Non-blocking read. |
-| `$04C6` | `KERN_STOP` | — | `Z`=1 if break | ISCNTC / Ctrl-C check. **Placeholder** today (never reports a break); real handling lands with BASIC. |
-| `$04C9` | `KERN_CLRSCR` | — | — | Clear the overlay (fill with spaces) and home the cursor. |
-| `$04CC` | `KERN_PRHEX` | `A`=nibble | — | Print the low nibble of `A` as one hex digit via `CHROUT`. |
-| `$04CF` | `KERN_PRBYTE` | `A`=byte | — | Print `A` as two hex digits. |
-| `$04D2` | `KERN_PRSTR` | `KPTR`→str | — | Print the `$00`-terminated string at `KPTR` (max 255 bytes). |
-| `$04D5` | `KERN_LOAD` | `KPTR`=dest override or 0, `KTMP`=run addr or 0 | — (or does not return, if run) | Stream a bank-aware PRG file straight into CPU RAM, entirely kernel-resident (see §8 and `docs/basic-file.md`) — the destination may overwrite BASIC's own resident code/heap, so it cannot call out to any BASIC-resident routine mid-copy. BASIC's `BLOAD` statement stages the path (via MIA hardware state, not CPU RAM) and parses `run`/`addr` before handing off here. |
-| `$04D8` | `KERN_SAVE` | — | — | Storage save. **Stub** (`RTS`) — unlike `KERN_LOAD`, saving never overwrites running code, so `BSAVE` (`docs/basic-file.md`) is implemented entirely BASIC-resident instead and does not use this slot. |
-| `$04DB` | `KERN_EDITKEY` | — | `A`=char | Full-screen line editor. Runs the interactive editor (cursor moves, overtype, gap-closing backspace `$08` / delete `$7F`, insert `$94`) on the overlay, harvests the logical line under the cursor on RETURN, and returns it one byte at a time followed by a synthetic final CR. BASIC's `GETLN` uses this for line input and treats bytes returned while `EDIT_STATE` is nonzero as raw source data; `GET` stays on `KERN_CHRIN`. |
-| `$04DE` | `KERN_CHROUT_GLYPH` | `A`=tile | A/X/Y preserved | Write `A` to the console as a raw glyph at the cursor, bypassing control-code handling (so high tiles that collide with codes like `$0D` still draw). |
-| `$04E1` | `KERN_WOZMON` | — | (does not return) | Enter the WOZ monitor (`src/monitor/wozmon-clementina.s`). Examine/deposit memory and run code; quit back to BASIC with `Q` (runs `KERN_WARMSTART`). Invoke from BASIC with `MON`; the older `USR` vector method still works. |
-| `$04E4` | `KERN_SET_BACKDROP` | `A`=selector | — | Write the backdrop selector to `VIDX_BACKDROP_COLOR` (IRQ-safe tail call). |
+| `$04C6` | `KERN_CLRSCR` | — | — | Clear the overlay (fill with spaces) and home the cursor. |
+| `$04C9` | `KERN_PRHEX` | `A`=nibble | — | Print the low nibble of `A` as one hex digit via `CHROUT`. |
+| `$04CC` | `KERN_PRBYTE` | `A`=byte | — | Print `A` as two hex digits. |
+| `$04CF` | `KERN_PRSTR` | `KPTR`→str | — | Print the `$00`-terminated string at `KPTR` (max 255 bytes). |
+| `$04D2` | `KERN_LOAD` | `KPTR`=dest override or 0, `KTMP`=run addr or 0 | — (or does not return, if run) | Stream a bank-aware PRG file straight into CPU RAM, entirely kernel-resident (see §8 and `docs/basic-file.md`) — the destination may overwrite BASIC's own resident code/heap, so it cannot call out to any BASIC-resident routine mid-copy. BASIC's `BLOAD` statement stages the path (via MIA hardware state, not CPU RAM) and parses `run`/`addr` before handing off here. |
+| `$04D5` | `KERN_EDITKEY` | — | `A`=char | Full-screen line editor. Runs the interactive editor (cursor moves, overtype, gap-closing backspace `$08` / delete `$7F`, insert `$94`) on the overlay, harvests the logical line under the cursor on RETURN, and returns it one byte at a time followed by a synthetic final CR. BASIC's `GETLN` uses this for line input and treats bytes returned while `EDIT_STATE` is nonzero as raw source data; `GET` stays on `KERN_CHRIN`. |
+| `$04D8` | `KERN_CHROUT_GLYPH` | `A`=tile | A/X/Y preserved | Write `A` to the console as a raw glyph at the cursor, bypassing control-code handling (so high tiles that collide with codes like `$0D` still draw). |
+| `$04DB` | `KERN_WOZMON` | — | (does not return) | Enter the WOZ monitor (`src/monitor/wozmon-clementina.s`). Examine/deposit memory and run code; quit back to BASIC with `Q` (runs `KERN_WARMSTART`). Invoke from BASIC with `MON`; the older `USR` vector method still works. |
+| `$04DE` | `KERN_SET_BACKDROP` | `A`=selector | — | Write the backdrop selector to `VIDX_BACKDROP_COLOR` (IRQ-safe tail call). |
+
+> **2026-10-11**: the `KERN_STOP` (`$04C6`) and `KERN_SAVE` (`$04D8`) stubs
+> were removed and every later entry moved down 3 or 6 bytes. Neither ever did
+> anything: BASIC checks Ctrl-C itself in `ISCNTC`, and `SAVE`/`BSAVE` are
+> BASIC-resident wrappers around MIA's file commands, which machine code can
+> issue directly.
 
 > When you add a kernel call, append a new `JMP` to the table in
 > `src/kernel/kernel.s`, add the `KERN_*` equate in `kernel.inc`, bump
@@ -202,7 +206,7 @@ freely.
 
 ---
 
-## 7. Kernel code and data (right after the jump table, from `$04E7`)
+## 7. Kernel code and data (right after the jump table, from `$04E1`)
 
 Internal routines (`KERNCODE`/`RODATA`/`WOZCODE` segments). These addresses
 are **not** ABI; reach them only through the jump table. The kernel+WozMon
