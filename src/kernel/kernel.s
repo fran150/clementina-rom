@@ -117,6 +117,7 @@ coldstart:
         sta EDITOR_PEN          ; editor pen starts white too
         stz BASIC_STYLE_MASK
         stz LAST_KEY            ;
+        stz KEYQ_LEN            ; keyboard queue starts empty
         stz CURSOR_VISIBLE
         stz CURSOR_SAVE_CHR
         stz CURSOR_SAVE_ATTR

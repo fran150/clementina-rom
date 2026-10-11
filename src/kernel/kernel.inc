@@ -269,7 +269,7 @@ KERN_WARMSTART     = KERN_BASE + $03   ; re-enter the system
 KERN_CHROUT        = KERN_BASE + $06   ; A = char -> console
 KERN_CHRIN         = KERN_BASE + $09   ; blocking read -> A
 KERN_GETKEY_NB     = KERN_BASE + $0C   ; non-blocking; C=1 if A holds a char
-KERN_STOP          = KERN_BASE + $0F   ; ISCNTC: Z=1 if break (Ctrl-C) pending
+KERN_STOP          = KERN_BASE + $0F   ; break check: Z=1 if Ctrl-C was typed
 KERN_CLRSCR        = KERN_BASE + $12   ; clear screen, home cursor
 KERN_PRHEX         = KERN_BASE + $15   ; A low nibble -> hex digit via CHROUT
 KERN_PRBYTE        = KERN_BASE + $18   ; A -> two hex digits via CHROUT
@@ -352,6 +352,16 @@ STYLE_SIDE_BUF     = KVARS + $D3   ; BASIC tokenizer sidecar scratch ($03D3-$03F
 STYLE_SIDE_BUF_SIZE = $2A
 STYLE_BASE_LEN     = KVARS + $FF   ; stored-line base len ($03FF)
 ; Last used kernel/shared variable byte is STYLE_BASE_LEN ($03FF).
+
+; Keyboard queue, in fixed working RAM right after KVARS ($0400-$040A).
+; KERN_STOP drains the MIA text FIFO into it while it looks for Ctrl-C, so keys
+; typed while a program runs are kept; KERN_GETKEY_NB (and so KERN_CHRIN) hands
+; them out, oldest first, before reading the FIFO again. Like the C64's
+; keyboard buffer: a break empties it, and keys beyond KEYQ_SIZE are dropped.
+KEYQ_LEN           = $0400         ; keys queued (0..KEYQ_SIZE)
+KEYQ               = $0401         ; queued key bytes, oldest first
+KEYQ_SIZE          = 10
+KEY_BREAK          = $03           ; Ctrl-C: the break key KERN_STOP looks for
 
 ; Cursor indicator tiles: the blinking cursor previews the editor's glyph mode,
 ; pen, and command state (Phase 5, §4.6). The charset author draws bespoke art at

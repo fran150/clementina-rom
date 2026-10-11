@@ -40,8 +40,8 @@ measurements assume no intervening clock assignment and less than one full
 counter period between samples.
 
 DELAY leaves interrupts enabled and polls BASIC's normal Ctrl-C check, so it
-can still be interrupted with BREAK; that existing check also consumes
-non-Ctrl-C queued text. Background music (`TRACK`/`BAND`, `docs/basic-sound.md`)
+can still be interrupted with BREAK. Other keys typed meanwhile stay queued
+for `GET` and `INPUT` (see `KERN_STOP`, `docs/memory-map.md` §6). Background music (`TRACK`/`BAND`, `docs/basic-sound.md`)
 runs entirely on MIA's own sequencer and needs none of this to keep advancing
 through DELAY - the 6502 isn't involved once it starts. Ctrl-C, `STOP`, `END`,
 a runtime error, and `NEW` all still stop it, the same safety net the old

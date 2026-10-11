@@ -154,6 +154,10 @@ RAMSTART2        := $04B7
 ; sync with it; BASIC deliberately does not .include kernel.inc.
 KERN_LOAD := $04D5
 KERN_SAVE := $04D8
+
+; ISCNTC (clementina_iscntc.s) asks the kernel's break check, like CBM BASIC
+; calling the KERNAL's STOP. Same jump table, same sync rule as above.
+KERN_STOP := $04C6
 SAVE:
         jmp BASIC_SAVE
 LOAD:

@@ -1,14 +1,13 @@
 .segment "CODE"
 ; ----------------------------------------------------------------------------
-; ISCNTC - Clementina: check the input FIFO for Ctrl-C (break).
-; Falls through into STOP when Ctrl-C is seen, like the other targets.
+; ISCNTC - Clementina: ask the kernel's break check (KERN_STOP) whether
+; Ctrl-C was typed, like CBM BASIC calling the KERNAL's STOP. Falls through
+; into STOP on a break, with A=$03, Z=1 and C=1 as the other targets do; other
+; keys stay queued in the kernel for GET and INPUT.
 ; ----------------------------------------------------------------------------
 ISCNTC:
-        jsr MONRDKEY_NB
-        bcc @nothing
-        cmp #$03
+        jsr KERN_STOP
         beq @stopit
-@nothing:
         rts
 @stopit:
 ;!!! runs into "STOP"

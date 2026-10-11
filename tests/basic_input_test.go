@@ -96,3 +96,43 @@ func TestBasicInputRanges(t *testing.T) {
 		})
 	}
 }
+
+// screenText returns the overlay text the way TestBasicInputRanges reads it.
+func screenText(c *ClementinaComputer) string {
+	vr := c.chips.mia.(videoReader)
+	b := make([]byte, 1000)
+	for i := range b {
+		b[i] = vr.DebugReadVideo(uint32(0x10080 + i))
+	}
+	return string(b)
+}
+
+// Ctrl-C typed while a program runs stops it through KERN_STOP.
+func TestBasicCtrlCBreaks(t *testing.T) {
+	c, step := bootClementinaToPrompt(t)
+	typeLine(c, step, "10 GOTO 10")
+	injectKeys(c, []byte("RUN")...)
+	injectKeys(c, keyCR)
+	editorTickN(c, step, 300_000)
+	injectKeys(c, 0x03)
+	editorTickN(c, step, 600_000)
+	if !strings.Contains(screenText(c), "BREAK IN  10") {
+		t.Fatalf("expected BREAK IN 10: %s", screenText(c))
+	}
+}
+
+// A key typed while a program runs survives the break checks between
+// statements and reaches the program's GET.
+func TestBasicBreakCheckKeepsTypedKeys(t *testing.T) {
+	c, step := bootClementinaToPrompt(t)
+	typeLine(c, step, "10 FOR I=1 TO 1500:NEXT")
+	typeLine(c, step, "20 GET A$:POKE 512,ASC(A$+CHR$(0))")
+	injectKeys(c, []byte("RUN")...)
+	injectKeys(c, keyCR)
+	editorTickN(c, step, 300_000)
+	injectKeys(c, 'X')
+	editorTickN(c, step, 8_000_000)
+	if got := peek(c, 512); got != 'X' {
+		t.Fatalf("GET after typed key: want %d got %d\n%s", 'X', got, screenText(c))
+	}
+}

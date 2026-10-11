@@ -38,7 +38,7 @@ CPU: **65C02S** (the `STZ`, `BRA`, `PHX/PLX`, etc. extensions are available).
 | `$0100–$01FF` | CPU stack (§3) |
 | `$0200–$02FF` | Line input buffer (§4) |
 | `$0300–$03FF` | Kernel variables and vectors (§5) |
-| `$0400–$04B6` | Free working RAM (formerly the background-`PLAY` control block) + `DIR_NAME_BUF` (§7.5) |
+| `$0400–$04B6` | Keyboard queue, free working RAM and `DIR_NAME_BUF` (§7.5) |
 | `$04B7–…` | Kernel+WozMon+BASIC image (§6, §7), starting exactly at `$04B7` |
 | `…–$BFFF` | BASIC's free workspace / heap (§8), filling everything above the image |
 
@@ -179,8 +179,8 @@ freely.
 | `$04BA` | `KERN_WARMSTART` | — | — | Re-enter BASIC at the READY prompt, **preserving** the current program and variables. Resets the stack and re-enables interrupts first, so it is safe to reach mid-statement (used by WozMon's `Q` quit command; `BFD3R`-style manual re-entry still works). |
 | `$04BD` | `KERN_CHROUT` | `A`=char | A/X/Y preserved | Write one character to the console at the cursor. Handles CR (`$0D`, newline), LF (`$0A`, ignored), BS (`$08`), FF (`$0C`, clear), the cursor moves (`$11`/`$91`/`$1D`/`$9D`) and HOME (`$13`), printable bytes. |
 | `$04C0` | `KERN_CHRIN` | — | `A`=char | Blocking read of one raw text byte from the MIA FIFO (single key; used by BASIC `GET`). Shows the cursor while waiting and updates `LAST_KEY`. |
-| `$04C3` | `KERN_GETKEY_NB` | — | `C`=1 & `A`=char, or `C`=0 | Non-blocking read. |
-| `$04C6` | `KERN_STOP` | — | `Z`=1 if break | ISCNTC / Ctrl-C check. **Placeholder** today (never reports a break); real handling lands with BASIC. |
+| `$04C3` | `KERN_GETKEY_NB` | — | `C`=1 & `A`=char, or `C`=0 | Non-blocking read. Returns keys queued by `KERN_STOP` first (oldest first), then the MIA FIFO. Preserves X/Y. |
+| `$04C6` | `KERN_STOP` | — | `Z`=1 if break | Break check, like the C64 KERNAL's `STOP`: has the user typed Ctrl-C? Drains the MIA text FIFO, queueing every other key in the keyboard queue (§7.5) so `KERN_GETKEY_NB`/`KERN_CHRIN` still return it. On a break it empties the queue and returns `A`=`$03`, `Z`=1, `C`=1; otherwise `Z`=0. Clobbers A/X. BASIC's `ISCNTC` calls it between statements. |
 | `$04C9` | `KERN_CLRSCR` | — | — | Clear the overlay (fill with spaces) and home the cursor. |
 | `$04CC` | `KERN_PRHEX` | `A`=nibble | — | Print the low nibble of `A` as one hex digit via `CHROUT`. |
 | `$04CF` | `KERN_PRBYTE` | `A`=byte | — | Print `A` as two hex digits. |
@@ -206,7 +206,7 @@ freely.
 
 Internal routines (`KERNCODE`/`RODATA`/`WOZCODE` segments). These addresses
 are **not** ABI; reach them only through the jump table. The kernel+WozMon
-portion of the image is ~4.4 KiB (`$04B7`-`$1620` today); see §8 for the
+portion of the image is ~4.5 KiB (`$04B7`-`$1665` today); see §8 for the
 combined kernel+WozMon+BASIC image size and how it's anchored. Notable
 internal routines:
 
@@ -244,10 +244,15 @@ internal routines:
 
 ---
 
-## 7.5. `DIR_NAME_BUF` (`$048F–$04B6`) and free working RAM (`$0400–$048E`)
+## 7.5. Keyboard queue (`$0400–$040A`), `DIR_NAME_BUF` (`$048F–$04B6`) and free working RAM (`$040B–$048E`)
 
-`$0400–$048E` (143 bytes) is fixed working RAM right after `KVARS`, currently
-unused. It used to hold the background-`PLAY` control block (`BGP_*` in
+| Addr | Symbol | Size | Description |
+| --- | --- | --- | --- |
+| `$0400` | `KEYQ_LEN` | 1 | Keys waiting in `KEYQ` (0-10). Zeroed at cold start, on a break and by `KEYCLEAR`. |
+| `$0401` | `KEYQ` | 10 | Keyboard queue, oldest first. `KERN_STOP` moves typed keys here from the MIA FIFO while it looks for Ctrl-C; `KERN_GETKEY_NB` (and so `KERN_CHRIN`, `GET` and the line editor) reads it before the FIFO. Keys beyond 10 are dropped, like the C64's 10-key buffer. |
+
+`$040B–$048E` (132 bytes) is fixed working RAM, currently unused. The whole
+`$0400–$048E` range used to hold the background-`PLAY` control block (`BGP_*` in
 `src/basic/clementina_extra.s`) — the state the Timer-1 IRQ needed to run
 `PLAY s$,n`'s background sequencer independently of the foreground
 interpreter. `PLAY`, its background player, and `BGP_*` were all retired
@@ -261,7 +266,7 @@ more. See `docs/basic-sound.md` and `clementina-mia`'s
 the loaded image, so it costs no ROM bytes — is a transient scratch buffer
 `DIR` (`docs/basic-file.md`) reads one directory entry's name into before
 printing any of it. It kept its address (rather than sliding down into the
-freed `$0400–$048E` space) when the background-`PLAY` block was removed, so
+freed space) when the background-`PLAY` block was removed, so
 nothing else in this fixed low-RAM region needs to move; nothing needs
 `DIR_NAME_BUF` to survive between `DIR` invocations.
 
