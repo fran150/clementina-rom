@@ -26,10 +26,10 @@ KERN_GETKEY_NB    = $04C3
 ; KERN_LOAD is already defined in defines_clementina.s (same translation
 ; unit as this file, both pulled into basic.o via msbasic.s) - BLOAD hands
 ; off there, see src/kernel/load.s.
-KERN_EDITKEY      = $04DB
-KERN_CHROUT_GLYPH = $04DE
-KERN_WOZMON       = $04E1
-KERN_SET_BACKDROP = $04E4
+KERN_EDITKEY      = $04D5
+KERN_CHROUT_GLYPH = $04D8
+KERN_WOZMON       = $04DB
+KERN_SET_BACKDROP = $04DE
 
 ; Kernel zero page ($F0-$FB, see kernel.inc) - BLOAD hands its parsed
 ; destination-override/run addresses to KERN_LOAD through these two.

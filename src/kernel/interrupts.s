@@ -1,20 +1,11 @@
 ; ============================================================================
-; interrupts.s - storage stubs and the minimal IRQ/NMI handlers
+; interrupts.s - the minimal IRQ/NMI handlers
 ; ----------------------------------------------------------------------------
 ; Included by kernel.s into the single kernel translation unit (after
 ; kernel.inc).
 ; ============================================================================
 
 .segment "KERNCODE"
-
-; ----------------------------------------------------------------------------
-; save - storage stub. KERN_LOAD (KERN_LOAD's jump-table slot) now has a real
-; implementation in load.s; KERN_SAVE stays a stub - BSAVE (like BASIC's own
-; SAVE) never needs kernel residency, since reading memory to write a file
-; never touches currently-executing code. See docs/memory-map.md.
-; ----------------------------------------------------------------------------
-save:
-        rts
 
 ; ----------------------------------------------------------------------------
 ; exram_select_basic_bank - restore the Extended RAM mapping BASIC relies on.

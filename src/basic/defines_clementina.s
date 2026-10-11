@@ -146,14 +146,11 @@ STYLE_SIDE_MAGIC1   := $FF
 RAMSTART2        := $04B7
 
 ; LOAD/SAVE: a BASIC program's own tokenized text to/from an SD file - see
-; BASIC_LOAD/BASIC_SAVE in clementina_extra.s and docs/basic-file.md. Used to
-; route to the kernel jump table below (a permanent stub - KERN_LOAD/
-; KERN_SAVE are plain RTS, so "LOAD"/"SAVE" alone did nothing, and
-; "LOAD "file"" left the filename unconsumed, always a ?SYNTAX ERROR).
-; KERN_BASE is now $04B7 (bottom-anchored, see kernel.inc) - keep these two in
-; sync with it; BASIC deliberately does not .include kernel.inc.
-KERN_LOAD := $04D5
-KERN_SAVE := $04D8
+; BASIC_LOAD/BASIC_SAVE in clementina_extra.s and docs/basic-file.md. Both are
+; BASIC-resident; only BLOAD hands off to the kernel, through KERN_LOAD.
+; KERN_BASE is $04B7 (bottom-anchored, see kernel.inc) - keep this in sync
+; with kernel.inc; BASIC deliberately does not .include kernel.inc.
+KERN_LOAD := $04D2
 SAVE:
         jmp BASIC_SAVE
 LOAD:

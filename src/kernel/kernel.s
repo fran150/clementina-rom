@@ -56,13 +56,11 @@ jumptab_start:
         jmp chrout              ; KERN_CHROUT
         jmp chrin               ; KERN_CHRIN
         jmp getkey_nb           ; KERN_GETKEY_NB
-        jmp stop                ; KERN_STOP
         jmp clrscr              ; KERN_CLRSCR
         jmp prhex               ; KERN_PRHEX
         jmp prbyte              ; KERN_PRBYTE
         jmp prstr               ; KERN_PRSTR
         jmp load                ; KERN_LOAD
-        jmp save                ; KERN_SAVE
         jmp editkey             ; KERN_EDITKEY
         jmp chrout_glyph        ; KERN_CHROUT_GLYPH
         jmp WOZMON              ; KERN_WOZMON

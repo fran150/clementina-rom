@@ -10,7 +10,7 @@
 ; primitives translate to/from the kernel's plain-ASCII console.
 ;
 ; Linked into the combined image and reached through the kernel jump table at
-; KERN_WOZMON ($04E1); enter with `JMP WOZMON` (or BASIC `MON`/`USR`). Quit back
+; KERN_WOZMON ($04DB); enter with `JMP WOZMON` (or BASIC `MON`/`USR`). Quit back
 ; to BASIC by typing `Q` (or run the warm-start vector manually with `04BAR`).
 ; The jump table is bottom-anchored at KERN_BASE=$04B7 - see docs/memory-map.md.
 ; ============================================================================
