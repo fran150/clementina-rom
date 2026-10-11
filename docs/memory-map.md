@@ -130,8 +130,7 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 | `$0302` | `TEXT_ATTR` | 1 | Live overlay pen for new console cells. Bits `0-3` select the palette bank; the default is palette `0` white text over the blue backdrop. BASIC output drives this transiently; the editor reasserts `EDITOR_PEN` into it whenever it takes control. |
 | `$0303` | `LAST_KEY` | 1 | Debug: last byte returned by `CHRIN`. Watch this in the emulator's memory window to confirm input before attaching a video client. |
 | `$0304` | `EDITOR_PEN` | 1 | Persistent editor pen. The pen the screen editor sets from the keyboard (ESC commands) and reasserts into `TEXT_ATTR` at each line edit, so the cursor and typed text keep their color across BASIC output (LIST, messages, styled `PRINT`). Was `KEY_COUNT` (a write-only debug counter). |
-| `$0305` | `CINV` | 2 | Reserved: redirectable `CHRIN` vector (not yet used). |
-| `$0307` | `COUTV` | 2 | Reserved: redirectable `CHROUT` vector (not yet used). |
+| `$0305–$0308` | — | 4 | Free. Were the unused `CINV`/`COUTV` vector stubs, removed 2026-10-11; the variables below kept their addresses. |
 | `$0309` | `CURSOR_VISIBLE` | 1 | Nonzero when the software cursor glyph is currently drawn into the overlay. |
 | `$030A` | `CURSOR_SAVE_CHR` | 1 | Saved tile under the visible cursor. |
 | `$030B` | `CURSOR_SAVE_ATTR` | 1 | Saved attribute under the visible cursor. |
