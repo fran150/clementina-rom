@@ -287,7 +287,7 @@ edit_find_line:
 ; ----------------------------------------------------------------------------
 ; Insert/delete operate on the logical line as a contiguous overlay run: read
 ; it into EDIT_BUF, shift in place, write it back. EDIT_LL is the line's cell
-; count (capped at EDIT_BUF_SIZE = two rows, which covers BASIC's 71-char input
+; count (capped at EDIT_BUF_SIZE = two rows, which is also BASIC's 80-char input
 ; limit); EDIT_CP is the cursor's linear position within the line.
 ; ----------------------------------------------------------------------------
 

@@ -93,7 +93,9 @@ LE878:
 
 .ifndef KBD
 L29B9:
-  .ifdef CBM2
+  .if .def(CBM2) || .def(CLEMENTINA)
+; Non-zero-page INPUTBUFFER ($0200): there is no STY abs,X, and the
+; returned pointer (Y,X) = INPUTBUFFER-1 needs its real high byte.
         lda     #$00
         sta     INPUTBUFFER,x
         ldx     #<(INPUTBUFFER-1)

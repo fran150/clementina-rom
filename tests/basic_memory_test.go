@@ -1,6 +1,7 @@
 package clementina
 
-// Checkpoints use $0200 (512), the WozMon buffer, which is idle during BASIC.
+// Checkpoints use $0280 (640), above both line buffers in the $0200 page
+// (BASIC's ends at $0252, WozMon's at $027F), so typed lines never touch them.
 // Do not use heap addresses: stored programs can grow through them.
 
 import (
@@ -28,17 +29,17 @@ func TestProgramTextIntegrityDuringSeek32(t *testing.T) {
 	for _, l := range []string{
 		`10 OPEN "BIG" FOR INPUT AS #1`,
 		`20 N=4294967295`,
-		`30 IF FSIZE(1)=N THEN POKE 512,1`,
+		`30 IF FSIZE(1)=N THEN POKE 640,1`,
 		`40 SEEK#1,2147483648`,
 		`50 P=FPOS(1)`,
-		`60 IF P=2147483648 THEN POKE 513,1`,
+		`60 IF P=2147483648 THEN POKE 641,1`,
 		`70 SEEK#1,N`,
-		`80 IF FPOS(1)=N THEN POKE 514,1`,
+		`80 IF FPOS(1)=N THEN POKE 642,1`,
 		`90 SEEK#1,16777217.9`,
 		`100 P=FPOS(1)`,
-		`110 IF P=16777217 THEN POKE 515,1`,
+		`110 IF P=16777217 THEN POKE 643,1`,
 		`120 CLOSE #1`,
-		`130 POKE 516,42`,
+		`130 POKE 644,42`,
 		`140 GOTO 140`,
 	} {
 		typeLine(c, step, l)
@@ -65,20 +66,20 @@ func TestProgramTextIntegrityDuringSeek32(t *testing.T) {
 		}
 	}
 	for i, want := range []int{1, 1, 1, 1, 42} {
-		require_eq(t, want, peek(c, uint32(512+i)), fmt.Sprintf("seek checkpoint %d", i))
+		require_eq(t, want, peek(c, uint32(640+i)), fmt.Sprintf("seek checkpoint %d", i))
 	}
 }
 
 func TestBasicMemoryBytesAndNestedArguments(t *testing.T) {
 	c, step := bootClementinaToPrompt(t)
 	lines := []string{
-		"10 MPOKE 200000,123", "20 MPOKE 262143,255", "30 POKE 512,MPEEK(200000)",
-		"40 POKE 513,MPEEK(262143)", "50 MPOKE 200001,MPEEK(200000)",
+		"10 MPOKE 200000,123", "20 MPOKE 262143,255", "30 POKE 640,MPEEK(200000)",
+		"40 POKE 641,MPEEK(262143)", "50 MPOKE 200001,MPEEK(200000)",
 		"60 MPOKE 200002,3", "70 MPOKE 200003,2", "80 MCOPY 200000,200010,MPEEK(200002)",
 		"90 MFILL 200020,MPEEK(200003),MPEEK(200000)",
-		"100 POKE 514,MPEEK(200001)", "110 POKE 515,MPEEK(200012)",
-		"120 POKE 516,MPEEK(200021)", "130 MPOKE 200030,123.9",
-		"140 POKE 517,MPEEK(200030.9)", "150 POKE 518,42", "160 GOTO 160",
+		"100 POKE 642,MPEEK(200001)", "110 POKE 643,MPEEK(200012)",
+		"120 POKE 644,MPEEK(200021)", "130 MPOKE 200030,123.9",
+		"140 POKE 645,MPEEK(200030.9)", "150 POKE 646,42", "160 GOTO 160",
 	}
 	// Keep each edited line within one screen row; split the long fill statement.
 	lines[8] = "90 N=MPEEK(200003):V=MPEEK(200000)"
@@ -90,7 +91,7 @@ func TestBasicMemoryBytesAndNestedArguments(t *testing.T) {
 	editorTickN(c, step, 1_000_000)
 	want := []byte{123, 255, 123, 3, 123, 123, 42}
 	for i, w := range want {
-		require_eq(t, int(w), peek(c, uint32(512+i)), fmt.Sprintf("memory result %d", i))
+		require_eq(t, int(w), peek(c, uint32(640+i)), fmt.Sprintf("memory result %d", i))
 	}
 }
 
@@ -102,11 +103,11 @@ func TestBasicMemoryOverlap(t *testing.T) {
 			typeLine(c, step, "10 FOR I=0 TO 127")
 			typeLine(c, step, "20 MPOKE 200240+I,I:NEXT I")
 			typeLine(c, step, fmt.Sprintf("30 MCOPY %d,%d,%d", 200240+tc.src, 200240+tc.dst, tc.n))
-			typeLine(c, step, "40 POKE 512,42")
+			typeLine(c, step, "40 POKE 640,42")
 			typeLine(c, step, "50 GOTO 50")
 			typeLine(c, step, "RUN")
 			editorTickN(c, step, 2_000_000)
-			require_eq(t, 42, peek(c, 512), "copy completed")
+			require_eq(t, 42, peek(c, 640), "copy completed")
 			want := make([]byte, 128)
 			for i := range want {
 				want[i] = byte(i)
@@ -122,11 +123,11 @@ func TestBasicMemoryOverlap(t *testing.T) {
 func TestBasicHexLiterals(t *testing.T) {
 	c, step := bootClementinaToPrompt(t)
 	lines := []string{
-		"10 POKE 512,$FF",
-		"20 POKE 513,$00",
-		"30 POKE 514,$0A+$05",
-		"40 A=$10:POKE 515,A*2",
-		"50 POKE 516,42",
+		"10 POKE 640,$FF",
+		"20 POKE 641,$00",
+		"30 POKE 642,$0A+$05",
+		"40 A=$10:POKE 643,A*2",
+		"50 POKE 644,42",
 		"60 GOTO 60",
 	}
 	for _, line := range lines {
@@ -136,7 +137,7 @@ func TestBasicHexLiterals(t *testing.T) {
 	editorTickN(c, step, 1_000_000)
 	want := []byte{255, 0, 15, 32, 42}
 	for i, w := range want {
-		require_eq(t, int(w), peek(c, uint32(512+i)), "hex literal result")
+		require_eq(t, int(w), peek(c, uint32(640+i)), "hex literal result")
 	}
 }
 
@@ -145,34 +146,34 @@ func TestBasicMemoryLargeAndBoundary(t *testing.T) {
 	vr := c.chips.mia.(videoReader)
 	for _, line := range []string{
 		"10 MFILL 131072,65536,37", "12 MPOKE 131072,201", "14 MPOKE 196607,204",
-		"20 MCOPY 131072,196608,65536", "25 POKE 513,MPEEK(262143)",
+		"20 MCOPY 131072,196608,65536", "25 POKE 641,MPEEK(262143)",
 		"30 MPOKE 262143,99", "40 MFILL 262143,0,2", "50 MCOPY 131072,262143,0",
-		"60 MCOPY 0,0,262144", "70 POKE 512,42", "80 GOTO 80",
+		"60 MCOPY 0,0,262144", "70 POKE 640,42", "80 GOTO 80",
 	} {
 		typeLine(c, step, line)
 	}
 	typeLine(c, step, "RUN")
 	editorTickN(c, step, 1_000_000)
-	require_eq(t, 42, peek(c, 512), "large copy completed")
+	require_eq(t, 42, peek(c, 640), "large copy completed")
 	for _, a := range []uint32{131073, 163839, 163840, 196606, 229376, 262142} {
 		require_eq(t, 37, vr.DebugReadVideo(a), fmt.Sprintf("large block byte %d", a))
 	}
 	require_eq(t, 201, vr.DebugReadVideo(131072), "source head")
 	require_eq(t, 201, vr.DebugReadVideo(196608), "copied head")
 	require_eq(t, 204, vr.DebugReadVideo(196607), "source tail")
-	require_eq(t, 204, peek(c, 513), "copied tail across 65535-byte chunk boundary")
+	require_eq(t, 204, peek(c, 641), "copied tail across 65535-byte chunk boundary")
 	require_eq(t, 99, vr.DebugReadVideo(262143), "last RAM byte / empty operations")
 }
 
 func TestBasicMemoryFullFill(t *testing.T) {
 	c, step := bootClementinaToPrompt(t)
 	vr := c.chips.mia.(videoReader)
-	for _, line := range []string{"10 MFILL 0,262144,0", "20 POKE 512,42", "30 GOTO 30"} {
+	for _, line := range []string{"10 MFILL 0,262144,0", "20 POKE 640,42", "30 GOTO 30"} {
 		typeLine(c, step, line)
 	}
 	typeLine(c, step, "RUN")
 	editorTickN(c, step, 1_000_000)
-	require_eq(t, 42, peek(c, 512), "full 256 KiB fill completed")
+	require_eq(t, 42, peek(c, 640), "full 256 KiB fill completed")
 	for _, a := range []uint32{0, 65535, 65536, 131071, 131072, 196607, 196608, 262143} {
 		require_eq(t, 0, vr.DebugReadVideo(a), fmt.Sprintf("full fill byte %d", a))
 	}
@@ -214,13 +215,13 @@ func TestBasicMemoryRectangles(t *testing.T) {
 		"40 MCOPY 201000,202000,2,3,8,2",
 		"50 MFILL 210000,1,5,300,2",
 		"60 MFILL 203000,4,9,0,10",
-		"70 POKE 512,42", "80 GOTO 80",
+		"70 POKE 640,42", "80 GOTO 80",
 	} {
 		typeLine(c, step, line)
 	}
 	typeLine(c, step, "RUN")
 	editorTickN(c, step, 1_000_000)
-	require_eq(t, 42, peek(c, 512), "rectangle program finished")
+	require_eq(t, 42, peek(c, 640), "rectangle program finished")
 	for _, row := range []uint32{0, 10, 20} {
 		for i := uint32(0); i < 4; i++ {
 			require_eq(t, 7, vr.DebugReadVideo(200000+row+i), fmt.Sprintf("fill row %d byte %d", row/10, i))

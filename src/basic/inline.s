@@ -67,7 +67,7 @@ INLINAIM:
         ldy     EDIT_STATE
         beq     L2453
 CLEM_RAW_BYTE:
-        cpx     #$47
+        cpx     #INLIN_MAX
         bcs     L244C
         jmp     L2443
     .else
@@ -108,6 +108,8 @@ CLEM_RAW_BYTE:
 L2443:
       .ifdef MICROTAN
         cpx     #$4F
+      .elseif .def(CLEMENTINA)
+        cpx     #INLIN_MAX      ; a full EDIT_BUF line (defines_clementina.s)
       .else
         cpx     #$47
       .endif

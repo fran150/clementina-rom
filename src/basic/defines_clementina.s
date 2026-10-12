@@ -46,12 +46,30 @@ USR              := $000A
 ; TEMPPT. zeropage.s only reserves Z14 in-block when it is not defined here.
 Z14              := $00DF
 
-; BASIC keeps its line input buffer in zero page (the proven 65C02 layout).
-; WozMon uses the $0200 page; the two are never active at the same time.
-; (Open item: optionally move BASIC's buffer to $0200 during full BASIC bring-up.)
+; BASIC's line input buffer lives at $0200, the page WozMon also uses for its
+; line buffer (IN); the two are never active at the same time (leaving WozMon
+; with Q re-enters BASIC through KERN_WARMSTART). Defining INPUTBUFFER here,
+; before zeropage.s, selects msbasic's non-zero-page buffer code
+; (CONFIG_NO_INPUTBUFFER_ZP / CONFIG_INPUTBUFFER_0200, defines.s), the path
+; Applesoft and Commodore BASIC 2 use. $13-$5A, where the buffer used to be,
+; is no longer used by BASIC. Budget (docs/memory-map.md §4): up to INLIN_MAX
+; typed characters at $0200-$024F, the $00 terminator at $0250, and the
+; tokenizer's end-of-program $00 two bytes past it, at most $0252. The four
+; bytes below the buffer, $01FC-$01FF, stage a numbered line's link and line
+; number while it is copied into the program, and $01FF holds INPUT's leading
+; comma; BASIC's stack stays below them (STACK_TOP).
+INPUTBUFFER      := $0200
+; Longest line INLIN accepts: the kernel screen editor's logical line
+; (EDIT_BUF_SIZE in kernel.inc), so a harvested line is never cut short.
+; EDIT_ATTR_BUF, indexed in parallel with INPUTBUFFER, holds this many bytes.
+INLIN_MAX        := 80
 
 ; constants
+; After STKINI the stack pointer is STACK_TOP, so pushes reach $0100+STACK_TOP
+; at most. That byte is INPUTBUFFER-4, the staged link's low byte, which
+; FIX_LINKS rewrites anyway; INPUTBUFFER-3..-1 must stay above the stack.
 STACK_TOP        := $FC
+.assert STACK_TOP <= <(INPUTBUFFER-4), error, "BASIC stack overlaps the staged line header at INPUTBUFFER-3..-1"
 SPACE_FOR_GOSUB  := $33
 WIDTH            := 40
 WIDTH2           := 14

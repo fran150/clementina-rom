@@ -270,6 +270,17 @@ L23D6:
         ldy     LINNUM+1
         sta     INPUTBUFFER-2
         sty     INPUTBUFFER-1
+  .ifdef CLEMENTINA
+; The staged link's high byte (INPUTBUFFER-3) must be nonzero, or FIX_LINKS
+; takes the new line for the end of the program and loses every line after
+; it. Applesoft and CBM2 set it once at cold start (init.s); here it is set
+; at use, because KERN_WARMSTART runs with S=$FF and may have pushed over it.
+; FIX_LINKS rewrites the link, so any nonzero value works; $01 also keeps
+; GTFORPNT, which reads this byte as the first one above BASIC's stack, from
+; taking it for a FOR ($81) or GOSUB frame.
+        lda     #$01
+        sta     INPUTBUFFER-3
+  .endif
 .endif
         lda     STREND
         ldy     STREND+1

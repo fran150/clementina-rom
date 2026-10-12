@@ -2,7 +2,8 @@
 // overlay; tests/run_input.py supplies the freshly built kernel.bin.
 package clementina
 
-// Checkpoints use $0200 (512), the WozMon buffer, which is idle during BASIC.
+// Checkpoints use $0280 (640), above both line buffers in the $0200 page
+// (BASIC's ends at $0252, WozMon's at $027F), so typed lines never touch them.
 // Do not use heap addresses: stored programs can grow through them.
 
 import (
@@ -40,41 +41,41 @@ func TestBasicInputPhase(t *testing.T) {
 	write(85, 127)
 	write(86, 255)
 	write(88, 255)
-	add("POKE 512,KEYDOWN(79)")
-	add("POKE 513,KEYDOWN(80)")
-	add("POKE 514,CONSDOWN(225)")
-	add("POKE 515,INPUTDEV(0)")
+	add("POKE 640,KEYDOWN(79)")
+	add("POKE 641,KEYDOWN(80)")
+	add("POKE 642,CONSDOWN(225)")
+	add("POKE 643,INPUTDEV(0)")
 	add("PADREAD 0")
-	add("POKE 516,PADON(0):POKE 517,PADDIR(0)")
-	add("POKE 518,PADSTICK(0):POKE 519,PADBTN(0,9)")
-	add("POKE 520,PADAXIS(0,0)+128")
-	add("POKE 521,PADAXIS(0,1):POKE 522,PADTRIG(0,0)")
+	add("POKE 644,PADON(0):POKE 645,PADDIR(0)")
+	add("POKE 646,PADSTICK(0):POKE 647,PADBTN(0,9)")
+	add("POKE 648,PADAXIS(0,0)+128")
+	add("POKE 649,PADAXIS(0,1):POKE 650,PADTRIG(0,0)")
 	add("A=PADBTN(PADON(1),PADBTN(0,0)*9)")
-	add("POKE 523,A")
+	add("POKE 651,A")
 	// Explicit cached read: changing MIA must not change PADAXIS until PADREAD.
 	write(84, 10)
-	add("POKE 524,PADAXIS(0,0)+128")
-	add("PADREAD 0:POKE 525,PADAXIS(0,0)")
+	add("POKE 652,PADAXIS(0,0)+128")
+	add("PADREAD 0:POKE 653,PADAXIS(0,0)")
 	write(65, 250)
 	write(66, 3)
-	add("MOUSE DX,DY,B,W,P:POKE 526,DX:POKE 527,DY")
+	add("MOUSE DX,DY,B,W,P:POKE 654,DX:POKE 655,DY")
 	write(64, 5)
 	write(65, 3)
 	write(66, 250)
 	write(67, 255)
 	write(68, 2)
 	add("MOUSE DX%,DY%,B%,W%,P%")
-	add("POKE 528,DX%:POKE 529,DY%+128:POKE 530,B%")
-	add("POKE 531,W%+128:POKE 532,P%")
-	add("MOUSE DX,DY,B,W,P:POKE 533,DX:POKE 534,DY")
+	add("POKE 656,DX%:POKE 657,DY%+128:POKE 658,B%")
+	add("POKE 659,W%+128:POKE 660,P%")
+	add("MOUSE DX,DY,B,W,P:POKE 661,DX:POKE 662,DY")
 	add("KEYREPEAT 400,60:KEYRPT 79,0:KEYREPEAT 0")
-	add("KEYCLEAR:INPUTMODE 0:POKE 535,123")
+	add("KEYCLEAR:INPUTMODE 0:POKE 663,123")
 	add(fmt.Sprintf("GOTO %d", line))
 	typeLine(computer, step, "RUN")
 	editorTickN(computer, step, 3_000_000)
 	want := []byte{1, 0, 1, 4, 1, 9, 165, 1, 0, 127, 255, 1, 0, 10, 0, 0, 9, 119, 5, 127, 2, 0, 0, 123}
 	for i, w := range want {
-		if got := peek(computer, uint32(512+i)); got != w {
+		if got := peek(computer, uint32(640+i)); got != w {
 			t.Errorf("input result %d: want %d got %d", i, w, got)
 		}
 	}
@@ -95,4 +96,83 @@ func TestBasicInputRanges(t *testing.T) {
 			}
 		})
 	}
+}
+
+func inputScreen(c *ClementinaComputer) string {
+	vr := c.chips.mia.(videoReader)
+	b := make([]byte, 1000)
+	for i := range b {
+		b[i] = vr.DebugReadVideo(uint32(0x10080 + i))
+	}
+	return string(b)
+}
+
+// TestBasicInputLongLine types lines as long as the screen editor's logical
+// line (80 characters, two full rows), numbered and direct, and checks BASIC
+// keeps every character: the stored line LISTs whole and runs to its last
+// statement. The long line goes in between two others, so the program's links
+// must survive the insertion. BASIC's line buffer is at $0200, so the old
+// zero-page buffer, $13-$5A, must stay untouched throughout.
+func TestBasicInputLongLine(t *testing.T) {
+	c, step := bootClementinaToPrompt(t)
+	for a := 0x13; a <= 0x5A; a++ {
+		c.chips.baseram.Poke(uint16(a), 0xA5)
+	}
+	long := `10 A$="` + strings.Repeat("X", 55) + `":POKE 640,LEN(A$)`
+	direct := `B$="` + strings.Repeat("Y", 58) + `":POKE 641,LEN(B$)`
+	if len(long) != 80 || len(direct) != 80 {
+		t.Fatalf("test lines must be 80 characters: %d, %d", len(long), len(direct))
+	}
+	// The emulated text FIFO holds 64 keys and drops the oldest on overflow,
+	// so feed a long line in chunks the editor drains in between.
+	typeLong := func(line string) {
+		for len(line) > 32 {
+			injectKeys(c, []byte(line[:32])...)
+			editorTickN(c, step, 300_000)
+			line = line[32:]
+		}
+		typeLine(c, step, line)
+	}
+	typeLine(c, step, "30 POKE 643,9")
+	// The stored line's link is staged at $01FC-$01FD, just below the buffer,
+	// and FIX_LINKS stops at a zero link high byte. BASIC sets it as it stores
+	// the line; clear it first so stale stack bytes cannot stand in for that.
+	c.chips.baseram.Poke(0x01FD, 0)
+	typeLong(long)
+	typeLine(c, step, "20 POKE 642,7")
+	typeLine(c, step, "CLS:LIST")
+	screen := inputScreen(c)
+	for _, want := range []string{long, "20 POKE 642,7", "30 POKE 643,9"} {
+		if !strings.Contains(screen, want) {
+			t.Fatalf("LIST lost %q:\n%s", want, screen)
+		}
+	}
+	typeLine(c, step, "RUN")
+	editorTickN(c, step, 500_000)
+	require_eq(t, 55, peek(c, 640), "80-character program line ran to its last statement")
+	require_eq(t, 7, peek(c, 642), "line after the long line ran")
+	require_eq(t, 9, peek(c, 643), "last line ran")
+	typeLong(direct)
+	require_eq(t, 58, peek(c, 641), "80-character direct line ran to its last statement")
+	for a := 0x13; a <= 0x5A; a++ {
+		require_eq(t, 0xA5, peek(c, uint32(a)), fmt.Sprintf("zero page $%02X written", a))
+	}
+}
+
+// TestBasicInputAfterWarmStart returns from WozMon to BASIC through
+// KERN_WARMSTART, which hands over with S=$FF, then starts the program with
+// GOTO, which does not reset the stack the way RUN does. INPUT stores its
+// leading comma at $01FF, just below the line buffer; BASIC_WARM_START must
+// have lowered the stack, or that store lands on NEWSTT's return address.
+func TestBasicInputAfterWarmStart(t *testing.T) {
+	c, step := bootClementinaToPrompt(t)
+	typeLine(c, step, "10 INPUT A")
+	typeLine(c, step, "20 POKE 644,A")
+	typeLine(c, step, "30 GOTO 30")
+	typeLine(c, step, "MON")
+	typeLine(c, step, "Q")
+	typeLine(c, step, "GOTO 10")
+	typeLine(c, step, "42")
+	editorTickN(c, step, 500_000)
+	require_eq(t, 42, peek(c, 644), "INPUT after a warm start returned to its program")
 }
