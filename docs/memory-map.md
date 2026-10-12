@@ -26,7 +26,7 @@ The 65C02 sees 64 KiB. Decoding (from the Clementina CS logic):
 | `$0000–$7FFF` | 32 KiB | **Base RAM** | Flat, always present. Holds zero page, stack, the kernel image, and BASIC's workspace. |
 | `$8000–$BFFF` | 16 KiB window | **Extended RAM** | A 16 KiB window into 512 KiB of banked RAM. Bank selected by VIA Port A (PA0–PA4 → 32 banks). |
 | `$C000–$DFFF` | 8 KiB | **I/O** | 8 device slots of 1 KiB each. The 65C22 VIA is in slot 0 (`$C000–$C3FF`). |
-| `$E000–$FFFF` | 8 KiB | **MIA region** | Pico-served. High RAM (banked 8 KiB windows, "if enabled by Pico") plus the MIA register block at `$FFE0–$FFFF`. Treat `$E000–$FFDF` as not-yet-guaranteed. |
+| `$E000–$FFFF` | 8 KiB | **MIA region** | The 32 MIA registers at `$FFE0–$FFFF`. MIA sees only A0–A4, so `$E000–$FFDF` repeats them every 32 bytes; never use those mirrors (§11). |
 
 CPU: **65C02S** (the `STZ`, `BRA`, `PHX/PLX`, etc. extensions are available).
 
@@ -396,9 +396,13 @@ Eight 1 KiB device slots decoded from this 8 KiB region.
 
 ## 11. MIA region (`$E000–$FFFF`)
 
-MIA (the Raspberry Pi Pico 2 W interface adapter) owns this region. Today only
-the register block at the very top is defined; treat `$E000–$FFDF` as reserved
-("high RAM, if enabled by Pico") and do not rely on it.
+MIA (the Raspberry Pi Pico 2 W interface adapter) owns this region. The board
+selects MIA for all of `$E000–$FFFF`, but MIA is wired to A0–A4 only, so it
+sees just its 32 registers: `$FFE0–$FFFF`, repeated every 32 bytes across
+`$E000–$FFDF`. A mirror is the same register, side effects included: reading
+`$E010` clears pending IRQs like `$FFF0`, and writing `$E009` triggers a
+command like `$FFE9`. Programs use `$FFE0–$FFFF` only and never touch
+`$E000–$FFDF`.
 
 ### MIA register block (`$FFE0–$FFFF`)
 
