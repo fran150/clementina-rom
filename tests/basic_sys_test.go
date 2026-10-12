@@ -11,8 +11,8 @@ import "testing"
 // returns.
 func TestBasicSYSReturnsNormally(t *testing.T) {
 	dir := t.TempDir()
-	// LDA #$AA / STA $0200 / LDA #$BB / STA $0201 / RTS, loaded at $8000 bank 1.
-	routine := []byte{0xA9, 0xAA, 0x8D, 0x00, 0x02, 0xA9, 0xBB, 0x8D, 0x01, 0x02, 0x60}
+	// LDA #$AA / STA $0280 / LDA #$BB / STA $0281 / RTS, loaded at $8000 bank 1.
+	routine := []byte{0xA9, 0xAA, 0x8D, 0x80, 0x02, 0xA9, 0xBB, 0x8D, 0x81, 0x02, 0x60}
 	writePRG(t, dir, "R.PRG", 0x8000, 1, routine)
 
 	c, step := bootClementinaToPrompt(t)
@@ -25,7 +25,7 @@ func TestBasicSYSReturnsNormally(t *testing.T) {
 	typeLine(c, step, "RUN")
 	editorTickN(c, step, 1_000_000)
 
-	require_eq(t, 0xAA, peek(c, 0x0200), "SYS-called routine ran (first POKE)")
-	require_eq(t, 0xBB, peek(c, 0x0201), "SYS-called routine ran (second POKE)")
+	require_eq(t, 0xAA, peek(c, 0x0280), "SYS-called routine ran (first POKE)")
+	require_eq(t, 0xBB, peek(c, 0x0281), "SYS-called routine ran (second POKE)")
 	require_eq(t, 42, peek(c, 700), "control returned to BASIC after SYS - line 40 ran")
 }

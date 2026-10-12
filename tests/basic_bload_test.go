@@ -25,8 +25,8 @@ func writePRG(t *testing.T, dir, name string, addr uint16, bank byte, payload []
 // confirms it actually starts executing instead of returning to BASIC.
 func TestBasicBLOADSwallowWithRun(t *testing.T) {
 	dir := t.TempDir()
-	// LDA #$2A / STA $0200 / LDA #$99 / STA $0201 / JMP <self>, loaded+run at $6000.
-	prg := []byte{0xA9, 0x2A, 0x8D, 0x00, 0x02, 0xA9, 0x99, 0x8D, 0x01, 0x02, 0x4C, 0x0A, 0x60}
+	// LDA #$2A / STA $0280 / LDA #$99 / STA $0281 / JMP <self>, loaded+run at $6000.
+	prg := []byte{0xA9, 0x2A, 0x8D, 0x80, 0x02, 0xA9, 0x99, 0x8D, 0x81, 0x02, 0x4C, 0x0A, 0x60}
 	writePRG(t, dir, "T.PRG", 0x6000, 0, prg)
 
 	c, step := bootClementinaToPrompt(t)
@@ -35,8 +35,8 @@ func TestBasicBLOADSwallowWithRun(t *testing.T) {
 	typeLine(c, step, "RUN")
 	editorTickN(c, step, 1_000_000)
 
-	require_eq(t, 0x2A, peek(c, 0x0200), "swallow-load program ran (first POKE)")
-	require_eq(t, 0x99, peek(c, 0x0201), "swallow-load program ran (second POKE)")
+	require_eq(t, 0x2A, peek(c, 0x0280), "swallow-load program ran (first POKE)")
+	require_eq(t, 0x99, peek(c, 0x0281), "swallow-load program ran (second POKE)")
 }
 
 // TestBasicBLOADSwallowWithoutRunErrors confirms the same load, without a run
@@ -44,19 +44,19 @@ func TestBasicBLOADSwallowWithRun(t *testing.T) {
 // its next statement.
 func TestBasicBLOADSwallowWithoutRunErrors(t *testing.T) {
 	dir := t.TempDir()
-	prg := []byte{0xA9, 0x2A, 0x8D, 0x00, 0x02, 0x4C, 0x05, 0x60}
+	prg := []byte{0xA9, 0x2A, 0x8D, 0x80, 0x02, 0x4C, 0x05, 0x60}
 	writePRG(t, dir, "T.PRG", 0x6000, 0, prg)
 
 	c, step := bootClementinaToPrompt(t)
 	c.SetMiaSDFolder(dir)
 	typeLine(c, step, `10 BLOAD "T.PRG"`)
-	typeLine(c, step, "20 POKE 512,42")
+	typeLine(c, step, "20 POKE 640,42")
 	typeLine(c, step, "30 GOTO 30")
 	typeLine(c, step, "RUN")
 	editorTickN(c, step, 1_000_000)
 
-	require_eq(t, 0, peek(c, 512), "line 20 never ran - BLOAD was rejected before writing")
-	require_eq(t, 0, peek(c, 0x0200), "destination untouched - rejected before writing")
+	require_eq(t, 0, peek(c, 640), "line 20 never ran - BLOAD was rejected before writing")
+	require_eq(t, 0, peek(c, 0x0280), "destination untouched - rejected before writing")
 }
 
 // TestBasicBLOADBankedAutoAdvance loads a 16-byte payload starting 8 bytes before
@@ -74,13 +74,13 @@ func TestBasicBLOADBankedAutoAdvance(t *testing.T) {
 	for _, l := range []string{
 		`10 BLOAD "B.PRG"`,
 		"20 POKE 49153,5",
-		"30 POKE 512,PEEK(49144)", // $BFF8, first byte -> 1
-		"40 POKE 513,PEEK(49151)", // $BFFF, last byte of bank 5 -> 8
+		"30 POKE 640,PEEK(49144)", // $BFF8, first byte -> 1
+		"40 POKE 641,PEEK(49151)", // $BFFF, last byte of bank 5 -> 8
 		"50 POKE 49153,6",
-		"60 POKE 514,PEEK(32768)", // $8000, first byte of bank 6 -> 9
-		"70 POKE 515,PEEK(32775)", // $8007, last byte of payload -> 16
+		"60 POKE 642,PEEK(32768)", // $8000, first byte of bank 6 -> 9
+		"70 POKE 643,PEEK(32775)", // $8007, last byte of payload -> 16
 		"80 POKE 49153,0",
-		"90 POKE 516,42",
+		"90 POKE 644,42",
 		"100 GOTO 100",
 	} {
 		typeLine(c, step, l)
@@ -88,11 +88,11 @@ func TestBasicBLOADBankedAutoAdvance(t *testing.T) {
 	typeLine(c, step, "RUN")
 	editorTickN(c, step, 1_000_000)
 
-	require_eq(t, 42, peek(c, 516), "BASIC resumed normally after an ordinary banked BLOAD")
-	require_eq(t, 1, peek(c, 512), "bank 5 first byte")
-	require_eq(t, 8, peek(c, 513), "bank 5 last byte")
-	require_eq(t, 9, peek(c, 514), "auto-advanced into bank 6, first byte")
-	require_eq(t, 16, peek(c, 515), "bank 6, last payload byte")
+	require_eq(t, 42, peek(c, 644), "BASIC resumed normally after an ordinary banked BLOAD")
+	require_eq(t, 1, peek(c, 640), "bank 5 first byte")
+	require_eq(t, 8, peek(c, 641), "bank 5 last byte")
+	require_eq(t, 9, peek(c, 642), "auto-advanced into bank 6, first byte")
+	require_eq(t, 16, peek(c, 643), "bank 6, last payload byte")
 }
 
 // TestBasicBSAVEUnbankedRoundTrip writes a small unbanked blob with BSAVE and
