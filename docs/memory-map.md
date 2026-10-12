@@ -469,7 +469,9 @@ window's data port.
 
 Rules for programs:
 
-- `$00-$4F` are yours. Nothing else sets or moves them.
+- `$00-$4F` are yours. Nothing else sets or moves them. The SDK game runtime
+  (`clementina-sdk` `packages/runtime`) is part of the program that links it
+  and takes `$40`/`$41` from this range.
 - The MIA-owned ids are the documented way to reach video, input, audio and SD
   memory, so programs use them too. The kernel and BASIC use them as well and
   re-seek before each use, so their current address does not survive a kernel
