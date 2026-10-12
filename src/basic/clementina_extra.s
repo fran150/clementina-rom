@@ -2704,7 +2704,8 @@ BASIC_TRACK:
         jmp     @gotbase
 @defaultbase:
         ; TRK_BASE = $014000 + voice * $001000, BASIC's own default. MIA has
-        ; none; this range stays clear of SD/FS state at $13000-$13BFF.
+        ; none; $14000 is the start of the programs' block of MIA RAM
+        ; (docs/memory-map.md §12).
         lda     #$00
         sta     TRK_BASE
         lda     #$01
