@@ -102,7 +102,7 @@ except the `KERN_LOAD` scratch, which `src/kernel/load.s` names.
 | `$F2` | `KTMP` | 2 | Scratch. Holds the computed overlay offset `P = CURSOR_Y*40 + CURSOR_X`, then the 24-bit overlay address low/mid. `KERN_LOAD` takes its run address here. |
 | `$F4` | `KCNT` | 2 | 16-bit loop counter for screen fills. |
 | `$F6` | `KCHR` | 1 | Scratch copy of the byte passed to `CHROUT`, so the routine can preserve A/X/Y while still repositioning MIA indexes. |
-| `$F7` | `KJIFFY` | 2 | Free-running 16-bit LE tick counter, `+1` per VIA Timer 1 IRQ (≈160 Hz at 1 MHz PHI2, scales with PHI2). Wraps silently. Published in `kernel.inc`; read-only for clients. |
+| `$F7` | `KJIFFY` | 2 | Free-running 16-bit LE tick counter, `+1` per VIA Timer 1 IRQ, which is once per 6250 PHI2 cycles (≈160 Hz at 1 MHz). It follows the CPU clock, so it measures CPU work, not wall time; use `TI`/`TICKS` (MIA's timer) for wall time. Wraps silently (every 65,536 ticks, ≈7 min at 1 MHz) and stops while IRQs are masked or Timer 1's IRQ is off. Read it high, low, high, and retry if the high byte changed, since the IRQ can carry between the two bytes. Published in `kernel.inc`; read-only for clients. |
 | `$F9` | `KLOAD_BANK` | 1 | `KERN_LOAD`: current destination bank, 0 = unbanked. |
 | `$FA` | `KLOAD_CHUNKLEN` | 1 | `KERN_LOAD`: bytes read this round. |
 | `$FB` | `KLOAD_SCRATCH` | 1 | `KERN_LOAD`: header and boundary scratch. |
@@ -187,15 +187,15 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 
 ---
 
-## 6. Kernel jump table (`$04B7–$04E0`)
+## 6. Kernel jump table (`$04B7–$04E3`)
 
 The **stable ABI**. Each entry is a 3-byte `JMP`. Callers (BASIC, WozMon, user
 programs) bind to these fixed addresses; the routines behind them may move
 freely.
 
 > **2026-09-14 bottom-anchor rework**: the jump table is placed **first** in
-> `clementina.cfg`'s `SEGMENTS` list, so it lands on the bottom 42 bytes of
-> the image — always `$04B7-$04E0`, right after working RAM — no matter how
+> `clementina.cfg`'s `SEGMENTS` list, so it lands on the bottom 45 bytes of
+> the image — always `$04B7-$04E3`, right after working RAM — no matter how
 > large the rest of the image grows. `KERN_BASE` (`kernel.inc`) is the plain
 > fixed constant `$04B7`, a true compile-time constant that never needs
 > bumping. See §8 and §13 for the full picture and the single-pass build
@@ -204,7 +204,7 @@ freely.
 | Addr | Symbol | In | Out | Description |
 | --- | --- | --- | --- | --- |
 | `$04B7` | `KERN_COLDSTART` | — | — | Reset entry. MIA points RESET here. Sets up the machine, console, prints the banner, then enters BASIC. |
-| `$04BA` | `KERN_WARMSTART` | — | — | Re-enter BASIC at the READY prompt, **preserving** the current program and variables. Resets the stack and re-enables interrupts first, so it is safe to reach mid-statement (used by WozMon's `Q` quit command; `BFD3R`-style manual re-entry still works). |
+| `$04BA` | `KERN_WARMSTART` | — | — | Re-enter BASIC at the READY prompt, **preserving** the current program and variables. Resets the stack, puts the kernel's handler back in `IRQ_VEC`, and re-enables interrupts first, so it is safe to reach mid-statement (used by WozMon's `Q` quit command; `BFD3R`-style manual re-entry still works). |
 | `$04BD` | `KERN_CHROUT` | `A`=char | A/X/Y preserved | Write one character to the console at the cursor. Handles CR (`$0D`, newline), LF (`$0A`, ignored), BS (`$08`), FF (`$0C`, clear), the cursor moves (`$11`/`$91`/`$1D`/`$9D`) and HOME (`$13`), printable bytes. |
 | `$04C0` | `KERN_CHRIN` | — | `A`=char | Blocking read of one raw text byte from the MIA FIFO (single key; used by BASIC `GET`). Shows the cursor while waiting and updates `LAST_KEY`. |
 | `$04C3` | `KERN_GETKEY_NB` | — | `C`=1 & `A`=char, or `C`=0 | Non-blocking read. |
@@ -217,6 +217,7 @@ freely.
 | `$04D8` | `KERN_CHROUT_GLYPH` | `A`=tile | A/X/Y preserved | Write `A` to the console as a raw glyph at the cursor, bypassing control-code handling (so high tiles that collide with codes like `$0D` still draw). |
 | `$04DB` | `KERN_WOZMON` | — | (does not return) | Enter the WOZ monitor (`src/monitor/wozmon-clementina.s`). Examine/deposit memory and run code; quit back to BASIC with `Q` (runs `KERN_WARMSTART`). Invoke from BASIC with `MON`; the older `USR` vector method still works. |
 | `$04DE` | `KERN_SET_BACKDROP` | `A`=selector | — | Write the backdrop selector to `VIDX_BACKDROP_COLOR` (IRQ-safe tail call). |
+| `$04E1` | `KERN_IRQ` | A/X/Y as at interrupt entry | (returns from the interrupt) | The kernel's IRQ handler, for chaining: a program's own handler ends with `JMP KERN_IRQ` so the kernel keeps counting `KJIFFY`, blinking the cursor and clearing MIA's IRQ status. See "Taking over the IRQ" below. |
 
 > **2026-10-11**: the `KERN_STOP` (`$04C6`) and `KERN_SAVE` (`$04D8`) stubs
 > were removed and every later entry moved down 3 or 6 bytes. Neither ever did
@@ -234,7 +235,34 @@ freely.
 
 ---
 
-## 7. Kernel code and data (right after the jump table, from `$04E1`)
+### Taking over the IRQ
+
+At reset the kernel starts VIA Timer 1 (an IRQ every 6250 PHI2 cycles), puts
+its handler in `IRQ_VEC` (`$FFFE`) and enables interrupts. This stays on after
+a program replaces BASIC. The handler takes 65-73 cycles per tick (about 1% of
+the CPU) and only touches `KJIFFY`, the cursor blink variables (`$037E-$037F`)
+and, while `CHRIN` waits, the cursor.
+
+A program has three options:
+
+- **Leave it.** Nothing to do.
+- **Stop it.** Write `$40` to `VIA_IER` (`$C00E`) to turn off only the Timer 1
+  IRQ, or `SEI` to mask every IRQ. `KJIFFY` and the cursor blink stop with it.
+- **Chain to it.** Point `IRQ_VEC` at the program's own handler (with IRQs
+  masked while writing the two bytes). The handler does its work, restores A,
+  X and Y to their values at entry, and ends with `JMP KERN_IRQ`, which saves
+  them again, does the kernel's work and returns with `RTI`. Two rules:
+  - If the handler wants MIA's interrupts, it reads `IRQ_STATUS_H` and then
+    `IRQ_STATUS_L` before chaining, because the kernel's handler read-clears
+    them.
+  - If it uses MIA's index windows or `CFG_SELECT`, it brackets that work
+    with `MIA_CTX` push and pop (§11), as the kernel does.
+
+Put the kernel's handler back before returning to BASIC with `RTS`, or the
+vector may point into memory BASIC reuses. `KERN_WARMSTART` and reset restore
+it automatically.
+
+## 7. Kernel code and data (right after the jump table, from `$04E4`)
 
 Internal routines (`KERNCODE`/`RODATA`/`WOZCODE` segments). These addresses
 are **not** ABI; reach them only through the jump table. The kernel+WozMon
@@ -265,9 +293,10 @@ internal routines:
   indexes `$F0-$F3` copy the overlay nametable and attributes up by one row,
   then the last row is blanked through `$B8/$B9`.
 - `via_init` — initialize the 65C22 VIA: Port A selects external RAM bank 0,
-  and Timer 1 free-runs as the kernel cursor blink tick.
-- `irq_handler` / `nmi_handler` — `irq_handler` read-clears MIA `IRQ_STATUS_L`,
-  dispatches VIA Timer 1 ticks, and toggles the cursor only while `CHRIN` is
+  and Timer 1 free-runs as the kernel tick (`KJIFFY` and the cursor blink).
+- `irq_handler` / `nmi_handler` — `irq_handler` (also `KERN_IRQ`, §6)
+  read-clears MIA `IRQ_STATUS_L`, counts VIA Timer 1 ticks in `KJIFFY`, and
+  toggles the cursor only while `CHRIN` is
   polling for input. The toggle is bracketed by `MIA_CTX` push and pop (§11),
   so the code it interrupts finds window A and `CFG_SELECT` as it left them.
 - `mia_mem_*` (`memory.s`) — raw MIA RAM read, write, copy, fill, and the
@@ -289,7 +318,7 @@ more. See `docs/basic-sound.md` and `clementina-mia`'s
 `docs/audio-sequencer.md`.
 
 `DIR_NAME_BUF` (40 bytes, `$048F–$04B6`), defined as a plain equate in
-`src/basic/clementina_extra.s` exactly like `KVARS`/`KJIFFY` — never part of
+`src/basic/clementina_extra.s` — never part of
 the loaded image, so it costs no ROM bytes — is a transient scratch buffer
 `DIR` (`docs/basic-file.md`) reads one directory entry's name into before
 printing any of it. It kept its address (rather than sliding down into the

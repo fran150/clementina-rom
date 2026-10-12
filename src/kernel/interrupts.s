@@ -51,6 +51,11 @@ via_init:
 ; ----------------------------------------------------------------------------
 ; Interrupt handlers
 ; ----------------------------------------------------------------------------
+; irq_handler is also KERN_IRQ: a program that points IRQ_VEC at its own
+; handler chains here with JMP KERN_IRQ, after restoring A/X/Y to their values
+; at interrupt entry. This handler saves them, does the kernel's work and RTIs.
+; It read-clears MIA's IRQ_STATUS, so a handler that wants MIA's interrupts
+; reads IRQ_STATUS before chaining.
 irq_handler:
         pha
         phx
@@ -65,7 +70,7 @@ irq_handler:
         beq @done
         lda VIA_T1CL            ; clear the Timer 1 IFR bit
 
-        inc KJIFFY              ; free-running tick counter (timeouts)
+        inc KJIFFY              ; CPU-work tick counter for programs
         bne @jiffy_ok
         inc KJIFFY+1
 @jiffy_ok:

@@ -71,9 +71,10 @@ VIA_IFR_T1          = %01000000
 VIA_IER_SET         = %10000000
 
 ; At 1 MHz PHI2, 6250 cycles gives a 6.25 ms tick (~160 Hz); 80 ticks gives a
-; classic half-second cursor blink. If PHI2 changes, both follow it. The tick is
-; deliberately fine so KJIFFY-based timing (BASIC PLAY) has low quantization
-; error; the IRQ is short, so ~160 Hz costs well under 1% of the CPU.
+; classic half-second cursor blink. If PHI2 changes, both follow it, so KJIFFY
+; counts CPU work (one tick per 6250 cycles), not wall time; programs that need
+; wall time use MIA's timer (TI, TICKS). The IRQ costs 65-73 cycles per tick
+; (73 while the cursor blinks), about 1% of the CPU.
 VIA_T1_RELOAD       = 6250
 CURSOR_BLINK_TICKS  = 80
 
@@ -266,7 +267,7 @@ CHR_INSERT          = $94      ; editor: open a gap at the cursor (insert space)
 ; program can safely overwrite once it no longer needs BASIC. See
 ; docs/memory-map.md.
 ; ----------------------------------------------------------------------------
-KERN_JUMPTAB_SIZE  = $2A       ; 14 entries x 3 bytes - keep in sync with kernel.s
+KERN_JUMPTAB_SIZE  = $2D       ; 15 entries x 3 bytes - keep in sync with kernel.s
 KERN_BASE          = $04B7
 KERN_COLDSTART     = KERN_BASE + $00   ; reset entry (MIA points RESET here)
 KERN_WARMSTART     = KERN_BASE + $03   ; re-enter the system
@@ -282,6 +283,8 @@ KERN_EDITKEY       = KERN_BASE + $1E   ; screen editor: next char of edited line
 KERN_CHROUT_GLYPH  = KERN_BASE + $21   ; A = tile -> console as a raw glyph (no ctrl)
 KERN_WOZMON        = KERN_BASE + $24   ; enter the WOZ monitor (see src/monitor)
 KERN_SET_BACKDROP  = KERN_BASE + $27   ; A = backdrop selector -> VIDX_BACKDROP_COLOR
+KERN_IRQ           = KERN_BASE + $2A   ; kernel IRQ handler; a program's own handler
+                                       ; restores A/X/Y, then JMPs here to chain
 
 ; ----------------------------------------------------------------------------
 ; Zero page map (docs/memory-map.md §2):
@@ -299,11 +302,12 @@ ZP_FREE_END        = $00DF   ; last zero-page byte free for programs
 ; what is published here; the rest is private kernel scratch.
 ; ----------------------------------------------------------------------------
 KJIFFY             = $00F7   ; free-running 16-bit LE tick counter, +1 per VIA
-                             ; Timer-1 IRQ (~6250 PHI2 cycles; ~160 Hz at 1 MHz
-                             ; PHI2, and it scales with PHI2). Wraps silently.
-                             ; Read-only for clients. Read it high/low/high (retry
-                             ; on high-byte change); the IRQ can carry mid-read.
-                             ; Used by BASIC PLAY timing.
+                             ; Timer-1 IRQ, i.e. once per 6250 PHI2 cycles (~160 Hz
+                             ; at 1 MHz), so it measures CPU work, not wall time.
+                             ; Wraps silently. Stops while IRQs are masked or
+                             ; Timer 1's IRQ is off. Read-only for clients. Read it
+                             ; high/low/high (retry on high-byte change); the IRQ
+                             ; can carry mid-read.
 
 ; ----------------------------------------------------------------------------
 ; Kernel variable page ($0300-$03FF). See docs/memory-map.md.
