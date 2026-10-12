@@ -65,6 +65,9 @@ with tempfile.TemporaryDirectory(prefix='clementina-input-test-') as directory:
     (temp / 'commands.go').write_text(command_source.replace(transfer, guard + transfer))
     overlay['Replace'][str(commands)] = str(temp / 'commands.go')
     (temp / 'overlay.json').write_text(json.dumps(overlay))
+    # The default suite runs for most of Go's default 10-minute limit, and the
+    # emulator's own tests (--run .) push the package past it.
     subprocess.run(['go', 'test', '-overlay', str(temp / 'overlay.json'),
-                    './pkg/computers/clementina', './pkg/components/mia', '-run', args.run, '-count=1'],
+                    './pkg/computers/clementina', './pkg/components/mia', '-run', args.run, '-count=1',
+                    '-timeout', '30m'],
                    cwd=emulator, check=True)
