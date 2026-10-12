@@ -181,10 +181,6 @@ MIA_SEQ_OP_JUMP      = $08
 AUD_SEQ_STATUS_RUNNING = $01   ; SEQ_STATUS bit 0 (PLAYING)
 AUD_SEQ_STATUS_TAKEN   = $02   ; SEQ_STATUS bit 1
 
-; Kernel free-running tick counter (16-bit LE, ~16 Hz at 1 MHz PHI2). Keep in
-; sync with KJIFFY in src/kernel/kernel.inc. PLAY uses it for note timing.
-KJIFFY            = $00F7
-
 BASIC_COLD_START:
         jsr basic_input_reset
         jmp COLD_START

@@ -46,9 +46,10 @@ runs entirely on MIA's own sequencer and needs none of this to keep advancing
 through DELAY - the 6502 isn't involved once it starts. Ctrl-C, `STOP`, `END`,
 a runtime error, and `NEW` all still stop it, the same safety net the old
 foreground/background `PLAY` had (now `seq_stop_all`, issuing `AUDIO_SEQ_STOP`
-for every voice instead of clearing 6502-side player state). The older
-KJIFFY/VIA clock is unchanged and still scales with CPU speed; it now drives
-only cursor blink. The new wall-time clock does not retime anything.
+for every voice instead of clearing 6502-side player state). The kernel's VIA
+Timer 1 tick (`KJIFFY`) still scales with CPU speed; BASIC no longer uses it.
+It drives the cursor blink and stays available to machine code as a CPU-work
+counter (`docs/memory-map.md` §2). The wall-time clock does not retime anything.
 
 ## TI variable semantics
 

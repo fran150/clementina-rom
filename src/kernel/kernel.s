@@ -65,6 +65,7 @@ jumptab_start:
         jmp chrout_glyph        ; KERN_CHROUT_GLYPH
         jmp WOZMON              ; KERN_WOZMON
         jmp set_backdrop        ; KERN_SET_BACKDROP
+        jmp irq_handler         ; KERN_IRQ
 
 ; Compile-time guard: confirm the table is exactly KERN_JUMPTAB_SIZE bytes
 ; (kernel.inc) - a relative check, independent of where the linker ends up
@@ -139,13 +140,19 @@ coldstart:
 ; warmstart - re-enter BASIC preserving the current program (READY prompt).
 ; Reachable from the jump table and used as WozMon's "quit" target: the user may
 ; arrive here mid-statement (e.g. after `403R` from the monitor), so reset the
-; stack, restore BASIC's Extended RAM bank, and re-enable interrupts before
-; handing control back to BASIC.
+; stack, reinstall the kernel's IRQ handler, restore BASIC's Extended RAM bank,
+; and re-enable interrupts before handing control back to BASIC.
 ; ----------------------------------------------------------------------------
 warmstart:
         sei
         ldx #$FF
         txs
+        ; A program may have pointed IRQ_VEC at its own handler, which BASIC
+        ; can overwrite from here on; put the kernel's handler back.
+        lda #<irq_handler
+        sta IRQ_VEC
+        lda #>irq_handler
+        sta IRQ_VEC+1
         jsr exram_select_basic_bank
         cli
         jmp BASIC_WARM_START
