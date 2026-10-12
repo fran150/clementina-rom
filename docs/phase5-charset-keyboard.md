@@ -80,8 +80,10 @@ Clementina uses **256 distinct glyphs**, laid out as:
 *distinct* glyphs (not 512). The user supplies this charset image. The kernel
 already points the overlay-alt bank at bank 1 (`video.s` `video_init`,
 `VIDEO_CHR_BANK_GRAPHICS`), so `CHR_ALT` (the pen's reverse bit) renders bank 1 —
-**no kernel change was needed for reverse.** Whatever art sits in bank 1 is what a
-reversed cell shows; if a bank-1 slot is blank, reversing that glyph shows blank.
+**no kernel change was needed for reverse.** Rule: bank 1 is the exact reverse of
+bank 0 for all 256 glyphs, blanks included (a blank glyph reverses to a solid
+block), so every glyph reverses in every glyph mode. The emulator test
+`TestClasciiReverseBankIsExactReverse` checks the shipped charset against it.
 
 **Charset format and loading (5a, done).** The shipped charset is
 `assets/computer/mia/charsets/clascii.bin`, a **flat dump of the whole CHR region**
@@ -336,7 +338,7 @@ Display rules:
 | `$00–$1F`, `$80–$FF` | graphics glyphs (reached via modes 1/2) |
 | `$F8–$FF` | cursor indicator art (also *typeable* in mode 2 — dual-use) |
 | `$7F`, `$DF` | unreachable by typing — leave blank/throwaway |
-| bank 1 (all) | CHR_ALT / reverse set (ideally reversed copies of bank 0; in the shipped clascii it is an independent set) |
+| bank 1 (all) | CHR_ALT / reverse set: the exact reverse of every bank 0 glyph |
 
 Note `$F8–$FF` are reachable in mode 2 (`ascii $38–$3F` → `$F8–$FF`), so typing those
 in mode 2 paints the cursor art. Either accept the dual use or place sensible
@@ -420,8 +422,8 @@ Verified during implementation:
 ## 7. MIA / charset / client side
 
 - **Charset assets** — `clascii.bin` is a flat 8-bank CHR dump (bank 0 = the 256
-  glyphs, ASCII at `$20–$7E`, cursor art at `$F8–$FF`; bank 1 = the CHR_ALT/reverse
-  set). Typing leaves `$7F` and `$DF` unreachable (§4.2) — leave them blank. Author
+  glyphs, ASCII at `$20–$7E`, cursor art at `$F8–$FF`; bank 1 = the exact reverse
+  of bank 0). Typing leaves `$7F` and `$DF` unreachable (§4.2) — leave them blank. Author
   via `tools/tile-editor.html`, export "CHR — all 8 banks", and name the asset
   `clascii.bin`.
 - **Kernel config** — already done: the overlay-alt bank = bank 1 (`video_init`), so
@@ -513,11 +515,9 @@ Build/verify mirrors styled-strings: `make` builds `build/kernel.bin`,
   the editor echo and `STRPRT_STYLED` through it (§6.1).
 - **Resolved — persistence.** Pen + glyph mode persist within a session; reset only
   via `ESC SPACE` / cold start.
-- **Open — bank 1 content.** The shipped `clascii.bin` does **not** carry strict
-  reversed copies of bank 0 (e.g. bank-1 `'A'` is blank); it's an independently
-  authored alternate set. So `ESC R` shows whatever art is in bank 1, which may be
-  blank for some glyphs. If full reverse coverage is wanted, fill bank 1 with the
-  inverted bank-0 glyphs in `tools/tile-editor.html`.
+- **Resolved — bank 1 content.** Bank 1 is the exact reverse of bank 0. The last
+  two gaps, `$80` and `$E0` (the space glyph in glyph modes 1 and 2), now reverse
+  to solid blocks like `$20` does in mode 0.
 - **Open — tile editor reverse-bank authoring.** Convenience for generating bank 1
   as the inverse of bank 0 is not yet in the editor.
 - **Open — Paint stamping the glyph too** (currently attribute-only). Default no.
