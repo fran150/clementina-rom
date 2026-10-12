@@ -70,10 +70,13 @@ func TestBasicTimingBackgroundMusic(t *testing.T) {
 	editorTickN(c, step, 300_000)
 	audio := c.chips.mia.(audioAdvancer)
 	audio.DebugSetAudioActive(true)
-	audio.DebugAudioReadPCM(2000) // inside the first quarter note (T80: 80 ticks x 150 samples)
+	// A T80 quarter note is 80 kernel ticks x 150 = 12000 sequencer ticks. MIA
+	// renders 48 kHz frames on a 24 kHz sequencer tick, so a tick is two frames.
+	const framesPerTick = 2
+	audio.DebugAudioReadPCM(2000 * framesPerTick) // tick 2000: inside the first note
 	first, _, _, _ := audio.DebugAudioVoiceState(0)
 	editorTickN(c, step, 600_000)
-	audio.DebugAudioReadPCM(12000) // cumulative 14000: inside the second note
+	audio.DebugAudioReadPCM(12000 * framesPerTick) // cumulative tick 14000: inside the second note
 	second, _, _, _ := audio.DebugAudioVoiceState(0)
 	if first == second {
 		t.Fatal("music stopped advancing during delay")
