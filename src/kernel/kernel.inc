@@ -46,7 +46,7 @@ MIA_CTX_PUSH       = $01
 MIA_CTX_POP        = $02
 INPUT_STATUS_SOURCE_CONSOLE  = %00100000
 INPUT_STATUS_SOURCE_WIFI     = %01000000
-INPUT_STATUS_SOURCE_USB_HOST = %10000000
+INPUT_STATUS_SOURCE_USB_HOST = %10000000  ; reserved for a later board's USB keyboard
 
 ; ----------------------------------------------------------------------------
 ; 65C22 VIA in I/O slot 0 ($C000-$C3FF). Registers mirror every 16 bytes.
