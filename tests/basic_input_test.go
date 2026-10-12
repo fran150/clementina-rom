@@ -111,11 +111,11 @@ func inputScreen(c *ClementinaComputer) string {
 // line (80 characters, two full rows), numbered and direct, and checks BASIC
 // keeps every character: the stored line LISTs whole and runs to its last
 // statement. The long line goes in between two others, so the program's links
-// must survive the insertion. BASIC's line buffer is at $0200, so the old
-// zero-page buffer, $13-$5A, must stay untouched throughout.
+// must survive the insertion. The zero page promised to programs, $98-$DF,
+// must stay untouched throughout.
 func TestBasicInputLongLine(t *testing.T) {
 	c, step := bootClementinaToPrompt(t)
-	for a := 0x13; a <= 0x5A; a++ {
+	for a := 0x98; a <= 0xDF; a++ {
 		c.chips.baseram.Poke(uint16(a), 0xA5)
 	}
 	long := `10 A$="` + strings.Repeat("X", 55) + `":POKE 640,LEN(A$)`
@@ -154,7 +154,7 @@ func TestBasicInputLongLine(t *testing.T) {
 	require_eq(t, 9, peek(c, 643), "last line ran")
 	typeLong(direct)
 	require_eq(t, 58, peek(c, 641), "80-character direct line ran to its last statement")
-	for a := 0x13; a <= 0x5A; a++ {
+	for a := 0x98; a <= 0xDF; a++ {
 		require_eq(t, 0xA5, peek(c, uint32(a)), fmt.Sprintf("zero page $%02X written", a))
 	}
 }
@@ -175,4 +175,49 @@ func TestBasicInputAfterWarmStart(t *testing.T) {
 	typeLine(c, step, "42")
 	editorTickN(c, step, 500_000)
 	require_eq(t, 42, peek(c, 644), "INPUT after a warm start returned to its program")
+}
+
+// TestBasicZeroPageProgramBlock fills the zero page promised to programs,
+// $98-$DF, runs a program that uses strings, floats, INPUT, FOR and GOSUB,
+// then visits WozMon, stores and examines memory there, and quits back to
+// BASIC. The block must come back untouched. The program and its variables
+// must survive the trip too: WozMon keeps its variables at $E8-$EF, clear of
+// BASIC's $00-$97.
+func TestBasicZeroPageProgramBlock(t *testing.T) {
+	c, step := bootClementinaToPrompt(t)
+	for a := 0x98; a <= 0xDF; a++ {
+		c.chips.baseram.Poke(uint16(a), 0xA5)
+	}
+	typeLine(c, step, `10 A$="X"+STR$(3.25):INPUT B`)
+	typeLine(c, step, "20 GOSUB 50:POKE 644,B")
+	typeLine(c, step, "30 POKE 645,LEN(A$)")
+	typeLine(c, step, "40 END")
+	typeLine(c, step, "50 FOR I=1 TO 3:PRINT A$;I*1.5:NEXT:RETURN")
+	typeLine(c, step, "RUN")
+	typeLine(c, step, "7")
+	editorTickN(c, step, 500_000)
+	require_eq(t, 7, peek(c, 644), "program ran")
+	require_eq(t, 6, peek(c, 645), "string built before INPUT")
+	typeLine(c, step, "MON")
+	typeLine(c, step, "290: 2A 2B")
+	typeLine(c, step, "280.29F")
+	typeLine(c, step, "Q")
+	require_eq(t, 0x2A, peek(c, 0x290), "WozMon stored the first byte")
+	require_eq(t, 0x2B, peek(c, 0x291), "WozMon stored the second byte")
+	typeLine(c, step, "POKE 646,B")
+	require_eq(t, 7, peek(c, 646), "variable B survived WozMon")
+	typeLine(c, step, "CLS:LIST")
+	screen := inputScreen(c)
+	for _, want := range []string{"20 GOSUB 50:POKE 644,B", "50 FOR I=1 TO 3"} {
+		if !strings.Contains(screen, want) {
+			t.Fatalf("LIST after WozMon lost %q:\n%s", want, screen)
+		}
+	}
+	typeLine(c, step, "RUN")
+	typeLine(c, step, "9")
+	editorTickN(c, step, 500_000)
+	require_eq(t, 9, peek(c, 644), "program ran again after WozMon")
+	for a := 0x98; a <= 0xDF; a++ {
+		require_eq(t, 0xA5, peek(c, uint32(a)), fmt.Sprintf("zero page $%02X written", a))
+	}
 }

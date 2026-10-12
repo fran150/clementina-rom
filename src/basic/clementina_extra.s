@@ -36,6 +36,13 @@ KERN_SET_BACKDROP = $04DE
 KPTR              = $F0
 KTMP              = $F2
 
+; Zero page map (docs/memory-map.md §2): BASIC $00-$97, programs $98-$DF,
+; system $E0-$FF. BASIC's last zero-page byte ends the CHRGET routine that
+; init copies there. Z14 needs its own byte, not TEMPPT's (defines_clementina.s).
+ZP_FREE_START     = $98    ; keep in sync with src/kernel/kernel.inc
+.assert CHRGET + GENERIC_CHRGET_END - GENERIC_CHRGET <= ZP_FREE_START, error, "BASIC's zero page grew into the program block"
+.assert Z14 < TEMPPT, error, "Z14 shares a byte with TEMPPT"
+
 ; VIA Port A output register - selects the Extended RAM bank mapped at
 ; $8000-$BFFF (PA0-PA4, see kernel.inc). BSAVE selects a bank directly
 ; (it never runs through the kernel); KERN_LOAD has its own copy.

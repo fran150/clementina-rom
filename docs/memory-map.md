@@ -34,7 +34,7 @@ CPU: **65C02S** (the `STZ`, `BRA`, `PHX/PLX`, etc. extensions are available).
 
 | Range | Use |
 | --- | --- |
-| `$0000–$00FF` | Zero page (shared by kernel / BASIC / WozMon — §2) |
+| `$0000–$00FF` | Zero page: BASIC `$00–$97`, programs `$98–$DF`, system `$E0–$FF` (§2) |
 | `$0100–$01FF` | CPU stack (§3) |
 | `$0200–$02FF` | Line input buffers, BASIC's and WozMon's (§4) |
 | `$0300–$03FF` | Kernel variables and vectors (§5) |
@@ -68,35 +68,44 @@ unmapping its own next instruction.
 
 ## 2. Zero page (`$0000–$00FF`)
 
-Zero page is a shared, contended resource. The plan:
+Zero page is split into three contiguous blocks: BASIC at the bottom, a block
+free for programs in the middle, and the system (kernel and WozMon) at the
+top.
 
-- **BASIC** owns the low and middle zero page. Its layout is set by
-  `ZP_START1..4` and `STACK_TOP` in `src/basic/defines_clementina.s` and laid
-  out in `src/basic/zeropage.s`. In practice BASIC uses roughly `$00–$DF`,
-  except `$13–$5A`: unused (was BASIC's input buffer, which now lives at
-  `$0200`, §4).
-- **The kernel** keeps a small block high, `$00F0–$00FB`, so it never collides
-  with BASIC. The kernel uses very little zero page because its I/O is done
-  through absolute MIA registers.
-- **WozMon** uses `$24–$2B`, inside `$13–$5A` (BASIC's former input buffer).
-  WozMon and BASIC are not active at the same time; entering one
-  re-initializes what it needs.
+| Range | Owner | Notes |
+| --- | --- | --- |
+| `$00–$97` | BASIC | Laid out by `ZP_START1..4` in `src/basic/defines_clementina.s` and `src/basic/zeropage.s`. Ends with the `CHRGET` routine (`$7B–$97`) that cold start copies there. |
+| `$98–$DF` | Programs | 72 bytes. BASIC, WozMon and the kernel never touch them, so machine code called from BASIC (`SYS`, `USR`) can keep state here across calls. `ZP_FREE_START`/`ZP_FREE_END` in `kernel.inc`. |
+| `$E0–$E7` | System | Spare. Kept next to the programs' block so it can be handed to programs later without splitting it. |
+| `$E8–$EF` | WozMon | Its eight variables (`XAML` … `MODE`), used only while it runs. Outside BASIC's block, so `MON` … `Q` keeps the program and its variables. |
+| `$F0–$FF` | Kernel | `$F0–$FB` used (table below), `$FC–$FF` spare. |
+
+Rules:
+
+- Machine code that returns to BASIC uses only `$98–$DF`. Anything else it
+  borrows it must restore before returning.
+- A program that replaces BASIC (loaded over it, §8) may also use `$00–$97`,
+  but leaves `$E0–$FF` alone: the kernel IRQ updates `KJIFFY`, and
+  `KERN_LOAD` takes its parameters in `KPTR`/`KTMP`.
+- BASIC must not grow past `$97`; an `.assert` in
+  `src/basic/clementina_extra.s` fails the build if it does. The kernel grows
+  into its spare bytes first, then into `$E0–$E7`.
 
 ### Kernel zero page (`$00F0–$00FB`)
 
-Defined in the `ZEROPAGE` segment of [`src/kernel/kernel.s`](../src/kernel/kernel.s).
+Defined in the `KZEROPAGE` segment of [`src/kernel/kernel.s`](../src/kernel/kernel.s),
+except the `KERN_LOAD` scratch, which `src/kernel/load.s` names.
 
 | Addr | Name | Size | Description |
 | --- | --- | --- | --- |
-| `$F0` | `KPTR` | 2 | General 16-bit pointer. Used by `PRSTR` as the string source. Not touched by `cursor_to_idxa`, so it survives a `PRSTR → CHROUT` call chain. |
-| `$F2` | `KTMP` | 2 | Scratch. Holds the computed overlay offset `P = CURSOR_Y*40 + CURSOR_X`, then the 24-bit overlay address low/mid. |
+| `$F0` | `KPTR` | 2 | General 16-bit pointer. Used by `PRSTR` as the string source. Not touched by `cursor_to_idxa`, so it survives a `PRSTR → CHROUT` call chain. `KERN_LOAD` takes its destination override here. |
+| `$F2` | `KTMP` | 2 | Scratch. Holds the computed overlay offset `P = CURSOR_Y*40 + CURSOR_X`, then the 24-bit overlay address low/mid. `KERN_LOAD` takes its run address here. |
 | `$F4` | `KCNT` | 2 | 16-bit loop counter for screen fills. |
 | `$F6` | `KCHR` | 1 | Scratch copy of the byte passed to `CHROUT`, so the routine can preserve A/X/Y while still repositioning MIA indexes. |
 | `$F7` | `KJIFFY` | 2 | Free-running 16-bit LE tick counter, `+1` per VIA Timer 1 IRQ (≈160 Hz at 1 MHz PHI2, scales with PHI2). Wraps silently. Published in `kernel.inc`; read-only for clients. |
-| `$F9–$FB` | — | 3 | Reserved for the kernel. |
-
-> Allocation rule: BASIC must not extend past `$EF`; the kernel must not use
-> below `$F0`. If BASIC needs more, shrink the kernel block, not the other way.
+| `$F9` | `KLOAD_BANK` | 1 | `KERN_LOAD`: current destination bank, 0 = unbanked. |
+| `$FA` | `KLOAD_CHUNKLEN` | 1 | `KERN_LOAD`: bytes read this round. |
+| `$FB` | `KLOAD_SCRATCH` | 1 | `KERN_LOAD`: header and boundary scratch. |
 
 ---
 
