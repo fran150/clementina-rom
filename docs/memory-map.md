@@ -13,7 +13,7 @@ single authoritative description of what every meaningful address does.
 
 Numbers are hexadecimal unless noted. "MIA RAM" means the 256 KiB internal to
 MIA, reached only through the indexed windows — it is **not** in the 6502
-address space.
+address space. §12 maps it.
 
 ---
 
@@ -442,7 +442,37 @@ All 32 registers, mirrored in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc
 
 ---
 
-## 12. MIA index descriptors
+## 12. MIA RAM and index descriptors
+
+### MIA RAM map
+
+MIA RAM is split at `$14000`. The MIA firmware owns everything below it and
+programs own everything above it. The authoritative table is the "MIA RAM map"
+in `clementina-mia`'s README.
+
+| Range | Size | Owner | Use |
+| --- | --- | --- | --- |
+| `$00000-$10D4F` | 68,944 B | MIA video | Local header and render control, palettes (`$00100`), CHR banks (`$00200`), background nametables and attributes (`$0C200`), overlay (`$10080`), OAM (`$10850`) |
+| `$11000-$1107F` | 128 B | MIA input | Input state; clock snapshot at `$11078-$1107F` |
+| `$12000-$1204F` | 80 B | MIA audio | Audio registers |
+| `$13000-$13BFF` | 3 KiB | MIA SD/FS | Control block and buffers |
+| `$14000-$3FFFF` | 176 KiB | **Programs** | Free. Decimal 81920-262143. |
+
+Rules for programs:
+
+- `$14000-$3FFFF` is yours. The firmware writes there only where a program
+  points it (an index, a DMA copy, an SD transfer, a sequencer track), and no
+  reset clears it. The serial console's `audio seq test` debug command is the
+  one exception: it writes the top 1 KiB.
+- The gaps below `$14000` (`$10D50-$10FFF`, `$11080-$11FFF`, `$12050-$12FFF`,
+  `$13C00-$13FFF`) belong to the firmware, kept for its future state.
+- Write below `$14000` only through the documented video, input, audio and
+  SD/FS layouts.
+- BASIC's `TRACK` puts voice `v` at `$14000 + v * $1000` when no address is
+  given, so a BASIC program with background music shares the start of the
+  block with it.
+
+### Index descriptors
 
 MIA RAM is reached only through index descriptors. A descriptor is a 24-bit
 current address into MIA RAM plus a default address, a limit, a step and flags.
@@ -596,6 +626,7 @@ fixed workspace addresses change. See [BASIC timing](basic-timing.md).
 ## General MIA RAM operations
 
 BASIC `MPEEK`, `MPOKE`, `MCOPY`, and `MFILL` address MIA RAM `$00000–$3FFFF`,
-independently of CPU RAM and VIA bank selection. Kernel scratch descriptors
+independently of CPU RAM and VIA bank selection. Program data goes in
+`$14000–$3FFFF` (§12). Kernel scratch descriptors
 `$F4` and `$F5` are reserved for these operations; argument and temporary bytes
 are linked into the loaded image. See [BASIC MIA memory](basic-memory.md).

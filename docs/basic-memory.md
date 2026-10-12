@@ -2,6 +2,9 @@
 
 These operations address MIA's **256 KiB internal RAM**, not the 6502's address
 space or external banked RAM. Use ordinary `PEEK`/`POKE` for CPU addresses.
+Addresses 81920–262143 (`$14000–$3FFFF`) are free for programs; below that is
+MIA's own video, input, audio and SD state (see
+[memory-map.md §12](memory-map.md)).
 
 | Interface | Arguments | Meaning |
 | --- | --- | --- |
