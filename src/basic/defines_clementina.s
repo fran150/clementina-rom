@@ -24,40 +24,35 @@ CONFIG_SCRTCH_ORDER := 2
 ; the nested PEEK clobbers it without saving/restoring.
 CONFIG_PEEK_SAVE_LINNUM := 1
 
-; zero page (BASIC owns the low/mid zero page; kernel keeps $F0-$FB)
+; zero page: BASIC packs its four blocks into $00-$97, leaving $98-$DF to
+; programs and $E0-$FF to the system (docs/memory-map.md §2). The asserts in
+; clementina_extra.s check both ends.
 ZP_START1 := $00
 ZP_START2 := $0D
-ZP_START3 := $5B
-ZP_START4 := $65
+ZP_START3 := $13
+; The ZP_START3 block is 11 bytes, Z14 (the PRINT output-suppress / CTRL-O
+; flag) last. If ZP_START4 started any earlier, TEMPPT, the temporary-string
+; descriptor stack pointer, would share Z14's byte: every `lsr Z14` (INPUT,
+; warm restart) and `stx Z14` (end of program) would then mangle TEMPPT, and a
+; program that PRINTs string literals inside an INPUT loop would walk TEMPPT
+; down into low zero page, where PUTNEW scribbles string descriptors over the
+; GORESTART / GOSTROUT / USR JMP thunks at $00-$0C and crashes the interpreter.
+ZP_START4 := ZP_START3 + 11
 
 ; extra ZP variables
 USR              := $000A
-
-; Relocate Z14 (the PRINT output-suppress / CTRL-O flag) out of the ZP_START3
-; block. That block is 11 bytes ($5B-$65), so its last byte lands on $65 - the
-; exact address `.org ZP_START4` assigns to TEMPPT, the temporary-string
-; descriptor stack pointer. With Z14 == TEMPPT, every `lsr Z14` (INPUT, warm
-; restart) and `stx Z14` (end of program) silently mangles TEMPPT; a program
-; that PRINTs string literals inside an INPUT loop then walks TEMPPT down into
-; low zero page, and PUTNEW scribbles string descriptors over the GORESTART /
-; GOSTROUT / USR JMP thunks at $00-$0C - crashing the interpreter (typically
-; when RESTART calls the corrupted GOSTROUT). Give Z14 its own byte in the free
-; span above the zero-page CHRGET routine ($C2-$DE) so it no longer aliases
-; TEMPPT. zeropage.s only reserves Z14 in-block when it is not defined here.
-Z14              := $00DF
 
 ; BASIC's line input buffer lives at $0200, the page WozMon also uses for its
 ; line buffer (IN); the two are never active at the same time (leaving WozMon
 ; with Q re-enters BASIC through KERN_WARMSTART). Defining INPUTBUFFER here,
 ; before zeropage.s, selects msbasic's non-zero-page buffer code
 ; (CONFIG_NO_INPUTBUFFER_ZP / CONFIG_INPUTBUFFER_0200, defines.s), the path
-; Applesoft and Commodore BASIC 2 use. $13-$5A, where the buffer used to be,
-; is no longer used by BASIC. Budget (docs/memory-map.md §4): up to INLIN_MAX
-; typed characters at $0200-$024F, the $00 terminator at $0250, and the
-; tokenizer's end-of-program $00 two bytes past it, at most $0252. The four
-; bytes below the buffer, $01FC-$01FF, stage a numbered line's link and line
-; number while it is copied into the program, and $01FF holds INPUT's leading
-; comma; BASIC's stack stays below them (STACK_TOP).
+; Applesoft and Commodore BASIC 2 use. Budget (docs/memory-map.md §4): up to
+; INLIN_MAX typed characters at $0200-$024F, the $00 terminator at $0250, and
+; the tokenizer's end-of-program $00 two bytes past it, at most $0252. The
+; four bytes below the buffer, $01FC-$01FF, stage a numbered line's link and
+; line number while it is copied into the program, and $01FF holds INPUT's
+; leading comma; BASIC's stack stays below them (STACK_TOP).
 INPUTBUFFER      := $0200
 ; Longest line INLIN accepts: the kernel screen editor's logical line
 ; (EDIT_BUF_SIZE in kernel.inc), so a harvested line is never cut short.

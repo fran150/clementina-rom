@@ -22,15 +22,18 @@ KERN_WARMSTART  = $04BA
 KERN_CHROUT     = $04BD
 KERN_CHRIN      = $04C0
 
-; Page 0 variables (overlap BASIC's zero page; only one is active at a time).
-XAML            = $24           ; Last "opened" location Low
-XAMH            = $25           ; Last "opened" location High
-STL             = $26           ; Store address Low
-STH             = $27           ; Store address High
-L               = $28           ; Hex value parsing Low
-H               = $29           ; Hex value parsing High
-YSAV            = $2A           ; Used to see if hex value is given
-MODE            = $2B           ; $00=XAM, $7F=STOR, $AE=BLOCK XAM
+; Page 0 variables, in the system's block ($E8-$EF, docs/memory-map.md §2)
+; instead of the Apple-1's $24-$2B, so a trip through WozMon leaves BASIC's
+; zero page and the programs' block ($98-$DF) untouched. SETADR indexes
+; L-1/STL-1/XAML-1, so keep the eight bytes in this order.
+XAML            = $E8           ; Last "opened" location Low
+XAMH            = $E9           ; Last "opened" location High
+STL             = $EA           ; Store address Low
+STH             = $EB           ; Store address High
+L               = $EC           ; Hex value parsing Low
+H               = $ED           ; Hex value parsing High
+YSAV            = $EE           ; Used to see if hex value is given
+MODE            = $EF           ; $00=XAM, $7F=STOR, $AE=BLOCK XAM
 
 ; Line buffer (shared $0200 page).
 IN              = $0200         ; Input buffer to $027F

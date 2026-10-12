@@ -284,6 +284,17 @@ KERN_WOZMON        = KERN_BASE + $24   ; enter the WOZ monitor (see src/monitor)
 KERN_SET_BACKDROP  = KERN_BASE + $27   ; A = backdrop selector -> VIDX_BACKDROP_COLOR
 
 ; ----------------------------------------------------------------------------
+; Zero page map (docs/memory-map.md §2):
+;   $00-$97  BASIC
+;   $98-$DF  free for programs; BASIC, WozMon and the kernel never touch it
+;   $E0-$E7  spare, reserved for the system
+;   $E8-$EF  WozMon, while it runs
+;   $F0-$FF  kernel ($FC-$FF spare)
+; ----------------------------------------------------------------------------
+ZP_FREE_START      = $0098   ; first zero-page byte free for programs
+ZP_FREE_END        = $00DF   ; last zero-page byte free for programs
+
+; ----------------------------------------------------------------------------
 ; Kernel zero page ($00F0-$00FF, see clementina.cfg KZP). Clients touch only
 ; what is published here; the rest is private kernel scratch.
 ; ----------------------------------------------------------------------------
