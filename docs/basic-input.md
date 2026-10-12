@@ -6,7 +6,7 @@ conversion. Invalid ranges produce an error.
 
 | Statement/function | Meaning |
 | --- | --- |
-| `INPUTMODE n` | Select console (0), Wi-Fi (1), or USB host (2). Errors if unavailable; clears BASIC's input snapshots on success. |
+| `INPUTMODE n` | Select console (0) or Wi-Fi (1). Mode 2 is reserved for a USB keyboard on a later board and always errors on rev 1. Errors if unavailable; clears BASIC's input snapshots on success. |
 | `INPUTDEV(0)` | Live capability mask: keyboard 1, consumer 2, mouse 4; connected gamepads 0–3 use bits 3–6. Console provides text only. |
 | `KEYDOWN(code)` | 1 if keyboard HID usage 0–255 is held, otherwise 0. |
 | `CONSDOWN(code)` | Same query for consumer-page HID usage 0–255. |

@@ -157,8 +157,10 @@ the firmware/emulator asset. The table above is the stable user-facing mapping.
 ### 3.1 Three sources, one byte stream
 
 Input arrives from one of three **mutually exclusive** sources (only one owns input
-at a time): **WiFi client**, **USB host**, **Console**. Regardless of source, the
-kernel reads one unified thing — the **text FIFO**:
+at a time): **WiFi client**, **USB host**, **Console**. USB host is reserved for a
+USB keyboard on a later board; rev 1 is powered through the Pico's USB port, so MIA
+reports that mode unavailable. Regardless of source, the kernel reads one unified
+thing — the **text FIFO**:
 
 - `INPUT_STATUS` `$FFF2` — bit 0 `TEXT_READY` ($01), bit 1 `KEYBOARD_DOWN` ($02).
 - `INPUT_CHAR` `$FFF3` — read-to-pop the next byte ($00 when empty).
@@ -189,7 +191,7 @@ the FIFO as text (so it must *not* decode here, or it would double-enqueue).
 | source | sends | mapped to | bitmap? |
 | --- | --- | --- | --- |
 | **WiFi client** | printable ASCII (`$20–$7E`, host layout) + HID key events | text → FIFO; HID → 32-byte bitmap + `inputDecodeKeyUsage` → FIFO (`input_wifi.go:348`) | yes |
-| **USB host** | raw USB HID reports | same bitmap + decode (printable→ASCII needs a usage→ASCII table — minimal/WIP) | yes |
+| **USB host** (later board) | raw USB HID reports | same bitmap + decode (printable→ASCII needs a usage→ASCII table); not on rev 1 | yes |
 | **Console** | raw bytes (serial/dev) | injected straight into FIFO, text-only, no decode (`input.go:831-840`) | **no** |
 
 The WiFi client filters its *text* channel to printable `$20–$7E`
