@@ -301,7 +301,7 @@ Mechanism (Phase 4):
    `INLIN` trusts this already-edited stream and stores raw glyph bytes, including
    high bytes and control-range tiles, instead of filtering to printable ASCII.
 3. **Route into the string** — the input-buffer→heap literal copy (`STRLT2`/
-   `LD399`, taken when the literal lives in zero-page = the input buffer) copies,
+   `LD399`, taken when the literal lives in the input buffer's page, `$02xx`) copies,
    after the character `MOVSTR`, `N` attribute bytes from
    `EDIT_ATTR_BUF + (STRNG1 − INPUTBUFFER)` into the new string's attribute half
    (`FRESPC`, already positioned at `base + N`). This overrides the

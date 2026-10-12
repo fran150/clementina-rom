@@ -184,8 +184,13 @@ BASIC_COLD_START:
 
 ; Warm restart: keep the current program/variables and return to the READY
 ; prompt. Used by the kernel warmstart entry (KERN_WARMSTART) so a user can quit
-; the WOZ monitor back to BASIC without losing their program.
+; the WOZ monitor back to BASIC without losing their program. The kernel hands
+; over with S=$FF; lower it to STACK_TOP, where STKINI and cold start keep it,
+; so BASIC's stack never covers $01FD-$01FF. INPUT stores its leading comma at
+; $01FF (INPUTBUFFER-1) and would otherwise overwrite a live return address.
 BASIC_WARM_START:
+        ldx #STACK_TOP
+        txs
         jmp RESTART
 
 ; A = character to print. Kernel CHROUT preserves A/X/Y.

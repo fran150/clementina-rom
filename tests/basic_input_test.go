@@ -97,3 +97,82 @@ func TestBasicInputRanges(t *testing.T) {
 		})
 	}
 }
+
+func inputScreen(c *ClementinaComputer) string {
+	vr := c.chips.mia.(videoReader)
+	b := make([]byte, 1000)
+	for i := range b {
+		b[i] = vr.DebugReadVideo(uint32(0x10080 + i))
+	}
+	return string(b)
+}
+
+// TestBasicInputLongLine types lines as long as the screen editor's logical
+// line (80 characters, two full rows), numbered and direct, and checks BASIC
+// keeps every character: the stored line LISTs whole and runs to its last
+// statement. The long line goes in between two others, so the program's links
+// must survive the insertion. BASIC's line buffer is at $0200, so the old
+// zero-page buffer, $13-$5A, must stay untouched throughout.
+func TestBasicInputLongLine(t *testing.T) {
+	c, step := bootClementinaToPrompt(t)
+	for a := 0x13; a <= 0x5A; a++ {
+		c.chips.baseram.Poke(uint16(a), 0xA5)
+	}
+	long := `10 A$="` + strings.Repeat("X", 55) + `":POKE 640,LEN(A$)`
+	direct := `B$="` + strings.Repeat("Y", 58) + `":POKE 641,LEN(B$)`
+	if len(long) != 80 || len(direct) != 80 {
+		t.Fatalf("test lines must be 80 characters: %d, %d", len(long), len(direct))
+	}
+	// The emulated text FIFO holds 64 keys and drops the oldest on overflow,
+	// so feed a long line in chunks the editor drains in between.
+	typeLong := func(line string) {
+		for len(line) > 32 {
+			injectKeys(c, []byte(line[:32])...)
+			editorTickN(c, step, 300_000)
+			line = line[32:]
+		}
+		typeLine(c, step, line)
+	}
+	typeLine(c, step, "30 POKE 643,9")
+	// The stored line's link is staged at $01FC-$01FD, just below the buffer,
+	// and FIX_LINKS stops at a zero link high byte. BASIC sets it as it stores
+	// the line; clear it first so stale stack bytes cannot stand in for that.
+	c.chips.baseram.Poke(0x01FD, 0)
+	typeLong(long)
+	typeLine(c, step, "20 POKE 642,7")
+	typeLine(c, step, "CLS:LIST")
+	screen := inputScreen(c)
+	for _, want := range []string{long, "20 POKE 642,7", "30 POKE 643,9"} {
+		if !strings.Contains(screen, want) {
+			t.Fatalf("LIST lost %q:\n%s", want, screen)
+		}
+	}
+	typeLine(c, step, "RUN")
+	editorTickN(c, step, 500_000)
+	require_eq(t, 55, peek(c, 640), "80-character program line ran to its last statement")
+	require_eq(t, 7, peek(c, 642), "line after the long line ran")
+	require_eq(t, 9, peek(c, 643), "last line ran")
+	typeLong(direct)
+	require_eq(t, 58, peek(c, 641), "80-character direct line ran to its last statement")
+	for a := 0x13; a <= 0x5A; a++ {
+		require_eq(t, 0xA5, peek(c, uint32(a)), fmt.Sprintf("zero page $%02X written", a))
+	}
+}
+
+// TestBasicInputAfterWarmStart returns from WozMon to BASIC through
+// KERN_WARMSTART, which hands over with S=$FF, then starts the program with
+// GOTO, which does not reset the stack the way RUN does. INPUT stores its
+// leading comma at $01FF, just below the line buffer; BASIC_WARM_START must
+// have lowered the stack, or that store lands on NEWSTT's return address.
+func TestBasicInputAfterWarmStart(t *testing.T) {
+	c, step := bootClementinaToPrompt(t)
+	typeLine(c, step, "10 INPUT A")
+	typeLine(c, step, "20 POKE 644,A")
+	typeLine(c, step, "30 GOTO 30")
+	typeLine(c, step, "MON")
+	typeLine(c, step, "Q")
+	typeLine(c, step, "GOTO 10")
+	typeLine(c, step, "42")
+	editorTickN(c, step, 500_000)
+	require_eq(t, 42, peek(c, 644), "INPUT after a warm start returned to its program")
+}

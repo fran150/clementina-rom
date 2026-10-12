@@ -36,7 +36,7 @@ CPU: **65C02S** (the `STZ`, `BRA`, `PHX/PLX`, etc. extensions are available).
 | --- | --- |
 | `$0000–$00FF` | Zero page (shared by kernel / BASIC / WozMon — §2) |
 | `$0100–$01FF` | CPU stack (§3) |
-| `$0200–$02FF` | Line input buffer (§4) |
+| `$0200–$02FF` | Line input buffers, BASIC's and WozMon's (§4) |
 | `$0300–$03FF` | Kernel variables and vectors (§5) |
 | `$0400–$04B6` | Free working RAM (formerly the background-`PLAY` control block) + `DIR_NAME_BUF` (§7.5) |
 | `$04B7–…` | Kernel+WozMon+BASIC image (§6, §7), starting exactly at `$04B7` |
@@ -72,13 +72,15 @@ Zero page is a shared, contended resource. The plan:
 
 - **BASIC** owns the low and middle zero page. Its layout is set by
   `ZP_START1..4` and `STACK_TOP` in `src/basic/defines_clementina.s` and laid
-  out in `src/basic/zeropage.s`. In practice BASIC uses roughly `$00–$DF`.
+  out in `src/basic/zeropage.s`. In practice BASIC uses roughly `$00–$DF`,
+  except `$13–$5A`: unused (was BASIC's input buffer, which now lives at
+  `$0200`, §4).
 - **The kernel** keeps a small block high, `$00F0–$00FB`, so it never collides
   with BASIC. The kernel uses very little zero page because its I/O is done
   through absolute MIA registers.
-- **WozMon** uses `$24–$2B`, which overlaps BASIC's area. That is fine because
-  WozMon and BASIC are not active at the same time; entering one re-initializes
-  what it needs.
+- **WozMon** uses `$24–$2B`, inside `$13–$5A` (BASIC's former input buffer).
+  WozMon and BASIC are not active at the same time; entering one
+  re-initializes what it needs.
 
 ### Kernel zero page (`$00F0–$00FB`)
 
@@ -103,18 +105,36 @@ Defined in the `ZEROPAGE` segment of [`src/kernel/kernel.s`](../src/kernel/kerne
 Standard 6502 hardware stack. `COLDSTART` sets `S = $FF`. BASIC's
 `STACK_TOP` reserves the top of the stack for its FOR/GOSUB bookkeeping.
 
+While BASIC runs, its stack stays below `$01FD`: cold start sets `S = $FB`,
+and `STKINI` and `BASIC_WARM_START` (the `KERN_WARMSTART` target, entered
+with `S = $FF`) set `S = STACK_TOP = $FC`. The top four bytes, `$01FC–$01FF`,
+sit just below BASIC's line input buffer and belong to it (§4); of those,
+pushes reach only `$01FC`, a byte BASIC does not need to keep.
+
 ---
 
-## 4. Line input buffer (`$0200–$02FF`)
+## 4. Line input buffers (`$0200–$02FF`)
 
-WozMon's line buffer (`IN = $0200`). BASIC currently keeps its own input buffer
-in zero page (the proven 65C02 layout — moving it here triggers an illegal
-`STY abs,X` in the generic BASIC source). The two monitors are never active at
-the same time.
+Both line buffers live here: WozMon's (`IN = $0200`) and BASIC's
+(`INPUTBUFFER = $0200`). WozMon and BASIC are never active at the same time
+(leaving WozMon with `Q` re-enters BASIC through `KERN_WARMSTART`), so they
+share the page. BASIC uses msbasic's non-zero-page buffer code, the
+Applesoft/Commodore BASIC 2 layout (`CONFIG_NO_INPUTBUFFER_ZP` /
+`CONFIG_INPUTBUFFER_0200`, set by defining `INPUTBUFFER` in
+`src/basic/defines_clementina.s`).
 
-> Open item: optionally move BASIC's input buffer to `$0200` during full BASIC
-> bring-up so there is a single shared line buffer (needs the Apple/CBM-style
-> non-zero-page-buffer code path).
+| Addr | Owner | Description |
+| --- | --- | --- |
+| `$01FC–$01FD` | BASIC | `INPUTBUFFER-4..-3`: staged link of a numbered line. `PUT_NEW_LINE` copies the stored line from `INPUTBUFFER-4`; it writes `$01` to the high byte (`$01FD`) just before the copy, since `FIX_LINKS` treats a zero high byte as the end of the program. The low byte is a don't-care that `FIX_LINKS` rewrites (§3). |
+| `$01FE–$01FF` | BASIC | `INPUTBUFFER-2..-1`: staged line number, written from `LINNUM` just before the copy. `INPUT` stores its leading comma at `$01FF`. |
+| `$0200–$024F` | BASIC | Up to 80 typed characters (`INLIN_MAX`, the screen editor's logical line, `EDIT_BUF_SIZE`). The tokenizer crunches the line in place, so tokenized text never runs past the typed text. `GET` uses `$0200–$0201`. |
+| `$0250` | BASIC | `$00` terminator after an 80-character line. |
+| `$0251–$0252` | BASIC | The tokenizer writes an end-of-program `$00` two bytes past the tokenized line's terminator (at most `$0252`), which direct-mode `NEWSTT` reads as a zero link. |
+| `$0200–$027F` | WozMon | `IN`, WozMon's line buffer. |
+| `$0280–$02FF` | — | Unused by both buffers. |
+
+`EDIT_ATTR_BUF` (§5) holds the attributes of the same cells, indexed in
+parallel with `INPUTBUFFER`; at 80 bytes it covers a full line.
 
 ---
 
