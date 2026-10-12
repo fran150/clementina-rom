@@ -413,9 +413,54 @@ All 32 registers, mirrored in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc
 
 ---
 
-## 12. MIA indexed RAM (used by the kernel)
+## 12. MIA index descriptors
 
-MIA RAM is reached only through index descriptors. The kernel currently touches:
+MIA RAM is reached only through index descriptors. A descriptor is a 24-bit
+current address into MIA RAM plus a default address, a limit, a step and flags.
+There are 256 of them, ids `$00-$FF`. A program binds one to window A or B
+(`IDXA_SELECT`/`IDXB_SELECT`) and then reads or writes MIA RAM through that
+window's data port.
+
+### Who owns which id
+
+| Ids | Owner | Use |
+| --- | --- | --- |
+| `$00-$4F` | **Programs** | Free. Never configured or touched by the firmware, the kernel or BASIC. |
+| `$50-$57` | MIA input | Keyboard/keypad bitmap probes (`IIDX_KEYBOARD_PROBE_0-7`) |
+| `$58-$5F` | MIA input | Consumer bitmap probes (`IIDX_CONSUMER_PROBE_0-7`) |
+| `$60-$68` | MIA input | Input state block, bitmaps, mouse, gamepads `0-3`, input control |
+| `$69-$6F` | — | Reserved for MIA input |
+| `$70-$72` | MIA video | Local control page (never syncs to the video client) |
+| `$73-$7F` | — | Reserved for MIA video local control |
+| `$80-$88` | MIA video | Render control page and its fields |
+| `$89-$8F` | — | Reserved for MIA video render control |
+| `$90-$9F` | MIA video | Palette banks `0-15` |
+| `$A0-$A7` | MIA video | CHR banks `0-7`, 6,144 bytes each |
+| `$A8-$AF` | MIA video | Background nametables `0-7`, 1,000 bytes each |
+| `$B0-$B7` | MIA video | Background attribute tables `0-7`, 1,000 bytes each |
+| `$B8-$B9` | MIA video | Overlay nametable and attributes (the console) |
+| `$BA-$BF` | — | Reserved for MIA video |
+| `$C0-$DF` | MIA video | Direct OAM entries, sprites `0-31`, 5 bytes each |
+| `$E0-$E5` | MIA SD/FS | Control, sector, path, directory entry, transfer, second path |
+| `$E6-$EB` | MIA audio | Whole audio block, voices `0-3`, header |
+| `$EC-$EF` | MIA audio | Per-voice sequencer status |
+| `$F0-$F5` | Kernel | Scroll DMA (`$F0-$F3`), memory copy and fill (`$F4-$F5`) |
+| `$F6-$FF` | Kernel | Reserved for the kernel |
+
+Rules for programs:
+
+- `$00-$4F` are yours. Nothing else sets or moves them.
+- The MIA-owned ids are the documented way to reach video, input, audio and SD
+  memory, so programs use them too. The kernel and BASIC use them as well and
+  re-seek before each use, so their current address does not survive a kernel
+  call (for example `CHROUT` moves `$B8`/`$B9`).
+- Kernel services leave window A bound to whatever id they last used. Rebind
+  your windows after calling one.
+- The IRQ handler saves and restores both window selections and `CFG_SELECT`
+  (`MIA_CTX` push/pop), so a program's bindings survive interrupts.
+- Never change `$F0-$FF`.
+
+### Ids the kernel uses
 
 | Index | Purpose | MIA RAM target |
 | --- | --- | --- |
@@ -430,9 +475,10 @@ MIA RAM is reached only through index descriptors. The kernel currently touches:
 | `$F1` (`KIDX_SCROLL_NT_DST`) | Kernel-reserved scroll DMA destination | overlay nametable base |
 | `$F2` (`KIDX_SCROLL_ATTR_SRC`) | Kernel-reserved scroll DMA source | overlay attributes + 40, limit = overlay attributes end |
 | `$F3` (`KIDX_SCROLL_ATTR_DST`) | Kernel-reserved scroll DMA destination | overlay attributes base |
-
-Index descriptors `$F0-$FF` are reserved for kernel/system use. User programs
-that call kernel services should not change them.
+| `$F4` (`KIDX_MEMORY_SRC`) | Kernel-reserved source for MIA memory copy, fill and rectangle services (`memory.s`) | any MIA RAM |
+| `$F5` (`KIDX_MEMORY_DST`) | Kernel-reserved destination for the same services | any MIA RAM |
+| `$60` (`IIDX_INPUT_STATE`) | `input_read_byte`: re-seeked to `$11000` + offset for each read (BASIC input functions, timing) | input state block |
+| `$E0`, `$E4` | `KERN_LOAD`: SD/FS control block and transfer buffer | SD/FS block |
 
 ### Overlay text layer
 
