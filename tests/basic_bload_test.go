@@ -20,9 +20,9 @@ func writePRG(t *testing.T, dir, name string, addr uint16, bank byte, payload []
 	}
 }
 
-// TestBasicBLOADSwallowWithRun loads a tiny machine-code program into the
-// reclaimable heap region (>= KERN_BASE, unbanked) with a run address, and
-// confirms it actually starts executing instead of returning to BASIC.
+// TestBasicBLOADSwallowWithRun loads a tiny machine-code program over BASIC's
+// heap with a run address, and confirms it actually starts executing instead
+// of returning to BASIC.
 func TestBasicBLOADSwallowWithRun(t *testing.T) {
 	dir := t.TempDir()
 	// LDA #$2A / STA $0280 / LDA #$99 / STA $0281 / JMP <self>, loaded+run at $6000.
@@ -39,24 +39,87 @@ func TestBasicBLOADSwallowWithRun(t *testing.T) {
 	require_eq(t, 0x99, peek(c, 0x0281), "swallow-load program ran (second POKE)")
 }
 
-// TestBasicBLOADSwallowWithoutRunErrors confirms the same load, without a run
-// address, is rejected before writing anything - the program never reaches
-// its next statement.
-func TestBasicBLOADSwallowWithoutRunErrors(t *testing.T) {
+// TestBasicBLOADAboveLoweredMemsiz reserves $B000-$BFFF by lowering MEMSIZ,
+// BLOADs a routine there from a bank-0 PRG without a run address, calls it
+// with SYS and checks that BASIC carries on: strings still work after the
+// load, so bank 0 is mapped again.
+func TestBasicBLOADAboveLoweredMemsiz(t *testing.T) {
 	dir := t.TempDir()
-	prg := []byte{0xA9, 0x2A, 0x8D, 0x80, 0x02, 0x4C, 0x05, 0x60}
-	writePRG(t, dir, "T.PRG", 0x6000, 0, prg)
+	// LDA #$2A / STA $0280 / RTS, loaded at $B000 bank 0.
+	writePRG(t, dir, "R.PRG", 0xB000, 0, []byte{0xA9, 0x2A, 0x8D, 0x80, 0x02, 0x60})
 
 	c, step := bootClementinaToPrompt(t)
 	c.SetMiaSDFolder(dir)
-	typeLine(c, step, `10 BLOAD "T.PRG"`)
-	typeLine(c, step, "20 POKE 640,42")
-	typeLine(c, step, "30 GOTO 30")
+	for _, l := range []string{
+		"10 POKE 63,0:POKE 64,176:CLEAR", // MEMSIZ = $B000
+		`20 BLOAD "R.PRG"`,
+		"30 SYS 45056",
+		`40 A$="OK"+"!":POKE 641,LEN(A$)`,
+		"50 POKE 642,PEEK(64)",
+		"60 GOTO 60",
+	} {
+		typeLine(c, step, l)
+	}
 	typeLine(c, step, "RUN")
 	editorTickN(c, step, 1_000_000)
 
-	require_eq(t, 0, peek(c, 640), "line 20 never ran - BLOAD was rejected before writing")
-	require_eq(t, 0, peek(c, 0x0280), "destination untouched - rejected before writing")
+	require_eq(t, 0x2A, peek(c, 0x0280), "routine loaded above MEMSIZ ran")
+	require_eq(t, 3, peek(c, 641), "strings work after the load")
+	require_eq(t, 0xB0, peek(c, 642), "MEMSIZ stayed lowered")
+}
+
+// TestBasicBLOADOverrideIntoMappedBank overrides an unbanked file's address
+// with one in $8000-$BFFF: it lands in the mapped bank (bank 0 under BASIC)
+// and BLOAD returns.
+func TestBasicBLOADOverrideIntoMappedBank(t *testing.T) {
+	dir := t.TempDir()
+	writePRG(t, dir, "D.PRG", 0x6000, 0, []byte{7, 8})
+
+	c, step := bootClementinaToPrompt(t)
+	c.SetMiaSDFolder(dir)
+	for _, l := range []string{
+		"10 POKE 63,0:POKE 64,176:CLEAR",
+		`20 BLOAD "D.PRG",0,45056`, // no run, address $B000
+		"30 POKE 640,PEEK(45056)",
+		"40 POKE 641,PEEK(45057)",
+		"50 POKE 642,PEEK(24576)", // $6000, the header's address, untouched
+		"60 POKE 643,42",
+		"70 GOTO 70",
+	} {
+		typeLine(c, step, l)
+	}
+	typeLine(c, step, "RUN")
+	editorTickN(c, step, 1_000_000)
+
+	require_eq(t, 42, peek(c, 643), "BASIC resumed after the load")
+	require_eq(t, 7, peek(c, 640), "first byte at the override address")
+	require_eq(t, 8, peek(c, 641), "second byte at the override address")
+	if peek(c, 642) == 7 {
+		t.Fatal("the header's address was written instead of the override")
+	}
+}
+
+// TestBasicBLOADOverrideOfBankedFile overrides a banked file's address with
+// an unbanked one: the header's bank byte is skipped, not loaded as data.
+func TestBasicBLOADOverrideOfBankedFile(t *testing.T) {
+	dir := t.TempDir()
+	writePRG(t, dir, "K.PRG", 0x8000, 3, []byte{9, 10})
+
+	c, step := bootClementinaToPrompt(t)
+	c.SetMiaSDFolder(dir)
+	for _, l := range []string{
+		`10 BLOAD "K.PRG",0,640`, // no run, address $0280
+		"20 POKE 642,42",
+		"30 GOTO 30",
+	} {
+		typeLine(c, step, l)
+	}
+	typeLine(c, step, "RUN")
+	editorTickN(c, step, 1_000_000)
+
+	require_eq(t, 42, peek(c, 642), "BASIC resumed after the load")
+	require_eq(t, 9, peek(c, 640), "first payload byte at the override address")
+	require_eq(t, 10, peek(c, 641), "second payload byte at the override address")
 }
 
 // TestBasicBLOADBankedAutoAdvance loads a 16-byte payload starting 8 bytes before

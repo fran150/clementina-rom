@@ -175,7 +175,8 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 | `$0302` | `TEXT_ATTR` | 1 | Live overlay pen for new console cells. Bits `0-3` select the palette bank; the default is palette `0` white text over the blue backdrop. BASIC output drives this transiently; the editor reasserts `EDITOR_PEN` into it whenever it takes control. |
 | `$0303` | `LAST_KEY` | 1 | Debug: last byte returned by `CHRIN`. Watch this in the emulator's memory window to confirm input before attaching a video client. |
 | `$0304` | `EDITOR_PEN` | 1 | Persistent editor pen. The pen the screen editor sets from the keyboard (ESC commands) and reasserts into `TEXT_ATTR` at each line edit, so the cursor and typed text keep their color across BASIC output (LIST, messages, styled `PRINT`). Was `KEY_COUNT` (a write-only debug counter). |
-| `$0305–$0308` | — | 4 | Free. Were the unused `CINV`/`COUTV` vector stubs, removed 2026-10-11; the variables below kept their addresses. |
+| `$0305` | `KLOAD_SAVED_BANK` | 1 | `KERN_LOAD`: the bank mapped when it started, selected again when it returns or fails. |
+| `$0306–$0308` | — | 3 | Free. Were the unused `CINV`/`COUTV` vector stubs, removed 2026-10-11; the variables below kept their addresses. |
 | `$0309` | `CURSOR_VISIBLE` | 1 | Nonzero when the software cursor glyph is currently drawn into the overlay. |
 | `$030A` | `CURSOR_SAVE_CHR` | 1 | Saved tile under the visible cursor. |
 | `$030B` | `CURSOR_SAVE_ATTR` | 1 | Saved attribute under the visible cursor. |
@@ -228,7 +229,7 @@ freely.
 | `$0412` | `KERN_PRHEX` | `A`=nibble | — | Print the low nibble of `A` as one hex digit via `CHROUT`. |
 | `$0415` | `KERN_PRBYTE` | `A`=byte | — | Print `A` as two hex digits. |
 | `$0418` | `KERN_PRSTR` | `KPTR`→str | — | Print the `$00`-terminated string at `KPTR` (max 255 bytes). |
-| `$041B` | `KERN_LOAD` | `KPTR`=dest override or 0, `KTMP`=run addr or 0 | — (or does not return, if run) | Stream a bank-aware PRG file straight into CPU RAM, entirely kernel-resident (see §8 and `docs/basic-file.md`) — the destination may overwrite BASIC's own resident code/heap, so it cannot call out to any BASIC-resident routine mid-copy. BASIC's `BLOAD` statement stages the path (via MIA hardware state, not CPU RAM) and parses `run`/`addr` before handing off here. |
+| `$041B` | `KERN_LOAD` | `KPTR`=dest override or 0, `KTMP`=run addr or 0 | — (or does not return, if run) | Stream a bank-aware PRG file straight into CPU RAM, entirely kernel-resident (see §8 and `docs/basic-file.md`) — the destination may overwrite BASIC's own resident code/heap, so it cannot call out to any BASIC-resident routine mid-copy. Any RAM below `$C000` is accepted; an override at `$8000-$BFFF` loads into the mapped bank, and a returning load selects the bank that was mapped before. BASIC's `BLOAD` statement stages the path (via MIA hardware state, not CPU RAM) and parses `run`/`addr` before handing off here. |
 | `$041E` | `KERN_EDITKEY` | — | `A`=char | Full-screen line editor. Runs the interactive editor (cursor moves, overtype, gap-closing backspace `$08` / delete `$7F`, insert `$94`) on the overlay, harvests the logical line under the cursor on RETURN, and returns it one byte at a time followed by a synthetic final CR. BASIC's `GETLN` uses this for line input and treats bytes returned while `EDIT_STATE` is nonzero as raw source data; `GET` stays on `KERN_CHRIN`. |
 | `$0421` | `KERN_CHROUT_GLYPH` | `A`=tile | A/X/Y preserved | Write `A` to the console as a raw glyph at the cursor, bypassing control-code handling (so high tiles that collide with codes like `$0D` still draw). |
 | `$0424` | `KERN_WOZMON` | — | (does not return) | Enter the WOZ monitor (`src/monitor/wozmon-clementina.s`). Examine/deposit memory and run code; quit back to BASIC with `Q` (runs `KERN_WARMSTART`). Invoke from BASIC with `MON`; the older `USR` vector method still works. |
@@ -286,7 +287,7 @@ it automatically.
 
 Internal routines (`KERNCODE`/`RODATA`/`WOZCODE` segments). These addresses
 are **not** ABI; reach them only through the jump table. The kernel+WozMon
-portion of the image is ~4.4 KiB (`$0400`-`$15BA` today); see §8 for the
+portion of the image is ~4.4 KiB (`$0400`-`$15A8` today); see §8 for the
 combined kernel+WozMon+BASIC image size and how it's anchored. Notable
 internal routines:
 
@@ -371,8 +372,8 @@ since that probe writes test patterns byte-by-byte and would corrupt the
 live, running image if it ever reached it (the image now sits *below* the
 heap, not above it, so there's nothing to discover at runtime either way).
 
-With the current ~24.1 KiB image (kernel+WozMon+BASIC, `$0400`-`$647D`
-today), this gives BASIC **23,426 bytes free** (`$647E` to `$BFFF`) - an
+With the current ~24.1 KiB image (kernel+WozMon+BASIC, `$0400`-`$646B`
+today), this gives BASIC **23,444 bytes free** (`$646C` to `$BFFF`) - an
 image that
 needs no manual boundary maintenance as commands are added: there is no
 `MAX_KERNEL_BYTES`-style hand-maintained ceiling. `KERNEL`'s own `$1200`
@@ -390,19 +391,35 @@ that repo for the current hex value before moving `KERN_BASE` again.
 > bug (present on the stock baseline, independent of the extension tokens) makes
 > `INPUT` misread its buffer and re-prompt `??` when the program text begins in
 > that ~200-byte window. `TXTTAB` (`__BASICMEM_LAST__`) currently sits far above
-> it (`$647E` today) and moves only as the image itself grows/shrinks, but the
+> it (`$646C` today) and moves only as the image itself grows/shrinks, but the
 > root cause is still not diagnosed - re-check this if the image's size changes
 > enough to approach that window.
 
 Bank 0 must remain selected while BASIC is active - the image itself
 (kernel+WozMon+BASIC, ~24.0 KiB) fits entirely below `$8000` today, but the
-**heap** above it does not: `TXTTAB`..`MEMSIZ` spans from `$647E` up through
+**heap** above it does not: `TXTTAB`..`MEMSIZ` spans from `$646C` up through
 `$BFFF`, so its upper ~16 KiB (program text/variables/arrays/strings, once
 the heap grows that far) lives in Extended RAM bank 0. Changing PA0-PA4 away
 from bank 0 while BASIC is still running would therefore replace part of the
 live heap out from under it; kernel warm start restores bank 0 before
 returning to the interpreter, and a `BLOAD` into a *different* bank never
 touches bank 0 at all (§9).
+
+### Where machine code can go
+
+`BLOAD` writes wherever its file or `addr` says (`docs/basic-file.md`); the
+choice of a safe place is the programmer's.
+
+- **Code that takes over the machine** (loaded with `BLOAD`'s `run`) may
+  overwrite BASIC: anywhere from `$1600` up. Below that is the kernel, which
+  holds the loader itself, so a load there crashes mid-copy. `KERNEL`'s region
+  ends at `$15FF` however the kernel grows. The SDK templates use `$1800`.
+- **Code that returns to BASIC** (called with `SYS`) must leave BASIC intact:
+  `$0280-$02F7` (§4), banks 1-31 (§9), or the top of bank 0 after lowering
+  `MEMSIZ`. `POKE 63,lo:POKE 64,hi:CLEAR` moves the top of BASIC's memory
+  down, as `POKE 55/56` does on the C64; for example `POKE 63,0:POKE 64,176:
+  CLEAR` frees `$B000-$BFFF` (4 KiB) until the next cold start. Note the
+  keyword is `CLEAR`, not the C64's `CLR`.
 
 ---
 
@@ -414,8 +431,8 @@ of BASIC's heap (§8) whenever it grows past `$8000` — it is not ordinary
 free storage the way banks 1–31 are, and must be selected again before
 resuming BASIC after using any other bank. Banks 1–31 are entirely free for
 bank-aware access: `BLOAD`/`BSAVE`'s bank-aware PRG format (`docs/basic-file.md`)
-targets them directly (bank required, 1-31; bank 0 is never a valid target -
-it's the running heap), a RAM disk, paged data/assets, or large buffers.
+targets them directly, as do a RAM disk, paged data/assets, or large buffers.
+`BLOAD` also accepts bank 0, which is safe above a lowered `MEMSIZ` (§8).
 
 ---
 

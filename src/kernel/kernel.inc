@@ -332,7 +332,9 @@ EDITOR_PEN         = KVARS + $04   ; persistent editor pen: the pen the screen
                                    ; styled PRINT) can drive TEXT_ATTR transiently
                                    ; without changing the color the cursor/typing use.
                                    ; (Was KEY_COUNT, a write-only debug counter.)
-                                   ; KVARS + $05..$08 free (were the unused CINV/COUTV
+KLOAD_SAVED_BANK   = KVARS + $05   ; KERN_LOAD: bank mapped at entry, put back
+                                   ; on return or error
+                                   ; KVARS + $06..$08 free (were the unused CINV/COUTV
                                    ; vector stubs, removed 2026-10-11).
 CURSOR_VISIBLE     = KVARS + $09   ; nonzero when cursor glyph is drawn
 CURSOR_SAVE_CHR    = KVARS + $0A   ; character under visible cursor

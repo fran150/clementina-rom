@@ -2,10 +2,9 @@ package clementina
 
 import "testing"
 
-// TestBasicSYSReturnsNormally BLOADs (banked, so no run address is needed -
-// an unbanked destination this low would fall inside BASIC's own reclaimable
-// region and KERN_LOAD would refuse it without one) a tiny machine-code
-// routine that writes two known bytes and returns (RTS), calls it with SYS,
+// TestBasicSYSReturnsNormally BLOADs (into bank 1, which BASIC never uses) a
+// tiny machine-code routine that writes two known bytes and returns (RTS),
+// calls it with SYS,
 // and confirms both that it ran and that control genuinely came back - the
 // next statement executes, unlike BLOAD's own run-address form, which never
 // returns.

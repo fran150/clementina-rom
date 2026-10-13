@@ -4434,8 +4434,8 @@ BASIC_BLOAD:
 ; hazard and no need for kernel residency.
 ;
 ; `bank` is mandatory whenever addr >= $8000 (error if omitted) - no
-; implicit "whatever's currently selected," the same stance KERN_LOAD takes
-; - and is selected via VIA_ORA for the read, restored to bank 0 before
+; implicit "whatever's currently selected" - and is selected via VIA_ORA
+; for the read, restored to bank 0 before
 ; returning (BASIC always requires bank 0 selected). A length that reaches
 ; the top of a bank ($BFFF) auto-advances into the next bank rather than
 ; requiring the caller to split the call themselves, mirroring KERN_LOAD's
