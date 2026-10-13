@@ -47,6 +47,8 @@ ZP_FREE_START     = $98    ; keep in sync with src/kernel/kernel.inc
 ; $8000-$BFFF (PA0-PA4, see kernel.inc). BSAVE selects a bank directly
 ; (it never runs through the kernel); KERN_LOAD has its own copy.
 VIA_ORA           = $C001
+VIA_BANK_BITS     = %00011111 ; PA0-PA4; keep in sync with kernel.inc's
+                              ; VIA_DDRA_BANK_BITS
 
 ; Console control codes (CHROUT interprets these) and overlay geometry. Keep in
 ; sync with src/kernel/kernel.inc.
@@ -743,11 +745,15 @@ VID_FIELD:
                                          ; which vid_data_byte clobbers)
 
 BSAVE_BANK:
-        .res    1                       ; BASIC_BSAVE's current source bank,
-                                         ; 0 = unbanked (same private-scratch
-                                         ; rule as VID_COUNT above - safe
-                                         ; across mia_sd_* calls, not across
-                                         ; FRMNUM/GETADR/GETBYT)
+        .res    1                       ; BASIC_BSAVE's current source bank
+                                         ; (same private-scratch rule as
+                                         ; VID_COUNT above - safe across
+                                         ; mia_sd_* calls, not across
+                                         ; FRMNUM/GETADR/GETBYT, so it is set
+                                         ; only once parsing is done)
+BSAVE_SAVED_BANK:
+        .res    1                       ; bank mapped when BSAVE started, put
+                                         ; back on return or error
 BSAVE_ADDR:
         .res    2                       ; BASIC_BSAVE's parsed addr argument,
                                          ; held here (not INDEX - INDEX is
@@ -4433,13 +4439,13 @@ BASIC_BLOAD:
 ; file never touches currently-executing code, so there's no self-overwrite
 ; hazard and no need for kernel residency.
 ;
-; `bank` is mandatory whenever addr >= $8000 (error if omitted) - no
-; implicit "whatever's currently selected" - and is selected via VIA_ORA
-; for the read, restored to bank 0 before
-; returning (BASIC always requires bank 0 selected). A length that reaches
-; the top of a bank ($BFFF) auto-advances into the next bank rather than
-; requiring the caller to split the call themselves, mirroring KERN_LOAD's
-; own auto-advance on the write side.
+; For addr >= $8000 the file records a bank byte: `bank` (0-31) if given,
+; else the bank mapped now (2026-10-13: "pin it"), so a plain BLOAD puts the
+; bytes back in the bank they came from. `bank` is selected via VIA_ORA for
+; the read, and the bank mapped at entry is selected again on return or
+; error. A save that reaches $BFFF auto-advances into the next bank rather
+; than requiring the caller to split the call themselves, mirroring
+; KERN_LOAD's own auto-advance on the write side.
 ; ----------------------------------------------------------------------------
 BASIC_BSAVE:
         jsr     FRMEVL                  ; evaluate the filename expression
@@ -4462,26 +4468,32 @@ BASIC_BSAVE:
         lda     LINNUM+1
         sta     VID_COUNT+1
 
-        stz     BSAVE_BANK              ; 0 = unbanked, until proven otherwise
         lda     BSAVE_ADDR+1
         cmp     #$80
-        bcc     @haveaddr               ; addr < $8000 -> unbanked, no bank arg
+        bcc     @nobank                 ; addr < $8000 -> no bank argument
 
         jsr     CHRGOT                  ; peek: is a trailing ",bank" present?
         cmp     #','
-        jne     bs_bankerr              ; addr >= $8000 requires one
+        bne     @nobank
         jsr     CHRGET
         jsr     GETBYT                  ; X = bank (0-255)
-        cpx     #1
-        jcc     bs_bankerr              ; bank 0 is never a valid target
         cpx     #32
-        jcs     bs_bankerr              ; only 1-31 exist
+        jcs     snd_iqerr               ; only 0-31 exist (no bank mapped yet)
+        bra     @parsed
+@nobank:
+        ldx     #$FF                    ; none given: the mapped bank, below
+@parsed:
+        ; All parsing is done - safe to set BSAVE_* and occupy INDEX now.
+        lda     VIA_ORA
+        and     #VIA_BANK_BITS
+        sta     BSAVE_SAVED_BANK        ; put back on return or error
+        cpx     #$FF
+        bne     @setbank
+        tax                             ; pin to the bank mapped now
+@setbank:
         stx     BSAVE_BANK
-        lda     BSAVE_BANK
-        sta     VIA_ORA
+        stx     VIA_ORA
 
-@haveaddr:
-        ; All parsing is done - safe to occupy INDEX now.
         lda     BSAVE_ADDR
         sta     INDEX
         lda     BSAVE_ADDR+1
@@ -4505,8 +4517,9 @@ BASIC_BSAVE:
         sta     IDXA_PORT
         lda     INDEX+1
         sta     IDXA_PORT
+        cmp     #$80
+        bcc     @hdr2                   ; addr < $8000 -> no bank byte
         lda     BSAVE_BANK
-        beq     @hdr2
         sta     IDXA_PORT
         lda     #3
         bra     @hdrgo
@@ -4526,8 +4539,9 @@ BASIC_BSAVE:
 ; Stream the payload LOADSAVE_CHUNK bytes at a time, the same shape as
 ; BASIC_SAVE's own loop - see its comments above for the chunking mechanics
 ; this mirrors. Each request is additionally capped to never cross $BFFF-
-; >$8000 when banked, so a chunk can land exactly on the boundary (and
-; auto-advance) but never overshoot past it.
+; >$8000, so a chunk can land exactly on the boundary (and auto-advance)
+; but never overshoot past it. A save starting below $8000 reads on through
+; the mapped bank and auto-advances the same way, as KERN_LOAD writes it.
 @chunk:
         lda     VID_COUNT
         ora     VID_COUNT+1
@@ -4545,8 +4559,6 @@ BASIC_BSAVE:
         lda     #LOADSAVE_CHUNK
         sta     TEMP1
 @havelen:
-        lda     BSAVE_BANK
-        jeq     @havelen_ok             ; unbanked -> no boundary to cap against
         sec
         lda     #$00
         sbc     INDEX
@@ -4591,8 +4603,6 @@ BASIC_BSAVE:
         sbc     #$00
         sta     VID_COUNT+1
 
-        lda     BSAVE_BANK
-        jeq     @chunk                  ; unbanked -> never auto-advances
         lda     INDEX+1
         cmp     #$C0
         jne     @chunk                  ; short of the boundary - keep going
@@ -4615,24 +4625,19 @@ BASIC_BSAVE:
         lda     #MIA_CMD_FS_CLOSE
         jsr     mia_sd_cmd
         jne     bs_fileerr
-        lda     BSAVE_BANK
-        beq     @rts_out
-        stz     VIA_ORA                 ; BASIC always requires bank 0 selected
-@rts_out:
+        lda     BSAVE_SAVED_BANK        ; the bank mapped at entry (bank 0
+        sta     VIA_ORA                 ; for BASIC)
         rts
 
+; Both are reached only after parsing, so BSAVE_SAVED_BANK is set.
 bs_bankerr:
-        lda     BSAVE_BANK
-        beq     @rts_bank0              ; error before any bank was ever selected
-        stz     VIA_ORA
-@rts_bank0:
+        lda     BSAVE_SAVED_BANK
+        sta     VIA_ORA
         jmp     snd_iqerr
 
 bs_fileerr:
-        lda     BSAVE_BANK
-        beq     @go_fileerr
-        stz     VIA_ORA
-@go_fileerr:
+        lda     BSAVE_SAVED_BANK
+        sta     VIA_ORA
         jmp     mia_fileerr
 
 ; ----------------------------------------------------------------------------
