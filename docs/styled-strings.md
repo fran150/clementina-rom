@@ -280,7 +280,7 @@ half — can hold Phase 5 graphic tile codes) or a program-text **literal/messag
   (keeps `Z14`/`POSX` bookkeeping). Untagged `$0D` remains newline (`OUTDO` +
   `PRINTNULLS`, so `CHR$(13)` still breaks lines). Tagged control-range bytes and
   all other non-plain bytes are drawn as **raw tiles** via
-  `MONCOUT_GLYPH → KERN_CHROUT_GLYPH` (`$0427`), advancing `POSX` one column and
+  `MONCOUT_GLYPH → KERN_CHROUT_GLYPH` (`$0421`), advancing `POSX` one column and
   honoring `Z14`.
 
 See [phase5-charset-keyboard.md §6.1](phase5-charset-keyboard.md). Remaining

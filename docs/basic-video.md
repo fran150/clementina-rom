@@ -161,7 +161,7 @@ all: the 2026-09-14 bottom-anchor rework (`docs/memory-map.md` §8) removed the
 hand-maintained ceiling entirely, along with the background-`PLAY` control
 block it used to budget against (`PLAY` itself was later retired too - see
 `docs/basic-sound.md`). Today the image is anchored to a fixed **low** start
-(`$04B7`) and simply grows upward into free heap space as commands are added;
+(`$0400`) and simply grows upward into free heap space as commands are added;
 there is nothing to bump when a new command lands.
 
 ## Register reference

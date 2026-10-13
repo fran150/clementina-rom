@@ -5,7 +5,7 @@
 ; at a fixed low address (kernel, then WozMon, then BASIC growing upward -
 ; the top of that block up through $BFFF is reclaimable by a loaded program
 ; that no longer needs BASIC), entered via the MIA-backed RESET vector, which
-; points at the jump table's fixed bottom-anchored address (KERN_BASE=$04B7,
+; points at the jump table's fixed bottom-anchored address (KERN_BASE=$0400,
 ; kernel.inc). Provides the console (overlay text + input FIFO), a stable
 ; jump-table ABI, and storage load/execute (KERN_LOAD).
 ;
@@ -44,10 +44,9 @@ _KJIFFY_STORAGE: .res 2 ; free-running 16-bit tick counter; +1 per VIA Timer-1
 ; Jump table - must land exactly on the KERN_* addresses from kernel.inc.
 ; The purpose of the jump table is to keep kernel addresses fixed even if the
 ; code changes in size. Placed FIRST in clementina.cfg's SEGMENTS list, so it
-; always starts exactly at $04B7 (KERNEL's fixed low anchor), regardless of
-; how much kernel/WozMon code follows it - that placement is what
-; clementina.cfg guarantees, not this file; the assert below only checks the
-; table's own *size*.
+; always starts exactly at KERN_BASE (KERNEL's fixed low anchor), regardless
+; of how much kernel/WozMon code follows it. The asserts below check the
+; table's size and, at link time, that it really landed on KERN_BASE.
 ; ============================================================================
 .segment "JUMPTAB"
 jumptab_start:
@@ -71,6 +70,7 @@ jumptab_start:
 ; (kernel.inc) - a relative check, independent of where the linker ends up
 ; placing this segment (see header comment above).
 .assert (* - jumptab_start = KERN_JUMPTAB_SIZE), error, "kernel jump table size/layout mismatch"
+.assert jumptab_start = KERN_BASE, lderror, "jump table is not at KERN_BASE: check KERNEL's start in clementina.cfg"
 
 ; ============================================================================
 ; Code - own segment name ("KERNCODE", not the shared "CODE" basic.s and

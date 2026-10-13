@@ -242,33 +242,25 @@ CHR_DEL_FWD         = $7F      ; editor: delete the char at the cursor (close ga
 CHR_INSERT          = $94      ; editor: open a gap at the cursor (insert space)
 
 ; ----------------------------------------------------------------------------
-; Kernel jump table - the stable ABI. Bottom-anchored (2026-09 rework): the
-; loaded image now starts at a fixed LOW address, $04B7 (right after working
-; RAM), with kernel+WozMon occupying a small block there and BASIC growing
-; upward above it, reclaimable up through $BFFF. The jump table is placed
-; FIRST in clementina.cfg's SEGMENTS list, so it always starts exactly at
-; $04B7 no matter how much kernel/WozMon code follows it - KERN_BASE is
-; therefore a true fixed constant, unlike the image's *end*, which varies
-; build to build and is never referenced by address - only through this
-; table. Callers JSR these; internal routine addresses may move freely.
+; Kernel jump table - the stable ABI. The loaded image starts at $0400, the
+; first byte after the kernel variables page, and the jump table is its first
+; segment (clementina.cfg), so every KERN_* address below stays fixed however
+; much code follows. New entries are appended at the end: existing addresses
+; never move, only the code above the table slides up. Callers JSR these;
+; internal routine addresses may move freely.
 ;
-; This is the reverse of the 2026-09-13 top-anchored/descending-loader
-; design: that design fixed the *end* of the image at $BFFF and computed the
-; start; this one fixes the *start* and lets BASIC's own end (and the heap
-; that begins there) be computed instead. The reason: with the image
-; top-anchored, roughly the top 16 KiB of it (all of Extended RAM bank 0)
-; was executable kernel/BASIC code, including the jump table and CHRGET (the
-; single most-executed routine in the interpreter) - any code switching
-; banks away from bank 0 (a loaded program's own bank-switching, or a future
-; kernel loader streaming a program across banks) risked unmapping its own
-; next instruction. Bottom-anchoring keeps kernel+WozMon permanently below
-; $8000, so nothing resident is ever at risk from a bank switch, and BASIC's
-; own resident code becomes a well-bounded, reclaimable region a loaded
-; program can safely overwrite once it no longer needs BASIC. See
-; docs/memory-map.md.
+; KERN_BASE must match three other places: KERNEL's start in clementina.cfg
+; (kernel.s asserts it at link time), and MIA's load and reset address in
+; clementina-mia's mia.c and clementina-6502's registers.go. BASIC and WozMon
+; take the base from the linker (__KERNEL_START__), so they never copy it.
+;
+; Anchoring the image low keeps kernel+WozMon permanently below $8000, so
+; nothing resident is ever at risk from a bank switch, and BASIC's own
+; resident code becomes a well-bounded, reclaimable region a loaded program
+; can overwrite once it no longer needs BASIC. See docs/memory-map.md.
 ; ----------------------------------------------------------------------------
 KERN_JUMPTAB_SIZE  = $2D       ; 15 entries x 3 bytes - keep in sync with kernel.s
-KERN_BASE          = $04B7
+KERN_BASE          = $0400
 KERN_COLDSTART     = KERN_BASE + $00   ; reset entry (MIA points RESET here)
 KERN_WARMSTART     = KERN_BASE + $03   ; re-enter the system
 KERN_CHROUT        = KERN_BASE + $06   ; A = char -> console

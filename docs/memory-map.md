@@ -38,22 +38,23 @@ CPU: **65C02S** (the `STZ`, `BRA`, `PHX/PLX`, etc. extensions are available).
 | `$0100–$01FF` | CPU stack (§3) |
 | `$0200–$02FF` | Line input buffers, BASIC's and WozMon's (§4) |
 | `$0300–$03FF` | Kernel variables and vectors (§5) |
-| `$0400–$04B6` | Free working RAM (formerly the background-`PLAY` control block) + `DIR_NAME_BUF` (§7.5) |
-| `$04B7–…` | Kernel+WozMon+BASIC image (§6, §7), starting exactly at `$04B7` |
+| `$0400–$042C` | Kernel jump table (§6), the first bytes of the loaded image |
+| `$042D–…` | Rest of the image: `DIR_NAME_BUF` (§7.5), kernel+WozMon (§7), then BASIC (§8) |
 | `…–$BFFF` | BASIC's free workspace / heap (§8), filling everything above the image |
 
 **2026-09-14 bottom-anchor rework** (reversing the 2026-09-13 top-anchored/
 descending-loader design described in older commits): the image is anchored
-to a fixed **low** start, `$04B7` (right after working RAM), and grows
+to a fixed **low** start, `$0400` (right after working RAM), and grows
 upward — **KERNEL → WOZMON → BASIC**, in that order, so the jump table (§6)
-always starts exactly at `$04B7` no matter how large the rest of the image
-grows. The heap fills everything above the image, up through `$BFFF`; since
+always starts exactly at `$0400` no matter how large the rest of the image
+grows. Base RAM has no unused gap: working RAM, the image and the heap are
+contiguous (§7.5 has the history). The heap fills everything above the image, up through `$BFFF`; since
 the image (kernel+WozMon+BASIC, ~24 KiB today) fits entirely below `$8000`
 but the heap above it does not, BASIC's logical workspace continues into
 Extended RAM bank 0 at `$8000-$BFFF` for its upper part — bank 0 must stay
 selected while BASIC runs (§9). See §8 and §13 for why and how. The
 rationale for anchoring this way (rather than back at the top): everything
-from `$04B7` through `$BFFF` — the fixed-low `KERNEL` region (jump table +
+from `$0400` through `$BFFF` — the fixed-low `KERNEL` region (jump table +
 kernel code + WozMon) excepted, which is permanently resident and never a
 load target — is *reclaimable*. A loaded machine-code program that no
 longer needs BASIC can overwrite BASIC's own resident region and heap
@@ -187,7 +188,7 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 
 ---
 
-## 6. Kernel jump table (`$04B7–$04E3`)
+## 6. Kernel jump table (`$0400–$042C`)
 
 The **stable ABI**. Each entry is a 3-byte `JMP`. Callers (BASIC, WozMon, user
 programs) bind to these fixed addresses; the routines behind them may move
@@ -195,31 +196,31 @@ freely.
 
 > **2026-09-14 bottom-anchor rework**: the jump table is placed **first** in
 > `clementina.cfg`'s `SEGMENTS` list, so it lands on the bottom 45 bytes of
-> the image — always `$04B7-$04E3`, right after working RAM — no matter how
+> the image — always `$0400-$042C`, right after working RAM — no matter how
 > large the rest of the image grows. `KERN_BASE` (`kernel.inc`) is the plain
-> fixed constant `$04B7`, a true compile-time constant that never needs
+> fixed constant `$0400`, a true compile-time constant that never needs
 > bumping. See §8 and §13 for the full picture and the single-pass build
 > that makes this work.
 
 | Addr | Symbol | In | Out | Description |
 | --- | --- | --- | --- | --- |
-| `$04B7` | `KERN_COLDSTART` | — | — | Reset entry. MIA points RESET here. Sets up the machine, console, prints the banner, then enters BASIC. |
-| `$04BA` | `KERN_WARMSTART` | — | — | Re-enter BASIC at the READY prompt, **preserving** the current program and variables. Resets the stack, puts the kernel's handler back in `IRQ_VEC`, and re-enables interrupts first, so it is safe to reach mid-statement (used by WozMon's `Q` quit command; `BFD3R`-style manual re-entry still works). |
-| `$04BD` | `KERN_CHROUT` | `A`=char | A/X/Y preserved | Write one character to the console at the cursor. Handles CR (`$0D`, newline), LF (`$0A`, ignored), BS (`$08`), FF (`$0C`, clear), the cursor moves (`$11`/`$91`/`$1D`/`$9D`) and HOME (`$13`), printable bytes. |
-| `$04C0` | `KERN_CHRIN` | — | `A`=char | Blocking read of one raw text byte from the MIA FIFO (single key; used by BASIC `GET`). Shows the cursor while waiting and updates `LAST_KEY`. |
-| `$04C3` | `KERN_GETKEY_NB` | — | `C`=1 & `A`=char, or `C`=0 | Non-blocking read. |
-| `$04C6` | `KERN_CLRSCR` | — | — | Clear the overlay (fill with spaces) and home the cursor. |
-| `$04C9` | `KERN_PRHEX` | `A`=nibble | — | Print the low nibble of `A` as one hex digit via `CHROUT`. |
-| `$04CC` | `KERN_PRBYTE` | `A`=byte | — | Print `A` as two hex digits. |
-| `$04CF` | `KERN_PRSTR` | `KPTR`→str | — | Print the `$00`-terminated string at `KPTR` (max 255 bytes). |
-| `$04D2` | `KERN_LOAD` | `KPTR`=dest override or 0, `KTMP`=run addr or 0 | — (or does not return, if run) | Stream a bank-aware PRG file straight into CPU RAM, entirely kernel-resident (see §8 and `docs/basic-file.md`) — the destination may overwrite BASIC's own resident code/heap, so it cannot call out to any BASIC-resident routine mid-copy. BASIC's `BLOAD` statement stages the path (via MIA hardware state, not CPU RAM) and parses `run`/`addr` before handing off here. |
-| `$04D5` | `KERN_EDITKEY` | — | `A`=char | Full-screen line editor. Runs the interactive editor (cursor moves, overtype, gap-closing backspace `$08` / delete `$7F`, insert `$94`) on the overlay, harvests the logical line under the cursor on RETURN, and returns it one byte at a time followed by a synthetic final CR. BASIC's `GETLN` uses this for line input and treats bytes returned while `EDIT_STATE` is nonzero as raw source data; `GET` stays on `KERN_CHRIN`. |
-| `$04D8` | `KERN_CHROUT_GLYPH` | `A`=tile | A/X/Y preserved | Write `A` to the console as a raw glyph at the cursor, bypassing control-code handling (so high tiles that collide with codes like `$0D` still draw). |
-| `$04DB` | `KERN_WOZMON` | — | (does not return) | Enter the WOZ monitor (`src/monitor/wozmon-clementina.s`). Examine/deposit memory and run code; quit back to BASIC with `Q` (runs `KERN_WARMSTART`). Invoke from BASIC with `MON`; the older `USR` vector method still works. |
-| `$04DE` | `KERN_SET_BACKDROP` | `A`=selector | — | Write the backdrop selector to `VIDX_BACKDROP_COLOR` (IRQ-safe tail call). |
-| `$04E1` | `KERN_IRQ` | A/X/Y as at interrupt entry | (returns from the interrupt) | The kernel's IRQ handler, for chaining: a program's own handler ends with `JMP KERN_IRQ` so the kernel keeps counting `KJIFFY`, blinking the cursor and clearing MIA's IRQ status. See "Taking over the IRQ" below. |
+| `$0400` | `KERN_COLDSTART` | — | — | Reset entry. MIA points RESET here. Sets up the machine, console, prints the banner, then enters BASIC. |
+| `$0403` | `KERN_WARMSTART` | — | — | Re-enter BASIC at the READY prompt, **preserving** the current program and variables. Resets the stack, puts the kernel's handler back in `IRQ_VEC`, and re-enables interrupts first, so it is safe to reach mid-statement (used by WozMon's `Q` quit command; `BFD3R`-style manual re-entry still works). |
+| `$0406` | `KERN_CHROUT` | `A`=char | A/X/Y preserved | Write one character to the console at the cursor. Handles CR (`$0D`, newline), LF (`$0A`, ignored), BS (`$08`), FF (`$0C`, clear), the cursor moves (`$11`/`$91`/`$1D`/`$9D`) and HOME (`$13`), printable bytes. |
+| `$0409` | `KERN_CHRIN` | — | `A`=char | Blocking read of one raw text byte from the MIA FIFO (single key; used by BASIC `GET`). Shows the cursor while waiting and updates `LAST_KEY`. |
+| `$040C` | `KERN_GETKEY_NB` | — | `C`=1 & `A`=char, or `C`=0 | Non-blocking read. |
+| `$040F` | `KERN_CLRSCR` | — | — | Clear the overlay (fill with spaces) and home the cursor. |
+| `$0412` | `KERN_PRHEX` | `A`=nibble | — | Print the low nibble of `A` as one hex digit via `CHROUT`. |
+| `$0415` | `KERN_PRBYTE` | `A`=byte | — | Print `A` as two hex digits. |
+| `$0418` | `KERN_PRSTR` | `KPTR`→str | — | Print the `$00`-terminated string at `KPTR` (max 255 bytes). |
+| `$041B` | `KERN_LOAD` | `KPTR`=dest override or 0, `KTMP`=run addr or 0 | — (or does not return, if run) | Stream a bank-aware PRG file straight into CPU RAM, entirely kernel-resident (see §8 and `docs/basic-file.md`) — the destination may overwrite BASIC's own resident code/heap, so it cannot call out to any BASIC-resident routine mid-copy. BASIC's `BLOAD` statement stages the path (via MIA hardware state, not CPU RAM) and parses `run`/`addr` before handing off here. |
+| `$041E` | `KERN_EDITKEY` | — | `A`=char | Full-screen line editor. Runs the interactive editor (cursor moves, overtype, gap-closing backspace `$08` / delete `$7F`, insert `$94`) on the overlay, harvests the logical line under the cursor on RETURN, and returns it one byte at a time followed by a synthetic final CR. BASIC's `GETLN` uses this for line input and treats bytes returned while `EDIT_STATE` is nonzero as raw source data; `GET` stays on `KERN_CHRIN`. |
+| `$0421` | `KERN_CHROUT_GLYPH` | `A`=tile | A/X/Y preserved | Write `A` to the console as a raw glyph at the cursor, bypassing control-code handling (so high tiles that collide with codes like `$0D` still draw). |
+| `$0424` | `KERN_WOZMON` | — | (does not return) | Enter the WOZ monitor (`src/monitor/wozmon-clementina.s`). Examine/deposit memory and run code; quit back to BASIC with `Q` (runs `KERN_WARMSTART`). Invoke from BASIC with `MON`; the older `USR` vector method still works. |
+| `$0427` | `KERN_SET_BACKDROP` | `A`=selector | — | Write the backdrop selector to `VIDX_BACKDROP_COLOR` (IRQ-safe tail call). |
+| `$042A` | `KERN_IRQ` | A/X/Y as at interrupt entry | (returns from the interrupt) | The kernel's IRQ handler, for chaining: a program's own handler ends with `JMP KERN_IRQ` so the kernel keeps counting `KJIFFY`, blinking the cursor and clearing MIA's IRQ status. See "Taking over the IRQ" below. |
 
-> **2026-10-11**: the `KERN_STOP` (`$04C6`) and `KERN_SAVE` (`$04D8`) stubs
+> **2026-10-11**: the `KERN_STOP` and `KERN_SAVE` stubs
 > were removed and every later entry moved down 3 or 6 bytes. Neither ever did
 > anything: BASIC checks Ctrl-C itself in `ISCNTC`, and `SAVE`/`BSAVE` are
 > BASIC-resident wrappers around MIA's file commands, which machine code can
@@ -228,10 +229,11 @@ freely.
 > When you add a kernel call, append a new `JMP` to the table in
 > `src/kernel/kernel.s`, add the `KERN_*` equate in `kernel.inc`, bump
 > `KERN_JUMPTAB_SIZE` and the `.assert` guarding the table size, and document
-> the new row here. Never reorder existing entries — that breaks the ABI. Also
-> update the hardcoded duplicate `KERN_*` constants in `clementina_extra.s`,
-> `defines_clementina.s`, and `wozmon-clementina.s` (BASIC/WozMon deliberately
-> don't `.include kernel.inc`).
+> the new row here. Never reorder existing entries — that breaks the ABI.
+> Appending moves only the code after the table, never an existing entry.
+> BASIC and WozMon don't `.include kernel.inc`: they take the table's base
+> from the linker (`__KERNEL_START__`) and add the entry's offset, so they
+> need an equate only for an entry they call.
 
 ---
 
@@ -262,11 +264,11 @@ Put the kernel's handler back before returning to BASIC with `RTS`, or the
 vector may point into memory BASIC reuses. `KERN_WARMSTART` and reset restore
 it automatically.
 
-## 7. Kernel code and data (right after the jump table, from `$04E4`)
+## 7. Kernel code and data (after `DIR_NAME_BUF`, from `$0455` today)
 
 Internal routines (`KERNCODE`/`RODATA`/`WOZCODE` segments). These addresses
 are **not** ABI; reach them only through the jump table. The kernel+WozMon
-portion of the image is ~4.4 KiB (`$04B7`-`$1620` today); see §8 for the
+portion of the image is ~4.4 KiB (`$0400`-`$1594` today); see §8 for the
 combined kernel+WozMon+BASIC image size and how it's anchored. Notable
 internal routines:
 
@@ -305,26 +307,21 @@ internal routines:
 
 ---
 
-## 7.5. `DIR_NAME_BUF` (`$048F–$04B6`) and free working RAM (`$0400–$048E`)
+## 7.5. `DIR_NAME_BUF` (right after the jump table, `$042D–$0454` today)
 
-`$0400–$048E` (143 bytes) is fixed working RAM right after `KVARS`, currently
-unused. It used to hold the background-`PLAY` control block (`BGP_*` in
-`src/basic/clementina_extra.s`) — the state the Timer-1 IRQ needed to run
-`PLAY s$,n`'s background sequencer independently of the foreground
-interpreter. `PLAY`, its background player, and `BGP_*` were all retired
-(2026-09-14): background music now runs entirely on MIA's own sequencer, so
-nothing on the 6502 side needs a fixed, IRQ-safe control block for it any
-more. See `docs/basic-sound.md` and `clementina-mia`'s
-`docs/audio-sequencer.md`.
+`DIR_NAME_BUF` (40 bytes) is a transient scratch buffer `DIR`
+(`docs/basic-file.md`) reads one directory entry's name into before printing
+any of it. BASIC declares it in `src/basic/clementina_extra.s`, in the
+`DIRBUF` segment, which `clementina.cfg` places right after the jump table so
+it sits outside BASIC's reclaimable region. Nothing else uses its address and
+nothing needs it to survive between `DIR` invocations, so it simply moves up
+3 bytes whenever the jump table grows. It is part of the loaded image (40
+zero bytes in `kernel.bin`).
 
-`DIR_NAME_BUF` (40 bytes, `$048F–$04B6`), defined as a plain equate in
-`src/basic/clementina_extra.s` — never part of
-the loaded image, so it costs no ROM bytes — is a transient scratch buffer
-`DIR` (`docs/basic-file.md`) reads one directory entry's name into before
-printing any of it. It kept its address (rather than sliding down into the
-freed `$0400–$048E` space) when the background-`PLAY` block was removed, so
-nothing else in this fixed low-RAM region needs to move; nothing needs
-`DIR_NAME_BUF` to survive between `DIR` invocations.
+Until 2026-10-13 the image started at `$04B7`. That left `$0400–$048E`
+(143 bytes, once the retired background-`PLAY` control block, `BGP_*`)
+unused, with this buffer fixed at `$048F`. Moving the image down to `$0400`
+closed the gap; those bytes went to BASIC's heap.
 
 ---
 
@@ -336,7 +333,7 @@ strings live between `TXTTAB` and `MEMSIZ`, exactly as before - what changed
 is where the *image* sits relative to that heap. The loaded kernel+WozMon+
 BASIC image briefly sat **above** the heap (ending exactly at `$BFFF`,
 descending-loader design); it is now bottom-anchored instead, sitting
-**below** the heap, starting exactly at `$04B7` (right after working RAM)
+**below** the heap, starting exactly at `$0400` (right after working RAM)
 and growing upward through **KERNEL → WOZMON → BASIC** - see §13 for the
 loader that makes this possible with zero wasted address space, in a single
 `ld65` pass (no two-pass "measure, then relink" build needed: a fixed
@@ -344,7 +341,7 @@ loader that makes this possible with zero wasted address space, in a single
 *end*, which needs the start computed backward from the total size first).
 
 Concretely: `KERNEL` (`clementina.cfg`) is a generously-sized MEMORY region
-(`$04B7`, size `$1200`) holding kernel+WozMon; `BASICMEM` starts immediately
+(`$0400`, size `$1200`) holding the jump table, `DIR_NAME_BUF` and kernel+WozMon; `BASICMEM` starts immediately
 after it ends (`__KERNEL_LAST__`, ld65-defined) and holds BASIC's own
 core+tables+extensions, growing up to `$C000` (immediately below I/O).
 `TXTTAB` (bottom of the heap) is set directly from `__BASICMEM_LAST__`, a
@@ -356,8 +353,8 @@ since that probe writes test patterns byte-by-byte and would corrupt the
 live, running image if it ever reached it (the image now sits *below* the
 heap, not above it, so there's nothing to discover at runtime either way).
 
-With the current ~24.0 KiB image (kernel+WozMon+BASIC, `$04B7`-`$64BE`
-today), this gives BASIC **23,361 bytes free** (`$64BF` to `$BFFF`) - an
+With the current ~24.1 KiB image (kernel+WozMon+BASIC, `$0400`-`$6457`
+today), this gives BASIC **23,464 bytes free** (`$6458` to `$BFFF`) - an
 image that
 needs no manual boundary maintenance as commands are added: there is no
 `MAX_KERNEL_BYTES`-style hand-maintained ceiling. `KERNEL`'s own `$1200`
@@ -375,13 +372,13 @@ that repo for the current hex value before moving `KERN_BASE` again.
 > bug (present on the stock baseline, independent of the extension tokens) makes
 > `INPUT` misread its buffer and re-prompt `??` when the program text begins in
 > that ~200-byte window. `TXTTAB` (`__BASICMEM_LAST__`) currently sits far above
-> it (`$64BF` today) and moves only as the image itself grows/shrinks, but the
+> it (`$6458` today) and moves only as the image itself grows/shrinks, but the
 > root cause is still not diagnosed - re-check this if the image's size changes
 > enough to approach that window.
 
 Bank 0 must remain selected while BASIC is active - the image itself
 (kernel+WozMon+BASIC, ~24.0 KiB) fits entirely below `$8000` today, but the
-**heap** above it does not: `TXTTAB`..`MEMSIZ` spans from `$64BF` up through
+**heap** above it does not: `TXTTAB`..`MEMSIZ` spans from `$6458` up through
 `$BFFF`, so its upper ~16 KiB (program text/variables/arrays/strings, once
 the heap grows that far) lives in Extended RAM bank 0. Changing PA0-PA4 away
 from bank 0 while BASIC is still running would therefore replace part of the
@@ -604,37 +601,36 @@ space are written unchanged.
 **2026-09-14 bottom-anchor rework** (reversing the 2026-09-13 top-anchored/
 descending-loader design): MIA's bootstrap loader writes **ascending** (from
 a fixed low address, incrementing) - the classic loader direction. This is
-what lets the image start exactly at `$04B7` with zero wasted space,
+what lets the image start exactly at `$0400` with zero wasted space,
 regardless of how large it grows: the loader's start address is always the
-same fixed constant (`$04B7`), and the image's actual *end* — which does
+same fixed constant (`$0400`), and the image's actual *end* — which does
 vary release to release — is simply wherever the incrementing writes stop,
 never something the firmware needs to know or recompute.
 
 1. MIA powers up in **loader mode**: it writes a tiny self-modifying loader
    into the register block and points RESET at `$FFE0`.
-2. The loader streams `kernel.bin` into base RAM **ascending from `$04B7`**:
-   the first byte transmitted lands at `$04B7`, the next at `$04B8`, and so
+2. The loader streams `kernel.bin` into base RAM **ascending from `$0400`**:
+   the first byte transmitted lands at `$0400`, the next at `$0401`, and so
    on, forward through `kernel_data[]` while the write target increments —
    the image ends up in the same byte order it was linked in.
 3. MIA switches to **normal mode**: it restores the normal register block and
-   sets `RESET_VEC` (and defaults `NMI_VEC`/`IRQ_VEC`) to `$04B7` — the fixed
+   sets `RESET_VEC` (and defaults `NMI_VEC`/`IRQ_VEC`) to `$0400` — the fixed
    start of the jump table (§6), same as the loader's own start point.
-4. The 6502 is released from reset and jumps to `$04B7` → `KERN_COLDSTART`.
+4. The 6502 is released from reset and jumps to `$0400` → `KERN_COLDSTART`.
 5. `COLDSTART` installs real NMI/IRQ handlers into `$FFFA/$FFFE`, initializes
    the console, clears the screen, prints the banner, and enters the loop.
 
 > Two fixed constants drive this, in both the firmware (`clementina-mia`
 > `src/mia/sys/mia.c`: `kernel_load_bottom_address`/`kernel_target_address`)
 > and the emulator (`clementina-6502` `pkg/components/mia/registers.go`:
-> `miaKernelLoadBottomAddress`/`miaKernelTargetAddress`) — both **`$04B7`**
+> `miaKernelLoadBottomAddress`/`miaKernelTargetAddress`) — both **`$0400`**
 > (where the ascending loader starts writing, and the jump table's start /
 > the RESET-NMI-IRQ vector target — the same address, since the loader
 > direction now matches the jump table's own fixed position). Neither needs
 > to change as the ROM image grows or shrinks — that's the whole point of
 > anchoring to a fixed low start. They would only need to move together if
-> the working-RAM footprint below `$04B7` itself changed (§7.5), which is
-> rare and deliberate, unlike the constant churn of extension commands being
-> added.
+> the working-RAM footprint below `$0400` itself changed, which is rare and
+> deliberate (the last move, from `$04B7`, is in §7.5).
 
 ---
 
