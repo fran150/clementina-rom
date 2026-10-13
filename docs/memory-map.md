@@ -36,10 +36,10 @@ CPU: **65C02S** (the `STZ`, `BRA`, `PHX/PLX`, etc. extensions are available).
 | --- | --- |
 | `$0000–$00FF` | Zero page: BASIC `$00–$97`, programs `$98–$DF`, system `$E0–$FF` (§2) |
 | `$0100–$01FF` | CPU stack (§3) |
-| `$0200–$02FF` | Line input buffers, BASIC's and WozMon's (§4) |
+| `$0200–$02FF` | Line input buffers, BASIC's and WozMon's, free bytes for programs, and the clock snapshot (§4) |
 | `$0300–$03FF` | Kernel variables and vectors (§5) |
-| `$0400–$042C` | Kernel jump table (§6), the first bytes of the loaded image |
-| `$042D–…` | Rest of the image: `DIR_NAME_BUF` (§7.5), kernel+WozMon (§7), then BASIC (§8) |
+| `$0400–$0435` | Kernel jump table (§6), the first bytes of the loaded image |
+| `$0436–…` | Rest of the image: `DIR_NAME_BUF` (§7.5), kernel+WozMon (§7), then BASIC (§8) |
 | `…–$BFFF` | BASIC's free workspace / heap (§8), filling everything above the image |
 
 **2026-09-14 bottom-anchor rework** (reversing the 2026-09-13 top-anchored/
@@ -123,7 +123,7 @@ pushes reach only `$01FC`, a byte BASIC does not need to keep.
 
 ---
 
-## 4. Line input buffers (`$0200–$02FF`)
+## 4. Line input buffers and clock snapshot (`$0200–$02FF`)
 
 Both line buffers live here: WozMon's (`IN = $0200`) and BASIC's
 (`INPUTBUFFER = $0200`). WozMon and BASIC are never active at the same time
@@ -141,10 +141,25 @@ Applesoft/Commodore BASIC 2 layout (`CONFIG_NO_INPUTBUFFER_ZP` /
 | `$0250` | BASIC | `$00` terminator after an 80-character line. |
 | `$0251–$0252` | BASIC | The tokenizer writes an end-of-program `$00` two bytes past the tokenized line's terminator (at most `$0252`), which direct-mode `NEWSTT` reads as a zero link. |
 | `$0200–$027F` | WozMon | `IN`, WozMon's line buffer. |
-| `$0280–$02FF` | — | Unused by both buffers. |
+| `$0280–$02F7` | — | Free for programs (120 bytes). Nothing in the system writes here. |
+| `$02F8–$02FF` | Kernel | `CLOCK_SNAPSHOT`: the CPU copy of MIA's clock, written by `KERN_RDTIM` (below). |
 
 `EDIT_ATTR_BUF` (§5) holds the attributes of the same cells, indexed in
 parallel with `INPUTBUFFER`; at 80 bytes it covers a full line.
+
+### Clock snapshot (`$02F8–$02FF`)
+
+`KERN_RDTIM` (§6) asks MIA for its clock and copies the 8 bytes here, the same
+layout MIA latches at `$11078` (see "MIA wall-time clock" below). The bytes
+hold their values until the next `KERN_RDTIM`; they are not a live counter.
+BASIC's `TI`, `TICKS` and `DELAY` read the clock the same way and overwrite
+this area, so a program reads it right after its own `KERN_RDTIM`.
+
+| Addr | Name | Size | Contents |
+| --- | --- | --- | --- |
+| `$02F8` | `CLOCK_MS` | 4 | Milliseconds since MIA reset, little-endian, wraps at 2^32 (about 49.7 days). |
+| `$02FC` | `CLOCK_60HZ` | 3 | MIA's 60 Hz count, little-endian, wraps at 5,184,000 (24 hours). BASIC's `TI` reads this value. `KERN_SETTIM` sets it. |
+| `$02FF` | `CLOCK_VERSION` | 1 | `1` when MIA filled the snapshot. |
 
 ---
 
@@ -188,15 +203,15 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 
 ---
 
-## 6. Kernel jump table (`$0400–$042C`)
+## 6. Kernel jump table (`$0400–$0435`)
 
 The **stable ABI**. Each entry is a 3-byte `JMP`. Callers (BASIC, WozMon, user
 programs) bind to these fixed addresses; the routines behind them may move
 freely.
 
 > **2026-09-14 bottom-anchor rework**: the jump table is placed **first** in
-> `clementina.cfg`'s `SEGMENTS` list, so it lands on the bottom 45 bytes of
-> the image — always `$0400-$042C`, right after working RAM — no matter how
+> `clementina.cfg`'s `SEGMENTS` list, so it lands on the bottom 54 bytes of
+> the image — always `$0400-$0435`, right after working RAM — no matter how
 > large the rest of the image grows. `KERN_BASE` (`kernel.inc`) is the plain
 > fixed constant `$0400`, a true compile-time constant that never needs
 > bumping. See §8 and §13 for the full picture and the single-pass build
@@ -219,6 +234,9 @@ freely.
 | `$0424` | `KERN_WOZMON` | — | (does not return) | Enter the WOZ monitor (`src/monitor/wozmon-clementina.s`). Examine/deposit memory and run code; quit back to BASIC with `Q` (runs `KERN_WARMSTART`). Invoke from BASIC with `MON`; the older `USR` vector method still works. |
 | `$0427` | `KERN_SET_BACKDROP` | `A`=selector | — | Write the backdrop selector to `VIDX_BACKDROP_COLOR` (IRQ-safe tail call). |
 | `$042A` | `KERN_IRQ` | A/X/Y as at interrupt entry | (returns from the interrupt) | The kernel's IRQ handler, for chaining: a program's own handler ends with `JMP KERN_IRQ` so the kernel keeps counting `KJIFFY`, blinking the cursor and clearing MIA's IRQ status. See "Taking over the IRQ" below. |
+| `$042D` | `KERN_PLOT` | `C`=1: — / `C`=0: `X`=row, `Y`=column | `C`=1: `X`=row, `Y`=column / `C`=0: `C`=0, or `C`=1 if out of range | Read or move the text cursor, with the C64's `PLOT` registers. With `C`=0 it moves the cursor to row `0..24`, column `0..39`; an out-of-range position returns `C`=1 and moves nothing. `A` is preserved. BASIC's `POS`/`TAB` column is not updated. |
+| `$0430` | `KERN_RDTIM` | — | `C`=1 if valid; `A`/`X`/`Y` clobbered | Copy MIA's clock to `CLOCK_SNAPSHOT` (`$02F8–$02FF`, §4). `C`=0 means the MIA firmware has no clock. Foreground only. |
+| `$0433` | `KERN_SETTIM` | `A`/`X`/`Y` = low/middle/high byte | `A`/`X`/`Y` clobbered | Set MIA's 60 Hz count (what BASIC reads as `TI`). MIA ignores values of 5,184,000 or more. Also leaves the value in `CLOCK_60HZ`. Foreground only. |
 
 > **2026-10-11**: the `KERN_STOP` and `KERN_SAVE` stubs
 > were removed and every later entry moved down 3 or 6 bytes. Neither ever did
@@ -264,11 +282,11 @@ Put the kernel's handler back before returning to BASIC with `RTS`, or the
 vector may point into memory BASIC reuses. `KERN_WARMSTART` and reset restore
 it automatically.
 
-## 7. Kernel code and data (after `DIR_NAME_BUF`, from `$0455` today)
+## 7. Kernel code and data (after `DIR_NAME_BUF`, from `$045E` today)
 
 Internal routines (`KERNCODE`/`RODATA`/`WOZCODE` segments). These addresses
 are **not** ABI; reach them only through the jump table. The kernel+WozMon
-portion of the image is ~4.4 KiB (`$0400`-`$1594` today); see §8 for the
+portion of the image is ~4.4 KiB (`$0400`-`$15BA` today); see §8 for the
 combined kernel+WozMon+BASIC image size and how it's anchored. Notable
 internal routines:
 
@@ -307,7 +325,7 @@ internal routines:
 
 ---
 
-## 7.5. `DIR_NAME_BUF` (right after the jump table, `$042D–$0454` today)
+## 7.5. `DIR_NAME_BUF` (right after the jump table, `$0436–$045D` today)
 
 `DIR_NAME_BUF` (40 bytes) is a transient scratch buffer `DIR`
 (`docs/basic-file.md`) reads one directory entry's name into before printing
@@ -353,8 +371,8 @@ since that probe writes test patterns byte-by-byte and would corrupt the
 live, running image if it ever reached it (the image now sits *below* the
 heap, not above it, so there's nothing to discover at runtime either way).
 
-With the current ~24.1 KiB image (kernel+WozMon+BASIC, `$0400`-`$6457`
-today), this gives BASIC **23,464 bytes free** (`$6458` to `$BFFF`) - an
+With the current ~24.1 KiB image (kernel+WozMon+BASIC, `$0400`-`$647D`
+today), this gives BASIC **23,426 bytes free** (`$647E` to `$BFFF`) - an
 image that
 needs no manual boundary maintenance as commands are added: there is no
 `MAX_KERNEL_BYTES`-style hand-maintained ceiling. `KERNEL`'s own `$1200`
@@ -372,13 +390,13 @@ that repo for the current hex value before moving `KERN_BASE` again.
 > bug (present on the stock baseline, independent of the extension tokens) makes
 > `INPUT` misread its buffer and re-prompt `??` when the program text begins in
 > that ~200-byte window. `TXTTAB` (`__BASICMEM_LAST__`) currently sits far above
-> it (`$6458` today) and moves only as the image itself grows/shrinks, but the
+> it (`$647E` today) and moves only as the image itself grows/shrinks, but the
 > root cause is still not diagnosed - re-check this if the image's size changes
 > enough to approach that window.
 
 Bank 0 must remain selected while BASIC is active - the image itself
 (kernel+WozMon+BASIC, ~24.0 KiB) fits entirely below `$8000` today, but the
-**heap** above it does not: `TXTTAB`..`MEMSIZ` spans from `$6458` up through
+**heap** above it does not: `TXTTAB`..`MEMSIZ` spans from `$647E` up through
 `$BFFF`, so its upper ~16 KiB (program text/variables/arrays/strings, once
 the heap grows that far) lives in Extended RAM bank 0. Changing PA0-PA4 away
 from bank 0 while BASIC is still running would therefore replace part of the
@@ -648,9 +666,10 @@ never something the firmware needs to know or recompute.
 ## MIA wall-time clock
 
 `TI`, `TICKS(0)`, and `DELAY` use command-latched MIA timer snapshots, independently
-of KJIFFY and PHI2. The snapshot occupies MIA RAM `$11078–$1107F` (not CPU RAM).
-Kernel snapshot and delay scratch storage are linked into the loaded image; no
-fixed workspace addresses change. See [BASIC timing](basic-timing.md).
+of KJIFFY and PHI2. MIA latches the snapshot into its RAM at `$11078–$1107F`;
+`KERN_RDTIM` copies it to `CLOCK_SNAPSHOT` (`$02F8–$02FF`, §4), where BASIC and
+machine code read it. `KERN_SETTIM` sets the 60 Hz count. `DELAY`'s scratch
+bytes are linked into the loaded image. See [BASIC timing](basic-timing.md).
 
 ## General MIA RAM operations
 

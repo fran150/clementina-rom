@@ -65,6 +65,9 @@ jumptab_start:
         jmp WOZMON              ; KERN_WOZMON
         jmp set_backdrop        ; KERN_SET_BACKDROP
         jmp irq_handler         ; KERN_IRQ
+        jmp plot                ; KERN_PLOT
+        jmp timing_read         ; KERN_RDTIM
+        jmp settim              ; KERN_SETTIM
 
 ; Compile-time guard: confirm the table is exactly KERN_JUMPTAB_SIZE bytes
 ; (kernel.inc) - a relative check, independent of where the linker ends up

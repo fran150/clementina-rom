@@ -259,7 +259,7 @@ CHR_INSERT          = $94      ; editor: open a gap at the cursor (insert space)
 ; resident code becomes a well-bounded, reclaimable region a loaded program
 ; can overwrite once it no longer needs BASIC. See docs/memory-map.md.
 ; ----------------------------------------------------------------------------
-KERN_JUMPTAB_SIZE  = $2D       ; 15 entries x 3 bytes - keep in sync with kernel.s
+KERN_JUMPTAB_SIZE  = $36       ; 18 entries x 3 bytes - keep in sync with kernel.s
 KERN_BASE          = $0400
 KERN_COLDSTART     = KERN_BASE + $00   ; reset entry (MIA points RESET here)
 KERN_WARMSTART     = KERN_BASE + $03   ; re-enter the system
@@ -277,6 +277,23 @@ KERN_WOZMON        = KERN_BASE + $24   ; enter the WOZ monitor (see src/monitor)
 KERN_SET_BACKDROP  = KERN_BASE + $27   ; A = backdrop selector -> VIDX_BACKDROP_COLOR
 KERN_IRQ           = KERN_BASE + $2A   ; kernel IRQ handler; a program's own handler
                                        ; restores A/X/Y, then JMPs here to chain
+KERN_PLOT          = KERN_BASE + $2D   ; C=1: read cursor -> X=row, Y=column;
+                                       ; C=0: move it to X=row, Y=column
+KERN_RDTIM         = KERN_BASE + $30   ; latch MIA's clock into CLOCK_SNAPSHOT
+KERN_SETTIM        = KERN_BASE + $33   ; A/X/Y (low/mid/high) -> MIA's 60 Hz clock
+
+; ----------------------------------------------------------------------------
+; MIA clock snapshot ($02F8-$02FF, top of the line-buffer page; see
+; docs/memory-map.md §4). KERN_RDTIM sends MIA command $55, which latches
+; MIA's clock into MIA RAM $11078-$1107F, and copies those eight bytes here.
+; They stay as they are until the next KERN_RDTIM; nothing updates them in the
+; background. BASIC's TI, TICKS and DELAY read the clock the same way, so they
+; also refresh this copy. MIA's docs call the 60 Hz counter CLOCK_TI.
+; ----------------------------------------------------------------------------
+CLOCK_SNAPSHOT     = $02F8
+CLOCK_MS           = CLOCK_SNAPSHOT + 0   ; 4 bytes LE: milliseconds since MIA reset, mod 2^32
+CLOCK_60HZ         = CLOCK_SNAPSHOT + 4   ; 3 bytes LE: 60 Hz count, mod 5,184,000 (24 h)
+CLOCK_VERSION      = CLOCK_SNAPSHOT + 7   ; 1 when MIA filled the snapshot
 
 ; ----------------------------------------------------------------------------
 ; Zero page map (docs/memory-map.md §2):
