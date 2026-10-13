@@ -384,7 +384,7 @@ What was built (all in [editor.s](../src/kernel/editor.s) and
 exactly these codes (e.g. `'1'` in mode 1 → `$91`; `'M'` in mode 2 → `$0D`), so
 routing them through plain `chrout` would move the cursor instead of drawing the
 glyph. Fix: a new console entry **`chrout_glyph`** (and ABI slot
-**`KERN_CHROUT_GLYPH = $0427`**) draws `A` as a raw tile with the normal advance /
+**`KERN_CHROUT_GLYPH = $0421`**) draws `A` as a raw tile with the normal advance /
 wrap / scroll / line-link, never interpreting it as control. `chrout`'s printable
 path and `chrout_glyph` share `put_glyph_raw`.
 

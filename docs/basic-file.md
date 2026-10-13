@@ -141,7 +141,7 @@ jumps to that address once loaded instead of returning to BASIC — `run`
 omitted or `0` means "don't run" (`0` is never a valid code entry point).
 
 **A destination that reaches into BASIC's own resident region or heap
-(anywhere `>= $04B7`, unbanked — see `docs/memory-map.md` §8) requires a
+(anywhere `>= $0400`, unbanked — see `docs/memory-map.md` §8) requires a
 `run` address.** BASIC's own code may not survive the load, so returning to
 it afterward is never coherent; without `run`, such a load is rejected
 before anything is written, leaving the running program untouched. A

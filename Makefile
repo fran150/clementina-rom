@@ -6,7 +6,7 @@
 # cold start.
 #
 # Bottom-anchored (2026-09 rework, reversing the earlier top-anchored/
-# descending-loader design): the image starts at a fixed low address, $04B7
+# descending-loader design): the image starts at a fixed low address, $0400
 # (right after working RAM), kernel+WozMon first, then BASIC growing upward -
 # reclaimable up through $BFFF by a loaded program that no longer needs
 # BASIC. Anchoring at a fixed START lets ld65 place everything in one pass
@@ -56,7 +56,7 @@ $(KERNEL_BIN): $(KERNEL_DIR)/*.s $(KERNEL_DIR)/kernel.inc $(KERNEL_CFG) $(BASIC_
 	@SIZE=$$(wc -c < $(KERNEL_BIN) | tr -d ' '); \
 	sym() { awk -v n="$$1" '{ for (i=1;i<=NF;i++) if ($$i==n) { print $$(i+1); exit } }' $(BUILD_DIR)/kernel.map; }; \
 	KLAST=0x$$(sym __KERNEL_LAST__); BLAST=0x$$(sym __BASICMEM_LAST__); \
-	echo "Built $(KERNEL_BIN) ($$SIZE bytes): kernel+wozmon \$$04B7-$$(printf '0x%04X' $$((KLAST-1)))," \
+	echo "Built $(KERNEL_BIN) ($$SIZE bytes): kernel+wozmon \$$0400-$$(printf '0x%04X' $$((KLAST-1)))," \
 		"basic $$(printf '0x%04X' $$KLAST)-$$(printf '0x%04X' $$((BLAST-1)))," \
 		"heap $$(printf '0x%04X' $$BLAST)-\$$BFFF"
 
@@ -68,13 +68,13 @@ $(BUILD_DIR):
 install-emulator: $(KERNEL_BIN)
 	cp $(KERNEL_BIN) $(EMU_KERNEL)
 	@echo "Copied kernel.bin -> $(EMU_KERNEL)"
-	@echo "NOTE: emulator must have kernelTargetAddress/kernelLoadBottomAddress=0x04B7 (registers.go)"
+	@echo "NOTE: emulator must have kernelTargetAddress/kernelLoadBottomAddress=0x0400 (registers.go)"
 
 # Copy the image into the firmware tree (CMake turns it into kernel_data.c).
 install-firmware: $(KERNEL_BIN)
 	cp $(KERNEL_BIN) $(MIA_KERNEL)
 	@echo "Copied kernel.bin -> $(MIA_KERNEL)"
-	@echo "NOTE: firmware must have kernel_target_address/kernel_load_bottom_address=0x04B7 (mia.c)"
+	@echo "NOTE: firmware must have kernel_target_address/kernel_load_bottom_address=0x0400 (mia.c)"
 
 install: install-emulator
 
@@ -89,8 +89,8 @@ help:
 	@echo "  make install-firmware  Copy kernel.bin into the MIA firmware tree"
 	@echo "  make clean      Remove build artifacts"
 	@echo
-	@echo "The image is bottom-anchored: it always starts at \$$04B7 (kernel,"
+	@echo "The image is bottom-anchored: it always starts at \$$0400 (kernel,"
 	@echo "then WozMon, then BASIC growing upward, reclaimable through \$$BFFF),"
 	@echo "loaded by an ascending MIA bootstrap. Needs kernel_target_address/"
-	@echo "kernel_load_bottom_address=0x04B7 in both the MIA firmware (mia.c)"
+	@echo "kernel_load_bottom_address=0x0400 in both the MIA firmware (mia.c)"
 	@echo "and the emulator (registers.go). See docs/memory-map.md."

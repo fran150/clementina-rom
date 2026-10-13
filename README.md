@@ -9,7 +9,7 @@ This repository contains the 6502-side software for Clementina:
 ## Build
 
 ```sh
-make            # build build/kernel.bin (bottom-anchored, starts at $04B7)
+make            # build build/kernel.bin (bottom-anchored, starts at $0400)
 make install    # copy kernel.bin into the emulator's embedded asset
 ```
 

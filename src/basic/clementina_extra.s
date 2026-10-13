@@ -3,10 +3,10 @@
 ; clementina_extra.s - Clementina BASIC console glue (EXTRA segment)
 ; ----------------------------------------------------------------------------
 ; Thin thunks from BASIC's console contract into the Clementina kernel jump
-; table. Bottom-anchor rework: the jump table is at the fixed low anchor
-; KERN_BASE=$04B7 (see src/kernel/kernel.inc), placed first in clementina.cfg
-; so it always starts there regardless of how much kernel/WozMon code follows.
-; Keep these addresses in sync with src/kernel/kernel.inc / docs/memory-map.md.
+; table at KERN_BASE ($0400, see defines_clementina.s and
+; src/kernel/kernel.inc), placed first in clementina.cfg so it always starts
+; there regardless of how much kernel/WozMon code follows. The offsets below
+; are the kernel ABI and never change.
 ; ============================================================================
 
 .segment "EXTRA"
@@ -20,16 +20,16 @@
                         ; safe, since BASIC's own code (this routine included)
                         ; is still guaranteed intact at that point.
 
-KERN_CHROUT       = $04BD
-KERN_CHRIN        = $04C0
-KERN_GETKEY_NB    = $04C3
+KERN_CHROUT       = KERN_BASE + $06
+KERN_CHRIN        = KERN_BASE + $09
+KERN_GETKEY_NB    = KERN_BASE + $0C
 ; KERN_LOAD is already defined in defines_clementina.s (same translation
 ; unit as this file, both pulled into basic.o via msbasic.s) - BLOAD hands
 ; off there, see src/kernel/load.s.
-KERN_EDITKEY      = $04D5
-KERN_CHROUT_GLYPH = $04D8
-KERN_WOZMON       = $04DB
-KERN_SET_BACKDROP = $04DE
+KERN_EDITKEY      = KERN_BASE + $1E
+KERN_CHROUT_GLYPH = KERN_BASE + $21
+KERN_WOZMON       = KERN_BASE + $24
+KERN_SET_BACKDROP = KERN_BASE + $27
 
 ; Kernel zero page ($F0-$FB, see kernel.inc) - BLOAD hands its parsed
 ; destination-override/run addresses to KERN_LOAD through these two.
@@ -3319,9 +3319,7 @@ styled_outc:
 .endif
 
 ; ============================================================================
-; DIR's own scratch, part of the working-RAM block at the bottom of the map
-; (right after KVARS, below RAMSTART2/$04B7 - see defines_clementina.s and
-; docs/memory-map.md). A name must be fully read out of the MIA dir-entry
+; DIR's own scratch. A name must be fully read out of the MIA dir-entry
 ; window into CPU RAM before any of it is printed: MONCOUT (kernel CHROUT)
 ; draws to the screen through MIA's own indexed-RAM window mechanism (the
 ; same IDXA_SELECT/IDXA_PORT pair DIR itself uses to read FS_READDIR
@@ -3332,15 +3330,16 @@ styled_outc:
 ; comfortably covers any filename this console can usefully display (a
 ; 40-column screen).
 ;
-; Fixed at $048F rather than following a previous block's own equate: this
-; used to sit right after the retired background PLAY's 143-byte control
-; block (also based at a fixed address, for the same "must survive arbitrary
-; interrupted code" reason DIR's own scratch does) - kept at the same address
-; rather than sliding down, so nothing else in this fixed low RAM region
-; needs to move.
+; It lives in the DIRBUF segment, which clementina.cfg places right after the
+; kernel jump table, outside BASIC's reclaimable region. Nothing else uses
+; its address, and nothing needs it to survive between DIR invocations, so it
+; simply moves up whenever the jump table grows.
 ; ============================================================================
-DIR_NAME_BUF      = $048F
 DIR_NAME_BUF_SIZE = 40
+.pushseg
+.segment "DIRBUF"
+DIR_NAME_BUF:     .res DIR_NAME_BUF_SIZE
+.popseg
 
 ; ----------------------------------------------------------------------------
 ; EXTFN_DISPATCH - TOKEN_EXTFN two-byte function dispatch, mirrors

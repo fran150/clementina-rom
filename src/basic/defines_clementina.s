@@ -137,33 +137,29 @@ STYLE_SIDE_MAGIC1   := $FF
 
 ; memory layout
 ; ----------------------------------------------------------------------------
-; 2026-09-14 bottom-anchor rework (reversing the 2026-09-13 top-anchored/
-; descending-loader design this comment used to describe): the loaded
-; kernel+BASIC+WozMon image sits between working RAM and the heap again, but
-; anchored to a fixed *low* start, $04B7, instead of a fixed high end. It's
+; The loaded kernel+WozMon+BASIC image sits between working RAM and the heap,
+; anchored to a fixed *low* start, KERN_BASE ($0400), right after KVARS. It's
 ; placed there by clementina.cfg's KERNEL/BASICMEM regions (KERNEL starts at
-; the fixed constant $04B7; BASICMEM starts wherever KERNEL ends,
-; __KERNEL_LAST__) and loaded by an *ascending* MIA bootstrap
-; (kernel_load_bottom_address/kernel_target_address in clementina-mia's
-; mia.c and the mirrored constants in clementina-6502's registers.go - both
-; fixed at $04B7 forever, regardless of how large the image grows).
+; the fixed constant; BASICMEM starts wherever KERNEL ends, __KERNEL_LAST__)
+; and loaded by an *ascending* MIA bootstrap (kernel_load_bottom_address/
+; kernel_target_address in clementina-mia's mia.c and the mirrored constants
+; in clementina-6502's registers.go).
 ;
-; Working RAM is one contiguous block at the bottom: zero page, stack, line
-; buffer, KVARS, then DIR_NAME_BUF (clementina_extra.s - nothing requires it
-; to be anywhere specific, it's a plain equate). RAMSTART2 is a small, stable
-; constant matching the image's own fixed low start
-; (KERN_BASE, kernel.inc) - kernel+WozMon+BASIC are loaded right above it.
+; The kernel jump table is KERNEL's first segment (kernel.s asserts it lands
+; on KERN_BASE), so BASIC takes the base from the linker's __KERNEL_START__
+; instead of copying kernel.inc, which it deliberately does not .include.
 ; BASIC's heap fills everything above wherever the image currently ends
 ; (__BASICMEM_LAST__, read directly by init.s) up through $BFFF. See
 ; docs/memory-map.md.
-RAMSTART2        := $04B7
+.import __KERNEL_START__
+KERN_BASE        := __KERNEL_START__
+RAMSTART2        := KERN_BASE
 
 ; LOAD/SAVE: a BASIC program's own tokenized text to/from an SD file - see
 ; BASIC_LOAD/BASIC_SAVE in clementina_extra.s and docs/basic-file.md. Both are
 ; BASIC-resident; only BLOAD hands off to the kernel, through KERN_LOAD.
-; KERN_BASE is $04B7 (bottom-anchored, see kernel.inc) - keep this in sync
-; with kernel.inc; BASIC deliberately does not .include kernel.inc.
-KERN_LOAD := $04D2
+; Jump table offsets are the kernel ABI (kernel.inc) and never change.
+KERN_LOAD := KERN_BASE + $1B
 SAVE:
         jmp BASIC_SAVE
 LOAD:

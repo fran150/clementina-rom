@@ -10,17 +10,19 @@
 ; primitives translate to/from the kernel's plain-ASCII console.
 ;
 ; Linked into the combined image and reached through the kernel jump table at
-; KERN_WOZMON ($04DB); enter with `JMP WOZMON` (or BASIC `MON`/`USR`). Quit back
-; to BASIC by typing `Q` (or run the warm-start vector manually with `04BAR`).
-; The jump table is bottom-anchored at KERN_BASE=$04B7 - see docs/memory-map.md.
+; KERN_WOZMON ($0424); enter with `JMP WOZMON` (or BASIC `MON`/`USR`). Quit back
+; to BASIC by typing `Q` (or run the warm-start vector manually with `403R`).
+; The jump table is bottom-anchored at KERN_BASE=$0400 - see docs/memory-map.md.
 ; ============================================================================
 
 .setcpu "65C02"
 
-; Kernel jump table (keep in sync with ../kernel/kernel.inc).
-KERN_WARMSTART  = $04BA
-KERN_CHROUT     = $04BD
-KERN_CHRIN      = $04C0
+; Kernel jump table: it starts the KERNEL region (clementina.cfg), so the
+; base comes from the linker; the offsets are the ABI in ../kernel/kernel.inc.
+.import __KERNEL_START__
+KERN_WARMSTART  = __KERNEL_START__ + $03
+KERN_CHROUT     = __KERNEL_START__ + $06
+KERN_CHRIN      = __KERNEL_START__ + $09
 
 ; Page 0 variables, in the system's block ($E8-$EF, docs/memory-map.md §2)
 ; instead of the Apple-1's $24-$2B, so a trip through WozMon leaves BASIC's
