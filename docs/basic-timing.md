@@ -85,11 +85,14 @@ The snapshot stays fixed until another `$55` command or runtime reset. This is
 not a continuously updated memory counter. BASIC verifies the version before
 using a snapshot, and reports an illegal quantity if clock support is absent.
 
-Kernel link exports `timing_read`, `timing_set`, and `ktime_snapshot` live in
-`src/kernel/timing.s`. `timing_read` returns C=1 with a valid eight-byte snapshot;
-`timing_set` uses its three-byte TI slot. These are foreground-only link services,
-not additions to the fixed-address jump table. Their storage is inside the
-loaded image; no existing zero-page or heap-floor addresses move.
+The kernel side lives in `src/kernel/timing.s`. `timing_read` (also
+`KERN_RDTIM`, `$0430`) copies the eight bytes to `CLOCK_SNAPSHOT`
+(`$02F8–$02FF`) and returns C=1 when the version byte is 1. `timing_set` sends
+the snapshot's three-byte 60 Hz slot with command `$56`; `KERN_SETTIM`
+(`$0433`) takes the value in A/X/Y, stores it in that slot and falls into
+`timing_set`. Both are foreground only. BASIC links to `timing_read`,
+`timing_set` and `ktime_snapshot` directly; machine code uses the jump table
+and reads `$02F8–$02FF` (`docs/memory-map.md` §4 and §6).
 
 ## Tests
 

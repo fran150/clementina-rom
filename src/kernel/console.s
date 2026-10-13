@@ -453,6 +453,31 @@ cursor_indicator_tile:
         rts
 
 ; ----------------------------------------------------------------------------
+; plot - KERN_PLOT: read or move the cursor, with the C64's PLOT registers.
+; C=1: read. Returns X = row (CURSOR_Y), Y = column (CURSOR_X), C still 1.
+; C=0: move to X = row, Y = column and return C=0. A row of SCR_ROWS or more
+; or a column of SCR_COLS or more leaves the cursor where it was and returns
+; C=1. Like the cursor-move control codes, it only repositions the cursor:
+; BASIC's own column (POS, TAB) is not updated. Preserves A.
+; ----------------------------------------------------------------------------
+plot:
+        bcc @set
+        ldx CURSOR_Y
+        ldy CURSOR_X
+        rts
+@set:
+        cpx #SCR_ROWS
+        bcs @done               ; row out of range: C=1, nothing moves
+        cpy #SCR_COLS
+        bcs @done               ; column out of range
+        jsr cursor_hide         ; preserves A/X/Y
+        stx CURSOR_Y
+        sty CURSOR_X
+        clc
+@done:
+        rts
+
+; ----------------------------------------------------------------------------
 ; cursor_show / cursor_hide - draw and restore a software text cursor.
 ; The cursor is stored directly in the overlay cell, so these routines save the
 ; underlying tile and attribute before drawing and restore them before output.

@@ -1,9 +1,16 @@
 ; MIA clock protocol (sys/timing.h): latch $11078..$1107F with command $55.
 ; No periodic MIA writer touches the snapshot. The existing VIA tick/IRQ is
-; independent and continues servicing background PLAY while callers wait.
+; independent and keeps running while callers wait. The CPU-side copy is
+; CLOCK_SNAPSHOT ($02F8-$02FF, kernel.inc), a fixed address programs read
+; after KERN_RDTIM; BASIC's TI/TICKS/DELAY use it through ktime_snapshot.
 .segment "KERNCODE"
 .export timing_read, timing_set, ktime_snapshot
 
+ktime_snapshot = CLOCK_SNAPSHOT  ; ms32, 60 Hz count24, version
+
+; timing_read - KERN_RDTIM. Copies MIA's clock snapshot to CLOCK_SNAPSHOT.
+; Returns C=1 if MIA filled it (CLOCK_VERSION = 1), C=0 on firmware without
+; the clock. Clobbers A/X/Y. Foreground only.
 timing_read:
         lda #$55
         ldx #0
@@ -26,7 +33,15 @@ timing_read:
 @ok:    sec
         rts
 
-; Set TI from the little-endian three-byte snapshot TI slot. Foreground only.
+; settim - KERN_SETTIM. Sets MIA's 60 Hz clock from A (low), X (mid) and
+; Y (high). MIA ignores values of 5,184,000 (24 hours) or more. The value is
+; also left in CLOCK_60HZ. Foreground only.
+settim:
+        sta ktime_snapshot+4
+        stx ktime_snapshot+5
+        sty ktime_snapshot+6
+        ; fall through
+; Set the 60 Hz clock from the snapshot's three-byte slot. Foreground only.
 timing_set:
 @wait:  lda STATUS_L
         and #MIA_STAT_CMD_RUNNING
@@ -44,4 +59,3 @@ timing_set:
         bne @done
         rts
 
-ktime_snapshot: .res 8,0         ; ms32, TI24, version
