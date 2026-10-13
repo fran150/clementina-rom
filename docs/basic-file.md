@@ -120,10 +120,9 @@ against any address at any time as a plain statement.
 
 ```text
 [addr_lo][addr_hi]                 addr < $8000  -> plain CPU RAM, unbanked
-[addr_lo][addr_hi][bank]           addr in $8000-$BFFF -> bank REQUIRED,
-                                    1-31 (bank 0 is never a valid target -
-                                    it's BASIC's own running heap, §8/§9 of
-                                    docs/memory-map.md)
+[addr_lo][addr_hi][bank]           addr in $8000-$BFFF -> bank byte 0-31
+                                    (bank 0 holds the top of BASIC's heap,
+                                    §8/§9 of docs/memory-map.md)
 ```
 
 The address itself signals which shape follows, so a plain unbanked file is
@@ -140,20 +139,25 @@ the file's own header, then run") never needs a blank placeholder argument,
 jumps to that address once loaded instead of returning to BASIC — `run`
 omitted or `0` means "don't run" (`0` is never a valid code entry point).
 
-**A destination that reaches into BASIC's own resident region or heap
-(anywhere `>= $0400`, unbanked — see `docs/memory-map.md` §8) requires a
-`run` address.** BASIC's own code may not survive the load, so returning to
-it afterward is never coherent; without `run`, such a load is rejected
-before anything is written, leaving the running program untouched. A
-**banked** destination (`$8000-$BFFF`, `bank` 1-31 from the file's own
-header) never has this restriction — it's ordinary storage, not BASIC's own
-workspace, so an ordinary (non-`run`) banked `BLOAD` returns to BASIC
-normally once loaded.
+**Where the bytes go is the programmer's choice.** `BLOAD` writes to any
+CPU RAM below `$C000` (only I/O and the MIA registers, `$C000` and up, are
+refused) and does not check what lives there. A load that returns to BASIC
+must leave the kernel and BASIC intact; `docs/memory-map.md` §8 ("Where
+machine code can go") lists the safe places: `$0280-$02F7`, banks 1-31, and
+bank 0 above a lowered `MEMSIZ`. A program that takes over with `run` may
+overwrite BASIC, from `$1600` up.
+
+An `addr` override replaces the file's address and, for a banked file, its
+bank: an override in `$8000-$BFFF` loads into the bank that is mapped (bank 0
+while BASIC runs). A load without `run` selects the previously mapped bank
+again before returning. A load with `run` masks interrupts while it copies,
+since it may overwrite an IRQ handler, and enables them before jumping.
 
 A payload that reaches the top of a bank (`$BFFF`) auto-advances into the
 next bank rather than requiring the caller to split the load across bank
 boundaries themselves — the same reason a payload can start a few bytes
-before `$C000` and still land correctly. Loading is entirely kernel-resident
+before `$C000` and still land correctly. A payload that runs past `$7FFF`
+from base RAM continues into the mapped bank. Loading is entirely kernel-resident
 (`KERN_LOAD`, `src/kernel/load.s`): the destination may overwrite BASIC's
 own code as it copies, so it cannot call out to any BASIC-resident routine
 mid-copy.

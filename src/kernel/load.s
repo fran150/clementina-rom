@@ -5,7 +5,7 @@
 ; ----------------------------------------------------------------------------
 ; Entirely self-contained kernel-resident code for the whole copy: it never
 ; calls out to clementina_extra.s's mia_sd_cmd/mia_sd_seek/etc, because a
-; "swallow" load (destination reaching into BASIC's own resident region) may
+; load whose destination reaches into BASIC's own resident region may
 ; have already overwritten those routines by the time a later chunk needs
 ; them. The handful of MIA SD/FS primitives below are a deliberate
 ; duplication of that BASIC-side plumbing, required for correctness, not an
@@ -17,8 +17,13 @@
 ; this routine goes on to overwrite. mia_fileerr (clementina_extra.s) is
 ; reached for errors detected before any destination byte is written - safe,
 ; since BASIC's own code (mia_fileerr included) is still guaranteed intact
-; at that point; once the copy has started into the reclaimable region,
-; errors are not gracefully recoverable (documented limitation - see below).
+; at that point; once the copy has overwritten BASIC, errors are not
+; gracefully recoverable (documented limitation - see below).
+;
+; The destination is the caller's choice (2026-10-13): any CPU RAM below
+; $C000, including the kernel, BASIC, its heap and bank 0. Nothing checks
+; whether BASIC or the kernel survive the load; docs/basic-file.md says
+; where loading is safe.
 ;
 ; Entry (set by the caller before JMP load):
 ;   KPTR ($F0-F1) = destination override address, or $0000 to use the file's
@@ -27,20 +32,19 @@
 ;   KTMP ($F2-F3) = run address, or $0000 to return to the caller instead of
 ;                   jumping there once loading finishes.
 ; Exit:
-;   RTS if KTMP was $0000 (and the destination was banked, or unbanked but
-;   below KERN_BASE - a combination that would reach kernel or BASIC's own
-;   code is rejected up front); otherwise JMP to KTMP. Never both.
+;   RTS if KTMP was $0000, with the bank mapped at entry selected again;
+;   otherwise JMP to KTMP, IRQs enabled, leaving the last bank written
+;   selected. Never both.
 ;
 ; PRG format (see docs/basic-file.md):
-;   [addr_lo][addr_hi]            addr_hi < $80 -> plain CPU RAM, unbanked
-;   [addr_lo][addr_hi][bank]      addr_hi in $80-$BF -> bank REQUIRED, 1-31
-;                                 (bank 0 is never a valid target - it's part
-;                                 of the permanently-resident kernel/WozMon
-;                                 image, see clementina.cfg)
-; A caller-supplied override (KPTR) must be unbanked (< $8000) - there is no
-; way to also specify a bank through BLOAD's plain address argument, so a
-; banked override is rejected rather than guessing "the currently selected
-; bank" (same "no implicit current bank" stance as BSAVE).
+;   [addr_lo][addr_hi]            addr_hi < $80 -> base RAM
+;   [addr_lo][addr_hi][bank]      addr_hi in $80-$BF -> the bank byte (0-31)
+;                                 follows and selects the bank
+; An override (KPTR) replaces the header's address, and the header's bank if
+; any: it loads into whatever bank is mapped at entry (bank 0 while BASIC
+; runs). A destination at $C000 or above (I/O, MIA registers) is refused.
+; Data that reaches $C000 continues at $8000 in the next bank; data that runs
+; past $7FFF from base RAM continues into the mapped bank.
 ; ============================================================================
 
 ; .macpack longbranch already active by this point in kernel.s's include
@@ -73,7 +77,7 @@ KLOAD_STATUS_H_SD_BUSY  = %00000100
 ; see kernel.inc. KPTR/KTMP carry the caller's inputs in; once the header is
 ; parsed, KPTR is repurposed as the live write cursor (its "override or not"
 ; question has already been answered by then).
-KLOAD_BANK    = $F9    ; current destination bank, 0 = unbanked
+KLOAD_BANK    = $F9    ; bank selected while copying
 KLOAD_CHUNKLEN = $FA   ; bytes actually read this round (also header scratch
                         ; for the addr_lo byte while deciding the destination)
 KLOAD_SCRATCH = $FB    ; header addr_hi scratch while deciding the destination
@@ -178,17 +182,15 @@ kld_read_byte:
         lda     IDXA_PORT
         rts
 
-; A = min(KLOAD_CHUNK, boundary-KPTR), where the boundary's high byte is
-; KLOAD_SCRATCH (set once before the copy loop begins: $80 unbanked, $C0
-; banked). Never returns 0 - the copy loop only calls this starting below
-; the boundary or freshly auto-advanced past it, never sitting exactly on
-; it. Clobbers A,X.
+; A = min(KLOAD_CHUNK, $C000-KPTR). Never returns 0 - the copy loop only
+; calls this starting below $C000 or freshly auto-advanced back to $8000,
+; never sitting exactly on it. Clobbers A,X.
 kld_chunk_request_len:
         sec
         lda     #$00
         sbc     KPTR
-        tax                             ; X = low byte of (boundary - KPTR)
-        lda     KLOAD_SCRATCH
+        tax                             ; X = low byte of ($C000 - KPTR)
+        lda     #$C0
         sbc     KPTR+1
         bne     @full                   ; high byte nonzero -> room for 128+
         cpx     #KLOAD_CHUNK+1
@@ -201,6 +203,11 @@ kld_chunk_request_len:
 
 ; ----------------------------------------------------------------------------
 load:
+        lda     VIA_ORA
+        and     #VIA_DDRA_BANK_BITS
+        sta     KLOAD_SAVED_BANK        ; put back on return or error
+        sta     KLOAD_BANK              ; default: load into the mapped bank
+
         ldx     #KLOAD_HANDLE
         jsr     kld_select_handle
         lda     #KLOAD_SD_OPEN_MODE
@@ -217,7 +224,16 @@ load:
         jsr     kld_read_byte
         sta     KLOAD_SCRATCH           ; addr_hi, temp home until decided
 
-        stz     KLOAD_BANK
+        ; A header address in $8000-$BFFF is followed by its bank byte.
+        cmp     #$80
+        bcc     @header_done
+        cmp     #$C0
+        jcs     kload_err_close_safe    ; $C000 and up is I/O/MIA, not RAM
+        jsr     kld_read_byte           ; bank byte
+        cmp     #32
+        jcs     kload_err_close_safe    ; only 32 banks exist (0-31)
+        sta     KLOAD_BANK
+@header_done:
 
         ; Destination = override (KPTR) if given, else the header's own.
         lda     KPTR
@@ -231,78 +247,29 @@ load:
         bra     @have_dest
 
 @override:
+        lda     KLOAD_SAVED_BANK        ; an override loads into the mapped bank
+        sta     KLOAD_BANK
         lda     KPTR+1
-        cmp     #$80
-        bcc     @have_dest              ; override is unbanked - fine as-is
-        jmp     kload_err_close_safe    ; banked override unsupported
+        cmp     #$C0
+        jcs     kload_err_close_safe    ; $C000 and up is I/O/MIA, not RAM
 
 @have_dest:
-        ; Banked destination? (addr_hi in $80-$BF)
-        lda     KPTR+1
-        cmp     #$80
-        bcc     @unbanked
-        cmp     #$C0
-        jcs     kload_err_close_safe    ; >= $C0 is I/O/MIA, never a valid target
-
-        jsr     kld_read_byte           ; bank byte, only present for banked PRGs
-        jeq     kload_err_close_safe    ; bank 0 is never valid (kernel/WozMon)
-        cmp     #32
-        jcs     kload_err_close_safe    ; only 32 banks exist (1-31 valid)
-        sta     KLOAD_BANK
-        lda     #$C0
-        sta     KLOAD_SCRATCH           ; boundary hi byte for the chunk cap below
-        bra     @dest_decided
-
-@unbanked:
-        ; Safety check: any unbanked destination at or above KERN_BASE can
-        ; only proceed if it's going to hand off control there (run given).
-        ; This isn't just about BASIC's own resident code: KERN_BASE..$7FFF
-        ; is *entirely* consumed by the permanently-resident kernel/WozMon
-        ; image, BASIC's own resident image, and BASIC's heap under the
-        ; bottom-anchor layout (see docs/memory-map.md) - there is no
-        ; "ordinary" unbanked destination up here that wouldn't risk
-        ; unmapping either KERN_LOAD's own code (mid-copy) or BASIC's, so an
-        ; RTS back to BASIC afterward is never coherent without a run
-        ; address. Banked destinations ($8000-$BFFF) can never reach any of
-        ; this at all (different address space via VIA Port A), so they
-        ; skip this check entirely - that's the one genuinely "ordinary",
-        ; always-safe BLOAD destination.
-        lda     KPTR+1
-        cmp     #>KERN_BASE
-        bcc     @dest_decided_unbanked
-        bne     @maybe_reclaim
-        lda     KPTR
-        cmp     #<KERN_BASE
-        bcc     @dest_decided_unbanked
-@maybe_reclaim:
+        ; A run load may overwrite whatever IRQ_VEC points at, so mask IRQs
+        ; while copying; the final JMP re-enables them.
         lda     KTMP
         ora     KTMP+1
-        jeq     kload_err_close_safe    ; reaches BASIC's code, no run given
-
-        ; Reaching into the reclaimable region: mask interrupts for the
-        ; duration - background PLAY and anything else IRQ-dispatched into
-        ; that region is exactly as vulnerable as straight-line self-
-        ; overwrite. Restored (as CLI, ready for the new program) right
-        ; before the final JMP below; never restored via RTS, since that
-        ; path is only reachable when this branch wasn't taken.
+        beq     @dest_decided
         sei
-@dest_decided_unbanked:
-        lda     #$80
-        sta     KLOAD_SCRATCH           ; boundary hi byte for the chunk cap below
 
 @dest_decided:
         ; Chunked copy, mirroring BASIC_LOAD's own 128-byte pattern
         ; (clementina_extra.s) but writing straight to KPTR instead of
         ; BASIC's TXTTAB, and bank-aware. Each request is capped to never
-        ; cross KLOAD_SCRATCH's boundary ($8000 unbanked / $C000 banked) -
-        ; otherwise a single chunk could write straight past it (unbanked:
-        ; into I/O; banked: through the auto-advance point without ever
-        ; landing exactly on it).
+        ; cross $C000, so a chunk lands exactly on the auto-advance point
+        ; instead of writing into I/O.
 @chunk:
         lda     KLOAD_BANK
-        beq     @noselect
         sta     VIA_ORA
-@noselect:
         jsr     kld_chunk_request_len   ; A = capped request length, 1-128
         sta     KLOAD_CHUNKLEN
 
@@ -354,11 +321,8 @@ load:
         ; never overshoots the boundary, only ever lands exactly on it or
         ; short of it.
         lda     KPTR+1
-        cmp     KLOAD_SCRATCH
+        cmp     #$C0
         bne     @chunk                  ; short of the boundary - keep going
-        lda     KLOAD_BANK
-        jeq     kload_err_unsafe        ; unbanked and out of room ($7FFF was
-                                         ; the last byte KERN_BASE..$7FFF has)
         lda     #$80
         sta     KPTR+1
         inc     KLOAD_BANK
@@ -378,12 +342,10 @@ load:
         ora     KTMP+1
         bne     @go_run
 
-        ; No run address: restore bank 0 (BASIC always requires it selected)
-        ; and return normally.
-        lda     KLOAD_BANK
-        beq     @rts_out
-        stz     VIA_ORA
-@rts_out:
+        ; No run address: put back the bank mapped at entry (bank 0 for
+        ; BASIC) and return normally.
+        lda     KLOAD_SAVED_BANK
+        sta     VIA_ORA
         rts
 
 @go_run:
@@ -403,11 +365,12 @@ load:
 ; best-effort) - BASIC's own code is guaranteed untouched, so handing off to
 ; its ordinary file-I/O error path is always coherent.
 ;
-; kload_err_unsafe: reached mid-copy. If the destination never reached the
-; reclaimable region, BASIC's code is still intact and this is exactly as
-; safe as the two above. If it did (a "swallow" load already underway),
-; this is a documented, accepted limitation: there is no working interpreter
-; left to necessarily report the error to. Best effort only.
+; kload_err_unsafe: reached mid-copy. If the copy never overwrote BASIC,
+; this is exactly as safe as the two above. If it did, this is a documented,
+; accepted limitation: there is no working interpreter left to necessarily
+; report the error to. Best effort only.
+;
+; All three put back the bank mapped at entry, and a run load's masked IRQs.
 ; ----------------------------------------------------------------------------
 kload_err_close_safe:
         ldx     #KLOAD_HANDLE
@@ -416,4 +379,11 @@ kload_err_close_safe:
         jsr     kld_cmd                 ; best-effort close, ignore its result
 kload_err_safe:
 kload_err_unsafe:
+        lda     KLOAD_SAVED_BANK
+        sta     VIA_ORA
+        lda     KTMP
+        ora     KTMP+1
+        beq     @fileerr
+        cli                             ; undo a run load's SEI
+@fileerr:
         jmp     mia_fileerr
