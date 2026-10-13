@@ -43,7 +43,7 @@ repo, `docs/sd.md` and `docs/sd-programmer-guide.md`.
 | `LOAD "path"` | — | Replace the current program with a saved one. |
 | `SAVE "path"` | — | Save the current program. |
 | `BLOAD "path"[, run][, addr]` | `run`/`addr` 16-bit CPU addresses | Load a file straight into CPU RAM at the address its own header specifies (or `addr`, if given), the way a C64 loads a game. `run`, if given and nonzero, jumps there once loaded instead of returning. |
-| `BSAVE "path", addr, len[, bank]` | `addr`/`len` 16-bit, `bank` 1–31 | Save `len` bytes of CPU RAM starting at `addr` to a file, in the format `BLOAD` reads. `bank` is mandatory whenever `addr >= $8000`. |
+| `BSAVE "path", addr, len[, bank]` | `addr`/`len` 16-bit, `bank` 0–31 | Save `len` bytes of CPU RAM starting at `addr` to a file, in the format `BLOAD` reads. For `addr >= $8000` the file records `bank`, or the bank mapped now if `bank` is omitted. |
 | `SYS addr` | `addr` 16-bit CPU address | Call a machine-code routine at `addr` (`JSR`) and continue with the next statement once it returns (`RTS`). |
 
 `OPEN`, `CLOSE`, `BGET#`, `BPUT#`, `SEEK#`, `EOF`, `KILL`, `MKDIR`, `RMDIR`,
@@ -167,11 +167,17 @@ mid-copy.
 Saves `len` bytes of CPU RAM starting at `addr` to a file, in exactly the
 format `BLOAD` reads back. Unlike `BLOAD`, `len` is mandatory (there's no
 "file's own length" to fall back on) — the same asymmetry classic BASIC's
-`BLOAD`/`BSAVE` have. `bank` is mandatory whenever `addr >= $8000` (error if
-omitted) — no implicit "whatever's currently selected." A length that
-reaches the top of a bank auto-advances into the next bank, mirroring
-`BLOAD`'s own auto-advance, so a payload that spans a bank boundary
-round-trips through `BLOAD`/`BSAVE` unchanged. Reading memory to write a
+`BLOAD`/`BSAVE` have. For `addr >= $8000` the file records a bank byte:
+`bank` (0–31) if given, else the bank mapped when `BSAVE` runs, so a plain
+`BLOAD` puts the bytes back in the bank they came from whatever is mapped
+then (an address override still loads into the mapped bank). `BSAVE` maps
+`bank` only while it reads and maps back the previous bank afterwards. From
+BASIC, name the bank: switching banks yourself with `POKE 49153,n` hides the
+top of BASIC's heap, where its strings live, until bank 0 is mapped again. A
+length that reaches the top of a bank auto-advances into the next bank,
+mirroring `BLOAD`'s own auto-advance, so a payload that spans a bank boundary
+round-trips through `BLOAD`/`BSAVE` unchanged; a save that starts below
+`$8000` reads on through the mapped bank the same way. Reading memory to write a
 file never touches currently-executing code, so `BSAVE` (unlike `BLOAD`) is
 entirely BASIC-resident — no self-overwrite hazard to guard against.
 

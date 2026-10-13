@@ -228,16 +228,84 @@ func TestBasicBSAVEBankedRoundTrip(t *testing.T) {
 	}
 }
 
-// TestBasicBSAVEBankedWithoutBankErrors confirms a banked destination
-// without an explicit bank argument is rejected rather than silently saving
-// whatever bank happens to be currently selected.
-func TestBasicBSAVEBankedWithoutBankErrors(t *testing.T) {
+// TestBasicBSAVEWithoutBankPinsMappedBank saves from $8000 while bank 3 is
+// mapped: without a bank argument the file records bank 3, with one it
+// records that bank, and either way BSAVE maps bank 3 back afterwards.
+func TestBasicBSAVEWithoutBankPinsMappedBank(t *testing.T) {
 	dir := t.TempDir()
 	c, step := bootClementinaToPrompt(t)
 	c.SetMiaSDFolder(dir)
 
 	for _, l := range []string{
-		`10 BSAVE "X.PRG",32768,16`,
+		"10 POKE 49153,3", // map bank 3; no strings until bank 0 is back
+		"20 FOR I=0 TO 3:POKE 32768+I,I+1:NEXT I",
+		`30 BSAVE "P.PRG",32768,4`,
+		`40 BSAVE "Q.PRG",32768,4,5`,
+		"50 POKE 700,PEEK(49153) AND 31",
+		"60 POKE 49153,0",
+		"70 POKE 701,42",
+		"80 GOTO 80",
+	} {
+		typeLine(c, step, l)
+	}
+	typeLine(c, step, "RUN")
+	editorTickN(c, step, 1_000_000)
+
+	require_eq(t, 42, peek(c, 701), "BASIC resumed after the saves")
+	require_eq(t, 3, peek(c, 700), "BSAVE mapped bank 3 back")
+	for name, want := range map[string][]byte{
+		"P.PRG": {0x00, 0x80, 3, 1, 2, 3, 4},
+		"Q.PRG": {0x00, 0x80, 5},
+	} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data[:len(want)]) != string(want) {
+			t.Fatalf("%s = % X, want it to start % X", name, data, want)
+		}
+	}
+}
+
+// TestBasicBSAVEBankZero saves from bank 0 above a lowered MEMSIZ with an
+// explicit bank 0.
+func TestBasicBSAVEBankZero(t *testing.T) {
+	dir := t.TempDir()
+	c, step := bootClementinaToPrompt(t)
+	c.SetMiaSDFolder(dir)
+
+	for _, l := range []string{
+		"10 POKE 63,0:POKE 64,176:CLEAR", // MEMSIZ = $B000
+		"20 POKE 45056,7:POKE 45057,8",
+		`30 BSAVE "Z.PRG",45056,2,0`,
+		"40 POKE 700,42",
+		"50 GOTO 50",
+	} {
+		typeLine(c, step, l)
+	}
+	typeLine(c, step, "RUN")
+	editorTickN(c, step, 1_000_000)
+
+	require_eq(t, 42, peek(c, 700), "BASIC resumed after the save")
+	data, err := os.ReadFile(filepath.Join(dir, "Z.PRG"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{0x00, 0xB0, 0, 7, 8}
+	if string(data) != string(want) {
+		t.Fatalf("Z.PRG = % X, want % X", data, want)
+	}
+}
+
+// TestBasicBSAVEBankOutOfRangeErrors confirms a bank above 31 is rejected
+// before any file is created.
+func TestBasicBSAVEBankOutOfRangeErrors(t *testing.T) {
+	dir := t.TempDir()
+	c, step := bootClementinaToPrompt(t)
+	c.SetMiaSDFolder(dir)
+
+	for _, l := range []string{
+		`10 BSAVE "X.PRG",32768,16,32`,
 		"20 POKE 700,42",
 		"30 GOTO 30",
 	} {

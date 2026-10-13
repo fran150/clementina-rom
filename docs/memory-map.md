@@ -372,8 +372,8 @@ since that probe writes test patterns byte-by-byte and would corrupt the
 live, running image if it ever reached it (the image now sits *below* the
 heap, not above it, so there's nothing to discover at runtime either way).
 
-With the current ~24.1 KiB image (kernel+WozMon+BASIC, `$0400`-`$646B`
-today), this gives BASIC **23,444 bytes free** (`$646C` to `$BFFF`) - an
+With the current ~24.1 KiB image (kernel+WozMon+BASIC, `$0400`-`$6456`
+today), this gives BASIC **23,465 bytes free** (`$6457` to `$BFFF`) - an
 image that
 needs no manual boundary maintenance as commands are added: there is no
 `MAX_KERNEL_BYTES`-style hand-maintained ceiling. `KERNEL`'s own `$1200`
@@ -391,13 +391,13 @@ that repo for the current hex value before moving `KERN_BASE` again.
 > bug (present on the stock baseline, independent of the extension tokens) makes
 > `INPUT` misread its buffer and re-prompt `??` when the program text begins in
 > that ~200-byte window. `TXTTAB` (`__BASICMEM_LAST__`) currently sits far above
-> it (`$646C` today) and moves only as the image itself grows/shrinks, but the
+> it (`$6457` today) and moves only as the image itself grows/shrinks, but the
 > root cause is still not diagnosed - re-check this if the image's size changes
 > enough to approach that window.
 
 Bank 0 must remain selected while BASIC is active - the image itself
 (kernel+WozMon+BASIC, ~24.0 KiB) fits entirely below `$8000` today, but the
-**heap** above it does not: `TXTTAB`..`MEMSIZ` spans from `$646C` up through
+**heap** above it does not: `TXTTAB`..`MEMSIZ` spans from `$6457` up through
 `$BFFF`, so its upper ~16 KiB (program text/variables/arrays/strings, once
 the heap grows that far) lives in Extended RAM bank 0. Changing PA0-PA4 away
 from bank 0 while BASIC is still running would therefore replace part of the
@@ -432,7 +432,8 @@ free storage the way banks 1–31 are, and must be selected again before
 resuming BASIC after using any other bank. Banks 1–31 are entirely free for
 bank-aware access: `BLOAD`/`BSAVE`'s bank-aware PRG format (`docs/basic-file.md`)
 targets them directly, as do a RAM disk, paged data/assets, or large buffers.
-`BLOAD` also accepts bank 0, which is safe above a lowered `MEMSIZ` (§8).
+`BLOAD` and `BSAVE` also accept bank 0, which is safe above a lowered `MEMSIZ`
+(§8).
 
 ---
 
