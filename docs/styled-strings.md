@@ -373,9 +373,10 @@ variable/array storage.
   runs while the source is still live, against the live `FRETOP`).
 - Style-sensitive comparison? Default **no** (compare chars only). Revisit if a
   use case appears.
-- Memory budget: styled strings cost 2× heap inside BASIC's `$3601–$BFFF`
-  workspace, whose upper 16 KiB is Extended RAM bank 0. Relocating the attr half
-  to a separate bank remains rejected due to bank-switch cost inside GC.
+- Memory budget: styled strings cost 2× heap inside BASIC's free workspace
+  ([memory-map §8](memory-map.md)), whose upper 16 KiB is Extended RAM bank 0.
+  Relocating the attr half to a separate bank remains rejected due to
+  bank-switch cost inside GC.
 - Phase 6 styled program literals: sidecar format, line-skip helper, `LIST`
   rendering, `$0D` raw-glyph disambiguation, and `DATA`/`READ` sidecar walking
   are implemented. Remaining work: runtime default/style policy; see §3.5/§3.6.
