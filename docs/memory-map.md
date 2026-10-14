@@ -103,7 +103,7 @@ except the `KERN_LOAD` scratch, which `src/kernel/load.s` names.
 | `$F2` | `KTMP` | 2 | Scratch. Holds the computed overlay offset `P = CURSOR_Y*40 + CURSOR_X`, then the 24-bit overlay address low/mid. `KERN_LOAD` takes its run address here. |
 | `$F4` | `KCNT` | 2 | 16-bit loop counter for screen fills. |
 | `$F6` | `KCHR` | 1 | Scratch copy of the byte passed to `CHROUT`, so the routine can preserve A/X/Y while still repositioning MIA indexes. |
-| `$F7` | `KJIFFY` | 2 | Free-running 16-bit LE tick counter, `+1` per VIA Timer 1 IRQ, which is once per 6250 PHI2 cycles (≈160 Hz at 1 MHz). It follows the CPU clock, so it measures CPU work, not wall time; use `TI`/`TICKS` (MIA's timer) for wall time. Wraps silently (every 65,536 ticks, ≈7 min at 1 MHz) and stops while IRQs are masked or Timer 1's IRQ is off. Read it high, low, high, and retry if the high byte changed, since the IRQ can carry between the two bytes. Published in `kernel.inc`; read-only for clients. |
+| `$F7` | `KJIFFY` | 2 | Free-running 16-bit LE tick counter, `+1` per VIA Timer 1 IRQ, which is once per 6250 PHI2 cycles (PHI2 ÷ 6250: 192 Hz at the 1.2 MHz default). It follows the CPU clock, so it measures CPU work, not wall time; use `TI`/`TICKS` (MIA's timer) for wall time. Wraps silently (every 65,536 ticks, ≈5.7 min at 1.2 MHz) and stops while IRQs are masked or Timer 1's IRQ is off. Read it high, low, high, and retry if the high byte changed, since the IRQ can carry between the two bytes. Published in `kernel.inc`; read-only for clients. |
 | `$F9` | `KLOAD_BANK` | 1 | `KERN_LOAD`: current destination bank, 0 = unbanked. |
 | `$FA` | `KLOAD_CHUNKLEN` | 1 | `KERN_LOAD`: bytes read this round. |
 | `$FB` | `KLOAD_SCRATCH` | 1 | `KERN_LOAD`: header and boundary scratch. |
@@ -258,15 +258,22 @@ freely.
 
 ### Taking over the IRQ
 
-At reset the kernel starts VIA Timer 1 (an IRQ every 6250 PHI2 cycles), puts
-its handler in `IRQ_VEC` (`$FFFE`) and enables interrupts. This stays on after
+At reset the kernel starts VIA Timer 1 (an IRQ every 6250 PHI2 cycles, 192
+times a second at the 1.2 MHz default), puts its handler in `IRQ_VEC`
+(`$FFFE`) and enables interrupts. This stays on after
 a program replaces BASIC. The handler takes 65-73 cycles per tick (about 1% of
 the CPU) and only touches `KJIFFY`, the cursor blink variables (`$037E-$037F`)
 and, while `CHRIN` waits, the cursor.
 
-A program has three options:
+A program has four options:
 
 - **Leave it.** Nothing to do.
+- **Change its rate.** Timer 1 reloads from its latch (`VIA_T1LL`/`VIA_T1LH`,
+  `$C006`/`$C007`) every period, so a new count written there takes effect
+  from the next period. From BASIC, `POKE 49158,lo:POKE 49159,hi`; for
+  example `212,48` (12,500 cycles) halves the rate. `KJIFFY` and the cursor
+  blink (a toggle every 80 ticks) follow it. `TI` and key repeat don't, since
+  they come from MIA.
 - **Stop it.** Write `$40` to `VIA_IER` (`$C00E`) to turn off only the Timer 1
   IRQ, or `SEI` to mask every IRQ. `KJIFFY` and the cursor blink stop with it.
 - **Chain to it.** Point `IRQ_VEC` at the program's own handler (with IRQs
