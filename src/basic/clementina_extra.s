@@ -179,6 +179,9 @@ MIA_SEQ_OP_SET_WAVE  = $03     ; waveform
 ; right after this 4-byte record. "Loop the whole track" is just a JUMP back
 ; to the top; there is no separate loop opcode or header field.
 MIA_SEQ_OP_JUMP      = $08
+; TIE: like NOTE, but continues the sounding note (gate and envelope carry
+; on) instead of starting a new one. TRACK emits it for a note after &.
+MIA_SEQ_OP_TIE       = $09     ; freq_l, freq_h, dur_l, dur_m, dur_h
 
 AUD_SEQ_STATUS_RUNNING = $01   ; SEQ_STATUS bit 0 (PLAYING)
 AUD_SEQ_STATUS_TAKEN   = $02   ; SEQ_STATUS bit 1
@@ -2111,7 +2114,9 @@ BASIC_GATE:
         jmp     snd_wr1
 
 ; NOTE v,n : semitone 0-95 -> FREQ_L/H from the octave-0 table, then CONTROL =
-; GATE | RESET_PHASE so the note (re)triggers from phase 0. Voice rides the 6502
+; 0 and CONTROL = GATE | RESET_PHASE. MIA restarts the envelope only on the
+; gate's rising edge, so dropping the gate first makes every NOTE start a new
+; note from phase 0, even over one still sounding. Voice rides the 6502
 ; stack across the note expression (safe, like the POKE pattern); the base offset
 ; then rides X through the php/sei fence (snd_seek leaves X alone).
 BASIC_NOTE:
@@ -2139,9 +2144,13 @@ BASIC_NOTE:
         txa
         clc
         adc     #AUDV_CONTROL
+        tax                             ; X = CONTROL's offset
+        jsr     snd_seek
+        stz     IDXB_PORT               ; gate off (window B steps past CONTROL)
+        txa
         jsr     snd_seek
         lda     #AUD_GATE_RETRIG
-        sta     IDXB_PORT
+        sta     IDXB_PORT               ; gate on: the envelope restarts
         plp
         rts
 
@@ -2477,7 +2486,7 @@ PLAY_SEMI       = STYLE_SIDE_BUF + 9    ; scratch: semitone in octave (signed -1
 PLAY_TMP        = STYLE_SIDE_BUF + 10   ; general 16-bit scratch [10..11]
 
 ; TRACK's encoder state and BAND/VTAKE/VGIVE's mask scratch share the same
-; time-shared buffer, offsets 12-29 (PLAY_* above use 0-11; never concurrent -
+; time-shared buffer, offsets 12-37 (PLAY_* above use 0-11; never concurrent -
 ; see the header comment on PLAY_LEN).
 TRK_VOICE       = STYLE_SIDE_BUF + 12   ; voice being defined, 0-3
 TRK_BASE        = STYLE_SIDE_BUF + 13   ; this voice's track base, 24-bit [13..15]
@@ -2490,6 +2499,9 @@ MPCAND          = STYLE_SIDE_BUF + 28   ; trk_dur_to_samples multiply scratch, 2
 TRK_JTMP        = STYLE_SIDE_BUF + 31   ; JUMP delta scratch, 24-bit [31..33]
 TRK_STRPTR      = STYLE_SIDE_BUF + 34   ; saved INDEX (string char pointer), 16-bit [34..35]
 SEQ_MASK        = STYLE_SIDE_BUF + 36   ; BAND/VTAKE/VGIVE voice-mask scratch
+TRK_TIE         = STYLE_SIDE_BUF + 37   ; & state: 0, TRK_TIE_NOTE or TRK_TIE_NEXT
+TRK_TIE_NOTE    = $01                   ; the last timed event was a note
+TRK_TIE_NEXT    = $02                   ; & seen: the next note emits TIE
 
 ; play_len_to_dur: X = valid length code -> PLAY_DUR (16-bit) ticks, from
 ; PLAY_TEMPO (ticks per quarter). k=1 -> T<<2, k=2 -> T<<1, k=4 -> T,
@@ -2649,11 +2661,16 @@ play_oct12:                             ; octave 0..7 -> base semitone
 ; live anywhere in MIA RAM - there is no per-track size limit to outgrow.
 ;
 ; The mini-language is PLAY's, minus V n (each TRACK call is already scoped to
-; one voice, so there is no voice to switch to) and plus | for the loop point:
+; one voice, so there is no voice to switch to), plus | for the loop point and
+; & for ties:
 ;   A-G   note, optional #/+ (sharp) or - (flat), optional length, optional .
 ;   R P   rest for one length.                   O n   set octave 0-7.
 ;   < >   octave down/up.                         L n   default length.
 ;   T n   tempo, ticks per quarter note.          W n   waveform 0-4.
+;   &     tie: the next note continues the one before & instead of starting
+;         a new one (same pitch: a longer note; another pitch: legato).
+;         Compiles that next note to TIE instead of NOTE. With no note
+;         before it, or a rest or | before the next note, & does nothing.
 ;   |     mark the loop point: everything from here to the end of the string
 ;         repeats forever once BAND starts this voice; everything before it
 ;         plays once. No | means the whole track plays once and stops.
@@ -2737,6 +2754,7 @@ BASIC_TRACK:
         stz     TRK_COUNT
         stz     TRK_COUNT+1
         stz     TRK_HAS_LOOP            ; default: no loop
+        stz     TRK_TIE                 ; no note yet for & to tie to
         lda     #PLAY_OCT_DEF
         sta     PLAY_OCT
         lda     #PLAY_TEMPO_DEF
@@ -2776,11 +2794,22 @@ BASIC_TRACK:
         jeq     @tempo
         cmp     #'W'
         jeq     @wave
+        cmp     #'&'
+        jeq     @tie
         jmp     SYNERR
 @rest:
         jsr     trk_do_rest
         jmp     @loop
+@tie:
+        lda     TRK_TIE
+        jeq     @loop                   ; no note before &: nothing to tie
+        lda     #TRK_TIE_NEXT
+        sta     TRK_TIE
+        jmp     @loop
 @markloop:
+        ; The first note after | must start a new note: the JUMP back here
+        ; follows whatever ends the loop, which may be a rest.
+        stz     TRK_TIE
         lda     #$01
         sta     TRK_HAS_LOOP
         lda     TRK_ADDR
@@ -2929,7 +2958,8 @@ trk_emit:
 :       rts
 
 ; trk_do_note: A = 'A'..'G'. Computes pitch/duration exactly like PLAY's
-; play_do_note, then emits a NOTE event instead of writing live registers.
+; play_do_note, then emits a NOTE event instead of writing live registers, or
+; a TIE when & came before it.
 trk_do_note:
         sec
         sbc     #'A'
@@ -2975,7 +3005,14 @@ trk_do_note:
         lda     #$00
 @emit:
         jsr     note_freq               ; LINNUM/LINNUM+1 = Hz * 16
-        lda     #MIA_SEQ_OP_NOTE
+        ldx     #MIA_SEQ_OP_NOTE
+        lda     TRK_TIE
+        cmp     #TRK_TIE_NEXT
+        bne     :+
+        ldx     #MIA_SEQ_OP_TIE         ; & before it: continue the last note
+:       lda     #TRK_TIE_NOTE
+        sta     TRK_TIE                 ; a later & can tie to this note
+        txa
         jsr     trk_emit
         lda     LINNUM
         jsr     trk_emit
@@ -2988,8 +3025,10 @@ trk_do_note:
         lda     TRK_SAMPLES+2
         jmp     trk_emit                ; tail
 
-; trk_do_rest: one length of silence.
+; trk_do_rest: one length of silence. An & before it is dropped: there is no
+; sounding note after a rest for the next note to continue.
 trk_do_rest:
+        stz     TRK_TIE
         jsr     play_num
         bcs     @havelen
         ldx     PLAY_LDEF
