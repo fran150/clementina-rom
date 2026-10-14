@@ -70,11 +70,12 @@ VIA_ACR_T1_FREE_RUN = %01000000 ; Timer 1 free-runs, PB7 output disabled
 VIA_IFR_T1          = %01000000
 VIA_IER_SET         = %10000000
 
-; At 1 MHz PHI2, 6250 cycles gives a 6.25 ms tick (~160 Hz); 80 ticks gives a
-; classic half-second cursor blink. If PHI2 changes, both follow it, so KJIFFY
-; counts CPU work (one tick per 6250 cycles), not wall time; programs that need
-; wall time use MIA's timer (TI, TICKS). The IRQ costs 65-73 cycles per tick
-; (73 while the cursor blinks), about 1% of the CPU.
+; Timer 1 fires every 6250 PHI2 cycles, so it ticks at PHI2/6250: 192 Hz
+; (5.2 ms) at MIA's 1.2 MHz default. The cursor toggles every 80 ticks, every
+; 0.42 s at 1.2 MHz. Both follow PHI2, so KJIFFY counts CPU work (one tick per
+; 6250 cycles), not wall time; programs that need wall time use MIA's timer
+; (TI, TICKS). The IRQ costs 65-73 cycles per tick (73 while the cursor
+; blinks), about 1% of the CPU.
 VIA_T1_RELOAD       = 6250
 CURSOR_BLINK_TICKS  = 80
 
@@ -311,8 +312,9 @@ ZP_FREE_END        = $00DF   ; last zero-page byte free for programs
 ; what is published here; the rest is private kernel scratch.
 ; ----------------------------------------------------------------------------
 KJIFFY             = $00F7   ; free-running 16-bit LE tick counter, +1 per VIA
-                             ; Timer-1 IRQ, i.e. once per 6250 PHI2 cycles (~160 Hz
-                             ; at 1 MHz), so it measures CPU work, not wall time.
+                             ; Timer-1 IRQ, i.e. once per 6250 PHI2 cycles (192 Hz
+                             ; at the 1.2 MHz default), so it measures CPU work,
+                             ; not wall time.
                              ; Wraps silently. Stops while IRQs are masked or
                              ; Timer 1's IRQ is off. Read-only for clients. Read it
                              ; high/low/high (retry on high-byte change); the IRQ
