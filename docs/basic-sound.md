@@ -30,7 +30,7 @@ This page is the BASIC programmer's reference.
 | `VOL v,n` | `v` 0–3, `n` 0–255 | Voice `v` volume. `255` is unity; scales the whole voice (attack peaks included). |
 | `WAVE v,w` | `w` 0–4 | Waveform: `0` sine, `1` pulse, `2` saw, `3` triangle, `4` noise. |
 | `FREQ v,hz` | `hz` 0–4095 | Pitch in Hz. |
-| `NOTE v,n` | `n` 0–95 | Pitch as a semitone number (see table). Gates the note on and retriggers it from the start of its waveform. |
+| `NOTE v,n` | `n` 0–95 | Pitch as a semitone number (see table). Starts a new note: the envelope restarts from its attack and the waveform from its start, even if the voice was already sounding. |
 | `GATE v,g` | `g` 0 or non‑zero | `g<>0` gates the note on (no retrigger); `g=0` releases it. |
 | `ADSR v,a,d,s,r` | each 0–15 | Envelope. `a` attack rate, `d` decay rate, `s` sustain **level**, `r` release rate. Lower rate = faster. `s=0` silent, `s=15` full. |
 | `PULSE v,pw` | `pw` 0–255 | Pulse duty. `128` ≈ square. Affects the pulse waveform only. |
@@ -59,8 +59,11 @@ the envelope. The chain is:
 oscillator -> ADSR envelope -> VOL v,n -> PAN -> mix -> VOL n (master) -> output
 ```
 
-`NOTE` gates the voice on for you and restarts the waveform. `GATE v,1` gates on
-**without** restarting (useful for legato / tied notes). `GATE v,0` releases:
+`NOTE` gates the voice on for you and starts a new note: the envelope begins
+again from its attack and the waveform from its start, so two `NOTE`s in a row
+are two separate notes even if the first is still sounding. To change pitch
+without a new attack (legato or a slide), use `FREQ` while the note sounds.
+`GATE v,1` gates on **without** restarting the waveform. `GATE v,0` releases:
 the note fades out over its release time, it does not cut instantly.
 
 ## Semitone numbers (`NOTE`)
@@ -98,8 +101,9 @@ Set the voice up first (`SNDON`, `WAVE`, `ADSR`, `PAN`, `VOL`) — `TRACK`'s
 string only ever drives pitch, gate, and (via `W n`) waveform.
 
 `TRACK`'s string is the same mini-language as before, minus voice-switching
-(each `TRACK` call is already scoped to one voice) and plus `|` for a loop
-point (letters are case‑insensitive; spaces and commas are just separators):
+(each `TRACK` call is already scoped to one voice), plus `|` for a loop
+point and `&` for ties (letters are case‑insensitive; spaces and commas are
+just separators):
 
 | | Meaning |
 | --- | --- |
@@ -110,7 +114,11 @@ point (letters are case‑insensitive; spaces and commas are just separators):
 | `L n` | Default note length: `1 2 4 8 16 32` = whole, half, quarter, eighth, 16th, 32nd. |
 | `T n` | Tempo: **ticks per quarter note**, `1`–`255`. A tick is a fixed 1/160 s (`T80`, the default, ≈ 120 BPM) — resolved once when `TRACK` compiles the string, so playback speed never depends on the CPU's clock speed, unlike the old foreground/background `PLAY`. |
 | `W n` | Set the current voice's waveform (`0`–`4`). |
+| `&` | Tie: the next note continues the one before `&` instead of starting a new one. With the same pitch it makes one longer note (`C4&C8` lasts a quarter and an eighth); with another pitch it moves there without a new attack (legato, `C8&D8&E8`). With no note before it, or a rest or `\|` before the next note, `&` does nothing. |
 | `\|` | Mark the loop point: everything before it plays once (an intro); everything from it to the end of the string repeats forever once `BAND` starts this voice. No `\|` means the whole string plays once and stops. |
+
+Every note starts with its own attack, so `A A A A` plays four separate
+notes even with no rest between them; `&` joins notes instead.
 
 Defaults at the start of every `TRACK` string: octave 4, `T80`, `L4`.
 
