@@ -247,7 +247,13 @@ reading from the current `DATA` position.
   load, and similar everyday cases.
 - `CD`'s effect is not undone by a running program ending or by `CLOSE`;
   it persists for the session (until you `CD` again, or the SD card is
-  re-mounted).
+  swapped or re-mounted).
+- You can swap the SD card between commands, as with a disk drive. The next
+  file statement notices the new card and mounts it. Files that were open on
+  the old card are gone: using their numbers raises `FILE I/O ERROR`, and
+  `CLOSE` frees them. The current directory goes back to the root. Swap only
+  while no file statement is running, and `CLOSE` files you wrote first, or
+  their last data is lost.
 - `MIALOAD`/`MIASAVE` bypass the CPU entirely — they hand the whole transfer
   to MIA as one job, the same as the video/audio `*LOAD`/`*SAVE` statements.
   `BGET#`/`BPUT#` are the CPU-visible, one-byte-at-a-time alternative, for
