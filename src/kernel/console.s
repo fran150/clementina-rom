@@ -12,11 +12,11 @@
 ; Binds the overlay index ($B8) to window A and streams from the base.
 ; ----------------------------------------------------------------------------
 clrscr:
-        lda #VIDX_OVERLAY_NT
+        lda #MIA_VIDEO_INDEX_OVERLAY_NT
         sta IDXA_SELECT
-        lda #OVNT_ADDR_L
-        ldx #OVNT_ADDR_M
-        ldy #OVNT_ADDR_H
+        lda #<MIA_VIDEO_OVERLAY_NT_OFFSET
+        ldx #>MIA_VIDEO_OVERLAY_NT_OFFSET
+        ldy #^MIA_VIDEO_OVERLAY_NT_OFFSET
         jsr set_idxa_addr
 
         ; Write SCR_COLS*SCR_ROWS (1000) spaces; index $B8 auto-steps.
@@ -36,11 +36,11 @@ clrscr:
         ora KCNT+1
         bne @fill
 
-        lda #VIDX_OVERLAY_ATTR
+        lda #MIA_VIDEO_INDEX_OVERLAY_ATTR
         sta IDXA_SELECT
-        lda #OVATTR_ADDR_L
-        ldx #OVATTR_ADDR_M
-        ldy #OVATTR_ADDR_H
+        lda #<MIA_VIDEO_OVERLAY_ATTR_OFFSET
+        ldx #>MIA_VIDEO_OVERLAY_ATTR_OFFSET
+        ldy #^MIA_VIDEO_OVERLAY_ATTR_OFFSET
         jsr set_idxa_addr
 
         ; Match every cleared cell to the current text color.
@@ -277,7 +277,7 @@ newline:
 
 ; ----------------------------------------------------------------------------
 ; scroll_up - move rows 1..23 up one, blank the last row.
-; Uses MIA DMA via CMD_COPY_INDEXES. A zero byte count copies from source
+; Uses MIA DMA via MIA_CMD_COPY_INDEXES. A zero byte count copies from source
 ; current address up to source limit address, without moving either index.
 ; ----------------------------------------------------------------------------
 scroll_up:
@@ -286,11 +286,11 @@ scroll_up:
         jsr dma_copy_indexes
 
         ; Blank the last nametable row.
-        lda #VIDX_OVERLAY_NT
+        lda #MIA_VIDEO_INDEX_OVERLAY_NT
         sta IDXA_SELECT
-        lda #<(OVNT_ADDR_L + ((SCR_ROWS-1) * SCR_COLS))
-        ldx #(OVNT_ADDR_M + >(OVNT_ADDR_L + ((SCR_ROWS-1) * SCR_COLS)))
-        ldy #OVNT_ADDR_H
+        lda #<(MIA_VIDEO_OVERLAY_NT_OFFSET + ((SCR_ROWS-1) * SCR_COLS))
+        ldx #>(MIA_VIDEO_OVERLAY_NT_OFFSET + ((SCR_ROWS-1) * SCR_COLS))
+        ldy #^MIA_VIDEO_OVERLAY_NT_OFFSET
         jsr set_idxa_addr
         ldx #SCR_COLS
         lda #' '
@@ -304,11 +304,11 @@ scroll_up:
         ldx #KIDX_SCROLL_ATTR_DST
         jsr dma_copy_indexes
 
-        lda #VIDX_OVERLAY_ATTR
+        lda #MIA_VIDEO_INDEX_OVERLAY_ATTR
         sta IDXA_SELECT
-        lda #<(OVATTR_ADDR_L + ((SCR_ROWS-1) * SCR_COLS))
-        ldx #(OVATTR_ADDR_M + >(OVATTR_ADDR_L + ((SCR_ROWS-1) * SCR_COLS)))
-        ldy #OVATTR_ADDR_H
+        lda #<(MIA_VIDEO_OVERLAY_ATTR_OFFSET + ((SCR_ROWS-1) * SCR_COLS))
+        ldx #>(MIA_VIDEO_OVERLAY_ATTR_OFFSET + ((SCR_ROWS-1) * SCR_COLS))
+        ldy #^MIA_VIDEO_OVERLAY_ATTR_OFFSET
         jsr set_idxa_addr
         ldx #SCR_COLS
         lda TEXT_ATTR
@@ -351,7 +351,7 @@ dma_copy_indexes:
         txa
         sta CMD_PARAM2
         stz CMD_PARAM3          ; zero = copy until source index limit
-        lda #CMD_COPY_INDEXES
+        lda #MIA_CMD_COPY_INDEXES
         sta CMD_TRIGGER
 wait_cmd_dma:
         lda STATUS_L
@@ -365,36 +365,36 @@ wait_cmd_dma:
 ; the 24-bit MIA address ($10080 + P).
 ; ----------------------------------------------------------------------------
 cursor_to_idxa:
-        lda #VIDX_OVERLAY_NT
+        lda #MIA_VIDEO_INDEX_OVERLAY_NT
         sta IDXA_SELECT         ; window A -> overlay index (CFG_IDXA_* targets it)
         jsr cursor_offset_to_ktmp
         lda KTMP
         clc
-        adc #OVNT_ADDR_L        ; + $80
+        adc #<MIA_VIDEO_OVERLAY_NT_OFFSET        ; + $80
         sta KTMP                ; address low
         lda KTMP+1
-        adc #OVNT_ADDR_M        ; + carry
+        adc #>MIA_VIDEO_OVERLAY_NT_OFFSET        ; + carry
         sta KTMP+1              ; address mid
         lda KTMP                ; A = low
         ldx KTMP+1              ; X = mid
-        ldy #OVNT_ADDR_H        ; Y = high
+        ldy #^MIA_VIDEO_OVERLAY_NT_OFFSET        ; Y = high
         jsr set_idxa_addr
         rts
 
 cursor_attr_to_idxa:
-        lda #VIDX_OVERLAY_ATTR
+        lda #MIA_VIDEO_INDEX_OVERLAY_ATTR
         sta IDXA_SELECT
         jsr cursor_offset_to_ktmp
         lda KTMP
         clc
-        adc #OVATTR_ADDR_L
+        adc #<MIA_VIDEO_OVERLAY_ATTR_OFFSET
         sta KTMP
         lda KTMP+1
-        adc #OVATTR_ADDR_M
+        adc #>MIA_VIDEO_OVERLAY_ATTR_OFFSET
         sta KTMP+1
         lda KTMP
         ldx KTMP+1
-        ldy #OVATTR_ADDR_H
+        ldy #^MIA_VIDEO_OVERLAY_ATTR_OFFSET
         jsr set_idxa_addr
         rts
 
@@ -566,14 +566,14 @@ set_idxa_addr:
 
 set_idxa_limit:
         pha
-        lda #CFG_IDXA_LIMIT_L
+        lda #CFG_IDXA_LIM_L
         sta CFG_SELECT
         pla
         sta CFG_PORT
-        lda #CFG_IDXA_LIMIT_M
+        lda #CFG_IDXA_LIM_M
         sta CFG_SELECT
         stx CFG_PORT
-        lda #CFG_IDXA_LIMIT_H
+        lda #CFG_IDXA_LIM_H
         sta CFG_SELECT
         sty CFG_PORT
         rts

@@ -1,8 +1,5 @@
-; Filesystem extensions. Firmware SD protocol v6 adds FS_FILE_INFO ($89).
-MIA_CMD_FS_SYNC = $80
-MIA_CMD_FS_STAT = $82
-MIA_CMD_FS_GET_FREE = $86
-MIA_CMD_FS_FILE_INFO = $89
+; Filesystem extensions. Firmware SD protocol v6 adds FS_FILE_INFO; the
+; MIA_CMD_FS_* ids come from mia.inc.
 
 fs_command:
         jsr mia_sd_cmd

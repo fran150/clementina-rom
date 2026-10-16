@@ -197,16 +197,16 @@ overlay_set_rc_attr:
         inc KTMP+1
 :       lda KTMP                ; + overlay attribute base ($10468)
         clc
-        adc #OVATTR_ADDR_L
+        adc #<MIA_VIDEO_OVERLAY_ATTR_OFFSET
         sta KTMP
         lda KTMP+1
-        adc #OVATTR_ADDR_M
+        adc #>MIA_VIDEO_OVERLAY_ATTR_OFFSET
         sta KTMP+1
-        lda #VIDX_OVERLAY_ATTR
+        lda #MIA_VIDEO_INDEX_OVERLAY_ATTR
         sta IDXA_SELECT
         lda KTMP
         ldx KTMP+1
-        ldy #OVATTR_ADDR_H
+        ldy #^MIA_VIDEO_OVERLAY_ATTR_OFFSET
         jsr set_idxa_addr
         rts
 
@@ -225,16 +225,16 @@ overlay_set_rc:
         inc KTMP+1
 :       lda KTMP                ; + overlay nametable base ($10080)
         clc
-        adc #OVNT_ADDR_L
+        adc #<MIA_VIDEO_OVERLAY_NT_OFFSET
         sta KTMP
         lda KTMP+1
-        adc #OVNT_ADDR_M
+        adc #>MIA_VIDEO_OVERLAY_NT_OFFSET
         sta KTMP+1
-        lda #VIDX_OVERLAY_NT
+        lda #MIA_VIDEO_INDEX_OVERLAY_NT
         sta IDXA_SELECT
         lda KTMP
         ldx KTMP+1
-        ldy #OVNT_ADDR_H
+        ldy #^MIA_VIDEO_OVERLAY_NT_OFFSET
         jsr set_idxa_addr
         rts
 

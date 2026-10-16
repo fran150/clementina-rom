@@ -36,7 +36,7 @@ chrin:
 ; ----------------------------------------------------------------------------
 getkey_nb:
         lda INPUT_STATUS
-        and #INPUT_STATUS_TEXT_READY
+        and #INPUT_TEXT_READY
         beq @none
         lda INPUT_CHAR
         sec
@@ -53,7 +53,7 @@ input_read_byte:
         php
         sei
         pha
-        lda #IIDX_INPUT_STATE
+        lda #MIA_INPUT_INDEX_INPUT_STATE
         sta IDXA_SELECT
         lda #CFG_IDXA_ADDR_H
         sta CFG_SELECT

@@ -10,7 +10,7 @@ repo, `docs/sd.md` and `docs/sd-programmer-guide.md`.
 ## Model
 
 - **16 file handles**, numbered **1–16**, map one-to-one onto MIA's 16
-  SD_HANDLE_SELECT slots — pick a number, `OPEN` it, use it, `CLOSE` it, same
+  MIA_SD_CONTROL_HANDLE_SELECT slots — pick a number, `OPEN` it, use it, `CLOSE` it, same
   as every historical BASIC's file numbers. There is no handle allocator.
 - Handles are independent: two files can be open at once (say, copying from
   one to another byte by byte), each keeping its own position.

@@ -233,7 +233,7 @@ freely.
 | `$041E` | `KERN_EDITKEY` | — | `A`=char | Full-screen line editor. Runs the interactive editor (cursor moves, overtype, gap-closing backspace `$08` / delete `$7F`, insert `$94`) on the overlay, harvests the logical line under the cursor on RETURN, and returns it one byte at a time followed by a synthetic final CR. BASIC's `GETLN` uses this for line input and treats bytes returned while `EDIT_STATE` is nonzero as raw source data; `GET` stays on `KERN_CHRIN`. |
 | `$0421` | `KERN_CHROUT_GLYPH` | `A`=tile | A/X/Y preserved | Write `A` to the console as a raw glyph at the cursor, bypassing control-code handling (so high tiles that collide with codes like `$0D` still draw). |
 | `$0424` | `KERN_WOZMON` | — | (does not return) | Enter the WOZ monitor (`src/monitor/wozmon-clementina.s`). Examine/deposit memory and run code; quit back to BASIC with `Q` (runs `KERN_WARMSTART`). Invoke from BASIC with `MON`; the older `USR` vector method still works. |
-| `$0427` | `KERN_SET_BACKDROP` | `A`=selector | — | Write the backdrop selector to `VIDX_BACKDROP_COLOR` (IRQ-safe tail call). |
+| `$0427` | `KERN_SET_BACKDROP` | `A`=selector | — | Write the backdrop selector to `MIA_VIDEO_INDEX_BACKDROP_COLOR` (IRQ-safe tail call). |
 | `$042A` | `KERN_IRQ` | A/X/Y as at interrupt entry | (returns from the interrupt) | The kernel's IRQ handler, for chaining: a program's own handler ends with `JMP KERN_IRQ` so the kernel keeps counting `KJIFFY`, blinking the cursor and clearing MIA's IRQ status. See "Taking over the IRQ" below. |
 | `$042D` | `KERN_PLOT` | `C`=1: — / `C`=0: `X`=row, `Y`=column | `C`=1: `X`=row, `Y`=column / `C`=0: `C`=0, or `C`=1 if out of range | Read or move the text cursor, with the C64's `PLOT` registers. With `C`=0 it moves the cursor to row `0..24`, column `0..39`; an out-of-range position returns `C`=1 and moves nothing. `A` is preserved. BASIC's `POS`/`TAB` column is not updated. |
 | `$0430` | `KERN_RDTIM` | — | `C`=1 if valid; `A`/`X`/`Y` clobbered | Copy MIA's clock to `CLOCK_SNAPSHOT` (`$02F8–$02FF`, §4). `C`=0 means the MIA firmware has no clock. Foreground only. |
@@ -475,7 +475,7 @@ command like `$FFE9`. Programs use `$FFE0–$FFFF` only and never touch
 
 ### MIA register block (`$FFE0–$FFFF`)
 
-All 32 registers, mirrored in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
+All 32 registers, named in [`src/include/mia.inc`](../src/include/mia.inc), which `kernel.inc` and BASIC include. clementina-sdk generates that file from its specs, under MIA's own names.
 
 | Addr | Name | Description |
 | --- | --- | --- |
@@ -497,7 +497,7 @@ All 32 registers, mirrored in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc
 | `$FFEF` | `IRQ_MASK_H` | IRQ mask, high byte. |
 | `$FFF0` | `IRQ_STATUS_L` | Pending IRQ flags, low byte. **Read-to-clear**: reading clears all IRQ_STATUS bits and deasserts IRQ. |
 | `$FFF1` | `IRQ_STATUS_H` | Pending IRQ flags, high byte. Passive read — sample this before `$FFF0` if you need high-byte flags. Bit 15 = aggregate `IRQ_TRIGGERED`. |
-| `$FFF2` | `INPUT_STATUS` | Text availability, held-input summaries, active source. Bit 0 = `INPUT_STATUS_TEXT_READY`. |
+| `$FFF2` | `INPUT_STATUS` | Text availability, held-input summaries, active source. Bit 0 = `INPUT_TEXT_READY`. |
 | `$FFF3` | `INPUT_CHAR` | Read-to-pop text FIFO. Returns `$00` when empty. PETSCII-compatible bytes. |
 | `$FFF4` | `INPUT_CHAR_COUNT` | Number of bytes queued in the text FIFO. |
 | `$FFF5` | `MIA_CTX` | Context stack for interrupt handlers: write `$01` to save the index-window, CFG and command-parameter state, `$02` to restore it. See clementina-mia's README, "Context stack". |
@@ -558,8 +558,8 @@ window's data port.
 | Ids | Owner | Use |
 | --- | --- | --- |
 | `$00-$4F` | **Programs** | Free. Never configured or touched by the firmware, the kernel or BASIC. |
-| `$50-$57` | MIA input | Keyboard/keypad bitmap probes (`IIDX_KEYBOARD_PROBE_0-7`) |
-| `$58-$5F` | MIA input | Consumer bitmap probes (`IIDX_CONSUMER_PROBE_0-7`) |
+| `$50-$57` | MIA input | Keyboard/keypad bitmap probes (`MIA_INPUT_INDEX_KEYBOARD_PROBE_0-7`) |
+| `$58-$5F` | MIA input | Consumer bitmap probes (`MIA_INPUT_INDEX_CONSUMER_PROBE_0-7`) |
 | `$60-$68` | MIA input | Input state block, bitmaps, mouse, gamepads `0-3`, input control |
 | `$69-$6F` | — | Reserved for MIA input |
 | `$70-$72` | MIA video | Local control page (never syncs to the video client) |
@@ -598,20 +598,20 @@ Rules for programs:
 
 | Index | Purpose | MIA RAM target |
 | --- | --- | --- |
-| `$90-$97` (`VIDX_PALETTE_0-7`) | Startup palette upload | palette banks `0-7` |
-| `$85` (`VIDX_BANK_SELECT`) | Select CHR bank `0` for bg/overlay/sprite consumers | render control `$28-$2C` |
-| `$86` (`VIDX_CHR_1BPP`) | Mark CHR bank `0` as 1bpp and use overlay plane `1` | render control `$2D-$2E` |
-| `$87` (`VIDX_BACKDROP_COLOR`) | Select palette `0`, color `0` as the blue backdrop | render control `$2F` |
-| `$81` (`VIDX_LAYER_ENABLE`) | Enable the overlay layer | render control `$21` |
-| `$B8` (`VIDX_OVERLAY_NT`) | Console **write cursor**: bound to window A; positioned per `CURSOR_X/Y` via CFG | overlay nametable cell |
-| `$B9` (`VIDX_OVERLAY_ATTR`) | Console **attribute cursor**: bound to window A after each tile write | overlay attribute cell |
+| `$90-$97` (`MIA_VIDEO_INDEX_PALETTE_0-7`) | Startup palette upload | palette banks `0-7` |
+| `$85` (`MIA_VIDEO_INDEX_BANK_SELECT`) | Select CHR bank `0` for bg/overlay/sprite consumers | render control `$28-$2C` |
+| `$86` (`MIA_VIDEO_INDEX_CHR_1BPP`) | Mark CHR bank `0` as 1bpp and use overlay plane `1` | render control `$2D-$2E` |
+| `$87` (`MIA_VIDEO_INDEX_BACKDROP_COLOR`) | Select palette `0`, color `0` as the blue backdrop | render control `$2F` |
+| `$81` (`MIA_VIDEO_INDEX_LAYER_ENABLE`) | Enable the overlay layer | render control `$21` |
+| `$B8` (`MIA_VIDEO_INDEX_OVERLAY_NT`) | Console **write cursor**: bound to window A; positioned per `CURSOR_X/Y` via CFG | overlay nametable cell |
+| `$B9` (`MIA_VIDEO_INDEX_OVERLAY_ATTR`) | Console **attribute cursor**: bound to window A after each tile write | overlay attribute cell |
 | `$F0` (`KIDX_SCROLL_NT_SRC`) | Kernel-reserved scroll DMA source | overlay nametable + 40, limit = overlay nametable end |
 | `$F1` (`KIDX_SCROLL_NT_DST`) | Kernel-reserved scroll DMA destination | overlay nametable base |
 | `$F2` (`KIDX_SCROLL_ATTR_SRC`) | Kernel-reserved scroll DMA source | overlay attributes + 40, limit = overlay attributes end |
 | `$F3` (`KIDX_SCROLL_ATTR_DST`) | Kernel-reserved scroll DMA destination | overlay attributes base |
 | `$F4` (`KIDX_MEMORY_SRC`) | Kernel-reserved source for MIA memory copy, fill and rectangle services (`memory.s`) | any MIA RAM |
 | `$F5` (`KIDX_MEMORY_DST`) | Kernel-reserved destination for the same services | any MIA RAM |
-| `$60` (`IIDX_INPUT_STATE`) | `input_read_byte`: re-seeked to `$11000` + offset for each read (BASIC input functions, timing) | input state block |
+| `$60` (`MIA_INPUT_INDEX_INPUT_STATE`) | `input_read_byte`: re-seeked to `$11000` + offset for each read (BASIC input functions, timing) | input state block |
 | `$E0`, `$E4` | `KERN_LOAD`: SD/FS control block and transfer buffer | SD/FS block |
 
 ### Overlay text layer
@@ -626,7 +626,7 @@ CFG now configures whichever index a window has selected (firmware fix), so the
 console drives the overlay index `$B8` directly: it binds `$B8` to window A and
 sets its current address (via the window-A CFG fields) to the cursor cell before
 each write. Cold start also initializes fixed kernel scroll indexes `$F0-$F3`;
-`scroll_up` uses `CMD_COPY_INDEXES` with byte count `0` to copy each source
+`scroll_up` uses `MIA_CMD_COPY_INDEXES` with byte count `0` to copy each source
 range up to its source limit without moving the indexes.
 
 Cold start loads a blue/white default palette, sets the backdrop to palette `0`
