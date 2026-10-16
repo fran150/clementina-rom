@@ -268,6 +268,16 @@ User-facing commands:
   only, `STYLE 1 OR 8` = override color and ALT, `STYLE 15` = override all.
   Values outside `0-15` raise `ILLEGAL QUANTITY`.
 
+Screen commands (out-of-range values raise `ILLEGAL QUANTITY`):
+
+- `CLS` — clear the screen, home the cursor and reset BASIC's column counter
+  to 0.
+- `CRSR col,row` — move the cursor to column `0-39`, row `0-24` (`0,0` is the
+  top-left corner) and set BASIC's column counter to match.
+- `BCOLOR n` — set the screen backdrop to the ink color of palette bank
+  `0-15`, the same color `COLOR n` gives text; `BCOLOR 6` restores the default
+  blue.
+
 Output depends on whether the string is a **heap** string (carries an attribute
 half — can hold Phase 5 graphic tile codes) or a program-text **literal/message**
 (no attr half, plain unstyled text):
