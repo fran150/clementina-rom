@@ -3353,10 +3353,10 @@ BASIC_PLAYING:
         jmp     SNGFLT
 
 ; ----------------------------------------------------------------------------
-; CUE(v) - voice v's (0-3) current note/rest index within the current pass of
-; its track: 1-based, 0 if never started. Resets to the loop's own note index
-; (not 1) each time a looping track wraps - see docs/audio-sequencer.md. Same
-; dispatch idiom as PLAYING(v) above.
+; CUE(v) - voice v's (0-3) count of notes, ties and rests since its track was
+; loaded: 1-based, 0 if never started. A loop's JUMP doesn't reset it, so it
+; keeps counting across passes, up to 65535 before wrapping to 0 - see MIA
+; docs/audio-sequencer.md. Same dispatch idiom as PLAYING(v) above.
 ; ----------------------------------------------------------------------------
 BASIC_CUE:
         jsr     CONINT                  ; X = voice
@@ -3366,10 +3366,15 @@ BASIC_CUE:
         sei
         jsr     seq_status_seek
         lda     IDXB_PORT               ; SEQ_NOTE_INDEX_L
-        tay                             ; Y = low byte (GIVAYF wants A=high, Y=low)
+        tay                             ; Y = low byte
         lda     IDXB_PORT               ; SEQ_NOTE_INDEX_H -> A = high byte
         plp
-        jmp     GIVAYF                  ; tail: float A:Y
+        stz     VALTYP                  ; numeric, as GIVAYF sets it
+        sta     FAC+1                   ; high byte
+        sty     FAC+2                   ; low byte
+        ldx     #$90                    ; 16-bit integer exponent
+        sec                             ; C=1: positive (GIVAYF would take
+        jmp     FLOAT2                  ; bit 15 as the sign)
 
 ; ============================================================================
 ; File I/O (see docs/basic-file.md): OPEN/CLOSE/BGET#/BPUT# against MIA's
