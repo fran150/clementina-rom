@@ -3721,7 +3721,9 @@ mia_match_word:
 @done:  rts
 
 lit_OUTPUT: .byte "OUTPUT", 0
-lit_APPEND: .byte "APPEND", 0
+; The tokenizer crunches the END inside APPEND into the END token, so the
+; word reaches OPEN as A, P, P, TOKEN_END.
+lit_APPEND: .byte "APP", TOKEN_END, 0
 lit_UPDATE: .byte "UPDATE", 0
 lit_AS:     .byte "AS", 0
 

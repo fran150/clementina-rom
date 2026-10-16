@@ -1,6 +1,6 @@
 		init_token_tables
 
-		keyword_rts "END", END
+		keyword_rts "END", END, TOKEN_END
 		keyword_rts "FOR", FOR, TOKEN_FOR
 		keyword_rts "NEXT", NEXT
 		keyword_rts "DATA", DATA

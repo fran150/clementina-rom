@@ -222,3 +222,26 @@ func TestBasicMialoadParts(t *testing.T) {
 	require_eq(t, 159, vr.DebugReadVideo(203000+159), "whole-file load")
 	require_eq(t, 69999%251, vr.DebugReadVideo(100000+69999), "last byte of a 70000-byte load")
 }
+
+// TestBasicOpenAppend opens a file FOR APPEND. The tokenizer stores the END
+// inside APPEND as the END token, which OPEN's word match used to reject with
+// SYNTAX ERROR.
+func TestBasicOpenAppend(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "LOG"), []byte("A"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, step := bootClementinaToPrompt(t)
+	c.SetMiaSDFolder(dir)
+	typeLine(c, step, `10 OPEN "LOG" FOR APPEND AS #1`)
+	typeLine(c, step, `20 BPUT#1,66:CLOSE #1:POKE 640,42`)
+	typeLine(c, step, `30 GOTO 30`)
+	typeLine(c, step, "RUN")
+	editorTickN(c, step, 1_000_000)
+	require_eq(t, 42, peek(c, 640), "program ran past OPEN")
+	data, err := os.ReadFile(filepath.Join(dir, "LOG"))
+	if err != nil || string(data) != "AB" {
+		t.Fatalf("appended file = %q %v", data, err)
+	}
+}
+
