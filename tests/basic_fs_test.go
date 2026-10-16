@@ -222,3 +222,93 @@ func TestBasicMialoadParts(t *testing.T) {
 	require_eq(t, 159, vr.DebugReadVideo(203000+159), "whole-file load")
 	require_eq(t, 69999%251, vr.DebugReadVideo(100000+69999), "last byte of a 70000-byte load")
 }
+
+// TestBasicOpenAppend opens a file FOR APPEND. The tokenizer stores the END
+// inside APPEND as the END token, which OPEN's word match used to reject with
+// SYNTAX ERROR.
+func TestBasicOpenAppend(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "LOG"), []byte("A"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, step := bootClementinaToPrompt(t)
+	c.SetMiaSDFolder(dir)
+	typeLine(c, step, `10 OPEN "LOG" FOR APPEND AS #1`)
+	typeLine(c, step, `20 BPUT#1,66:CLOSE #1:POKE 640,42`)
+	typeLine(c, step, `30 GOTO 30`)
+	typeLine(c, step, "RUN")
+	editorTickN(c, step, 1_000_000)
+	require_eq(t, 42, peek(c, 640), "program ran past OPEN")
+	data, err := os.ReadFile(filepath.Join(dir, "LOG"))
+	if err != nil || string(data) != "AB" {
+		t.Fatalf("appended file = %q %v", data, err)
+	}
+}
+
+// fsRowAfter fails unless the first non-blank screen row after the one reading
+// `line` reads `want` (both trimmed). READY. always follows a blank row: its
+// message starts with CR, LF.
+func fsRowAfter(t *testing.T, c *ClementinaComputer, line, want string) {
+	t.Helper()
+	for row := 0; row < 24; row++ {
+		if strings.TrimRight(printScreenRow(c, row), " \x00") == line {
+			got := ""
+			for next := row + 1; next < 25 && got == ""; next++ {
+				got = strings.TrimRight(printScreenRow(c, next), " \x00")
+			}
+			if got != want {
+				dumpScreen(t, c.chips.mia.(videoReader))
+				t.Fatalf("after %q: want %q got %q", line, want, got)
+			}
+			return
+		}
+	}
+	dumpScreen(t, c.chips.mia.(videoReader))
+	t.Fatalf("no row reads %q", line)
+}
+
+// TestBasicLoadEndsAtReady checks LOAD prints READY, typed directly and when a
+// program runs it (that program stops there). LOAD used to jump into the input
+// loop past READY, so nothing was printed.
+func TestBasicLoadEndsAtReady(t *testing.T) {
+	c, step := bootClementinaToPrompt(t)
+	c.SetMiaSDFolder(t.TempDir())
+	typeLine(c, step, `10 PRINT 1`)
+	typeLine(c, step, `SAVE "P"`)
+	typeLine(c, step, "CLS")
+	typeLine(c, step, `LOAD "P"`)
+	editorTickN(c, step, 400_000)
+	fsRowAfter(t, c, `LOAD "P"`, "READY.")
+
+	typeLine(c, step, `10 PRINT "A":LOAD "P"`)
+	typeLine(c, step, `20 PRINT "B"`)
+	typeLine(c, step, "CLS")
+	typeLine(c, step, "RUN")
+	editorTickN(c, step, 800_000)
+	fsRowAfter(t, c, "RUN", "A")
+	fsRowAfter(t, c, "A", "READY.")
+	typeLine(c, step, "CLS")
+	typeLine(c, step, "LIST")
+	fsRowAfter(t, c, "LIST", " 10 PRINT 1")
+}
+
+// TestBasicBgetPastEndReadsZero reads a 2-byte file four times. Past the end
+// BGET# stores 0 and EOF turns 1, with no error; it used to repeat the last
+// byte, which was still in MIA's transfer buffer.
+func TestBasicBgetPastEndReadsZero(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "F"), []byte("XY"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, step := bootClementinaToPrompt(t)
+	c.SetMiaSDFolder(dir)
+	typeLine(c, step, `10 OPEN "F" FOR INPUT AS #1`)
+	typeLine(c, step, `20 FOR I=0 TO 3:BGET#1,V:POKE 640+I,V:POKE 644+I,EOF(1):NEXT`)
+	typeLine(c, step, `30 CLOSE #1:POKE 648,42`)
+	typeLine(c, step, `40 GOTO 40`)
+	typeLine(c, step, "RUN")
+	editorTickN(c, step, 2_000_000)
+	for i, v := range []int{88, 89, 0, 0, 0, 1, 1, 1, 42} {
+		require_eq(t, v, peek(c, uint32(640+i)), fmt.Sprint("checkpoint ", i))
+	}
+}

@@ -2496,7 +2496,8 @@ play_getc:                              ; C=0 at end; else C=1 and A = char (con
 
 ; --- PLAY number scan ------------------------------------------------------
 ; play_num: read a run of decimal digits (nothing consumed if none). Returns
-; X = value (mod 256), C=1 if >= 1 digit was read, else C=0. Uses PLAY_TMP.
+; X = value, C=1 if >= 1 digit was read, else C=0. A value over 255 gives
+; ILLEGAL QUANTITY (TRACK is its only user). Uses PLAY_TMP.
 play_num:
         lda     #$00
         sta     PLAY_TMP               ; accumulator
@@ -2512,6 +2513,8 @@ play_num:
         and     #$0F
         pha                            ; [digit]
         lda     PLAY_TMP
+        cmp     #26
+        jcs     trk_iq                 ; acc*10 would pass 255
         asl     a
         pha                            ; [digit, acc*2]
         asl     a
@@ -2524,6 +2527,7 @@ play_num:
         pla                            ; digit
         clc
         adc     PLAY_TMP
+        jcs     trk_iq                 ; 256-259
         sta     PLAY_TMP
         lda     #$01
         sta     PLAY_TMP+1
@@ -2733,9 +2737,8 @@ BASIC_TRACK:
 @tempo:
         jsr     trk_num_req
         cpx     #$00
-        bne     :+
-        ldx     #$01                    ; T0 -> 1
-:       stx     PLAY_TEMPO
+        jeq     trk_iq                  ; T is 1-255
+        stx     PLAY_TEMPO
         jmp     @loop
 @wave:
         jsr     trk_num_req
@@ -3350,10 +3353,10 @@ BASIC_PLAYING:
         jmp     SNGFLT
 
 ; ----------------------------------------------------------------------------
-; CUE(v) - voice v's (0-3) current note/rest index within the current pass of
-; its track: 1-based, 0 if never started. Resets to the loop's own note index
-; (not 1) each time a looping track wraps - see docs/audio-sequencer.md. Same
-; dispatch idiom as PLAYING(v) above.
+; CUE(v) - voice v's (0-3) count of notes, ties and rests since its track was
+; loaded: 1-based, 0 if never started. A loop's JUMP doesn't reset it, so it
+; keeps counting across passes, up to 65535 before wrapping to 0 - see MIA
+; docs/audio-sequencer.md. Same dispatch idiom as PLAYING(v) above.
 ; ----------------------------------------------------------------------------
 BASIC_CUE:
         jsr     CONINT                  ; X = voice
@@ -3363,10 +3366,15 @@ BASIC_CUE:
         sei
         jsr     seq_status_seek
         lda     IDXB_PORT               ; SEQ_NOTE_INDEX_L
-        tay                             ; Y = low byte (GIVAYF wants A=high, Y=low)
+        tay                             ; Y = low byte
         lda     IDXB_PORT               ; SEQ_NOTE_INDEX_H -> A = high byte
         plp
-        jmp     GIVAYF                  ; tail: float A:Y
+        stz     VALTYP                  ; numeric, as GIVAYF sets it
+        sta     FAC+1                   ; high byte
+        sty     FAC+2                   ; low byte
+        ldx     #$90                    ; 16-bit integer exponent
+        sec                             ; C=1: positive (GIVAYF would take
+        jmp     FLOAT2                  ; bit 15 as the sign)
 
 ; ============================================================================
 ; File I/O (see docs/basic-file.md): OPEN/CLOSE/BGET#/BPUT# against MIA's
@@ -3721,7 +3729,9 @@ mia_match_word:
 @done:  rts
 
 lit_OUTPUT: .byte "OUTPUT", 0
-lit_APPEND: .byte "APPEND", 0
+; The tokenizer crunches the END inside APPEND into the END token, so the
+; word reaches OPEN as A, P, P, TOKEN_END.
+lit_APPEND: .byte "APP", TOKEN_END, 0
 lit_UPDATE: .byte "UPDATE", 0
 lit_AS:     .byte "AS", 0
 
@@ -3865,8 +3875,13 @@ BASIC_BGET:
         lda     #MIA_CMD_FS_READ
         jsr     mia_sd_cmd
         jne     mia_fileerr
-        jsr     mia_sd_select_transfer
-        lda     IDXA_PORT               ; the byte read
+        lda     #MIA_SD_CONTROL_RESULT_LEN_L
+        jsr     mia_sd_seek
+        lda     IDXA_PORT               ; bytes read: 1, or 0 past the end
+        beq     @store                  ; past the end: store 0, EOF says why
+        jsr     mia_sd_select_transfer  ; (the transfer buffer still holds
+        lda     IDXA_PORT               ; the previous byte then)
+@store:
         jmp     mia_store_byte          ; stores into the variable named next
 
 ; ----------------------------------------------------------------------------
@@ -4006,11 +4021,11 @@ BASIC_SAVE:
 ; ----------------------------------------------------------------------------
 ; LOAD "path" : replace the current program with a file's tokenized text,
 ; LOADSAVE_CHUNK bytes at a time - the reverse of SAVE. Clears variables,
-; arrays, and the string heap exactly like NEW (via FIX_LINKS, which every
-; other platform's LOAD in this codebase also ends with - apple/kim/
-; microtan/sym1_loadsave.s). Does not return to its caller: FIX_LINKS always
-; transfers control to the READY-prompt input loop directly, whether LOAD
-; ran from direct mode or from a running program - the same as NEW/SCRTCH.
+; arrays, and the string heap exactly like NEW (via the two steps of
+; FIX_LINKS, which every other platform's LOAD in this codebase ends with -
+; apple/kim/microtan/sym1_loadsave.s). Does not return to its caller: it ends
+; at RESTART, which prints READY and waits for a line, whether LOAD ran from
+; direct mode or from a running program (which stops there).
 ; A failed OPEN (bad filename, no such file) is caught before any of the
 ; current program is touched, so a failed LOAD leaves it intact.
 ; ----------------------------------------------------------------------------
@@ -4117,7 +4132,12 @@ BASIC_LOAD:
         sta     VARTAB
         lda     INDEX+1
         sta     VARTAB+1
-        jmp     FIX_LINKS
+        ; FIX_LINKS itself ends at L2351, the input loop past READY that a
+        ; typed program line returns to, so LOAD printed no READY. Run its two
+        ; steps here and end at RESTART instead.
+        jsr     SETPTRS
+        jsr     LE33D                   ; re-link the loaded lines
+        jmp     RESTART
 
 ; ----------------------------------------------------------------------------
 ; MIALOAD "path", addr[, len[, offset[, rows, filestride, ramstride]]] : load

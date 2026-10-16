@@ -275,9 +275,10 @@ STROUT:
 .ifdef STYLED_STRINGS
         ; Clementina: system messages (READY., errors, INPUT prompts) print in the
         ; BASIC pen (COLOR), then the editor pen is restored so the cursor and the
-        ; next typed line keep their color. User PRINT output takes STRPRT directly
-        ; and prints at the live editor pen (STRPRT_STYLED @lit). See
-        ; docs/styled-strings.md.
+        ; next typed line keep their color. User PRINT output takes STRPRT directly:
+        ; unstyled text (numbers, program-text literals) also prints in the BASIC
+        ; pen (STRPRT_STYLED @lit), styled heap strings in their own stored colors.
+        ; See docs/styled-strings.md.
         lda     TEXT_ATTR
         pha                     ; save the editor pen
         lda     BASIC_DEFAULT_ATTR

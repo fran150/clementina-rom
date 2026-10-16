@@ -27,20 +27,20 @@ repo, `docs/sd.md` and `docs/sd-programmer-guide.md`.
 | --- | --- | --- |
 | `OPEN "file" FOR mode AS #n` | `mode` `INPUT`\|`OUTPUT`\|`APPEND`\|`UPDATE`, `n` 1–16 | Open a file on handle `n`. `OUTPUT` creates/truncates; `APPEND` creates or positions at the end. `UPDATE` opens/creates for reading and writing at position zero without truncation. |
 | `CLOSE #n` | `n` 1–16 | Close handle `n`. |
-| `BGET#n, v` | `n` 1–16, `v` a numeric variable | Read one byte from handle `n` into `v`. |
-| `BPUT#n, expr` | `n` 1–16 | Write the low byte of `expr` to handle `n`. |
+| `BGET#n, v` | `n` 1–16, `v` a numeric variable | Read one byte (0–255) from handle `n` into `v`. Past the end of the file `v` gets `0` and `EOF(n)` turns `1`; there is no error. |
+| `BPUT#n, expr` | `n` 1–16, `expr` 0–255 | Write one byte to handle `n`. Values outside 0–255 raise `ILLEGAL QUANTITY`. |
 | `SEEK#n, pos` | `pos` 0–4294967295 | Jump handle `n` to byte offset `pos`. |
 | `EOF(n)` | `n` 1–16 (function) | `1` once handle `n` has been read past its last byte, else `0`. |
-| `KILL "path"` | — | Delete a file. |
+| `KILL "path"` | — | Delete a file or an empty directory. |
 | `MKDIR "path"` | — | Create one directory (its parent must already exist). |
-| `RMDIR "path"` | — | Remove an empty directory. |
+| `RMDIR "path"` | — | Remove an empty directory. It shares `KILL`'s routine, so it deletes a file too. |
 | `NAME "old" AS "new"` | — | Rename or move a file or directory. |
 | `CD "path"` | — | Change the current directory. |
 | `DIR` | — | List the current directory. |
 | `DIR "path"` | — | List `path` without changing the current directory. |
 | `MIALOAD "path", addr[, len[, offset[, rows, filestride, ramstride]]]` | `addr`, `len`, `ramstride` 0–16777215; `offset`, `filestride` 0–4294967295; `rows` 0–65535 | Load a file straight into MIA RAM at a raw address, no CPU byte-touching. Omitted/zero `len` reads until EOF or the end of MIA RAM. `offset` starts that far into the file. `rows`, `filestride` and `ramstride` load a rectangle: `rows` rows of `len` bytes, each `filestride` bytes further into the file and `ramstride` bytes further on in MIA RAM. See [Partial loads](#partial-loads). |
 | `MIASAVE "path", addr, len` | | Save `len` bytes of MIA RAM starting at `addr` to a file. |
-| `LOAD "path"` | — | Replace the current program with a saved one. |
+| `LOAD "path"` | — | Replace the current program with a saved one and clear variables. Ends at the `READY.` prompt, also when a program runs it (that program stops there). |
 | `SAVE "path"` | — | Save the current program. |
 | `BLOAD "path"[, run][, addr]` | `run`/`addr` 16-bit CPU addresses | Load a file straight into CPU RAM at the address its own header specifies (or `addr`, if given), the way a C64 loads a game. `run`, if given and nonzero, jumps there once loaded instead of returning. |
 | `BSAVE "path", addr, len[, bank]` | `addr`/`len` 16-bit, `bank` 0–31 | Save `len` bytes of CPU RAM starting at `addr` to a file, in the format `BLOAD` reads. For `addr >= $8000` the file records `bank`, or the bank mapped now if `bank` is omitted. |
@@ -48,7 +48,9 @@ repo, `docs/sd.md` and `docs/sd-programmer-guide.md`.
 
 `OPEN`, `CLOSE`, `BGET#`, `BPUT#`, `SEEK#`, `EOF`, `KILL`, `MKDIR`, `RMDIR`,
 `NAME`, `CD`, `DIR`, `LOAD`, `SAVE`, `BLOAD`, `BSAVE`, and `SYS` are reserved
-words.
+words. `BGET#`, `BPUT#` and `SEEK#` are single keywords that include the `#`,
+so write them with no space before it: `BGET#1,V` works, `BGET #1,V` raises
+`SYNTAX ERROR`. `CLOSE #n`, `FLUSH #n` and `OPEN ... AS #n` take a space.
 
 Out-of-range file numbers (0, or above 16) raise `ILLEGAL QUANTITY`. A string
 expression is required wherever a path is expected; a number there raises

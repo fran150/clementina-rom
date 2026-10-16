@@ -51,7 +51,8 @@ of a background map or of a 40-column table. This copies a 40×25 block out of a
 
 - **Checked first.** The whole rectangle is checked before anything is written.
   A row longer than 65535 bytes, a stride over 65535, or a last row past address
-  262143 gives `?ILLEGAL QUANTITY`. Zero rows or zero bytes per row do nothing.
+  262143 gives `?ILLEGAL QUANTITY`. Zero rows or zero bytes per row do nothing
+  and skip these checks, so `MCOPY 0,0,70000,0,1,1` is no error.
 - **No overlap in `MCOPY`.** The source and destination rectangles must not
   overlap: unlike the one-block form, the rectangle form copies each row
   forward, the way MIA's DMA does.
