@@ -378,8 +378,8 @@ L2D57:
 
 ; ----------------------------------------------------------------------------
 ; "NOT" FUNCTION
-; IF FAC=0, RETURN FAC=1
-; IF FAC<>0, RETURN FAC=0
+; BITWISE NOT OF THE 16-BIT INTEGER: RETURNS -FAC-1,
+; SO NOT 0 IS -1 (TRUE) AND NOT -1 IS 0 (FALSE)
 ; ----------------------------------------------------------------------------
 NOT_:
         cmp     #TOKEN_NOT

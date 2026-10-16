@@ -243,7 +243,9 @@ pen the user sets with ESC is never clobbered by BASIC output:
   `COLOR`/`FLIPX`/`FLIPY`/`ALT` (which no longer touch `TEXT_ATTR`). Used for
   (a) system messages — startup/error/`READY.` text and `INPUT` prompts, which
   `STROUT` prints by loading the BASIC pen into `TEXT_ATTR` and restoring the editor
-  pen afterwards — and (b) as the override source for styled strings via the mask.
+  pen afterwards — (b) unstyled `PRINT` output such as numbers and program-text
+  literals (`STRPRT_STYLED` @lit) — and (c) as the override source for styled
+  strings via the mask.
 - **Style policy mask** — `BASIC_STYLE_MASK` (`$03FE`). Effective output attr:
 
 ```text

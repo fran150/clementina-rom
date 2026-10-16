@@ -292,3 +292,23 @@ func TestBasicLoadEndsAtReady(t *testing.T) {
 	fsRowAfter(t, c, "LIST", " 10 PRINT 1")
 }
 
+// TestBasicBgetPastEndReadsZero reads a 2-byte file four times. Past the end
+// BGET# stores 0 and EOF turns 1, with no error; it used to repeat the last
+// byte, which was still in MIA's transfer buffer.
+func TestBasicBgetPastEndReadsZero(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "F"), []byte("XY"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, step := bootClementinaToPrompt(t)
+	c.SetMiaSDFolder(dir)
+	typeLine(c, step, `10 OPEN "F" FOR INPUT AS #1`)
+	typeLine(c, step, `20 FOR I=0 TO 3:BGET#1,V:POKE 640+I,V:POKE 644+I,EOF(1):NEXT`)
+	typeLine(c, step, `30 CLOSE #1:POKE 648,42`)
+	typeLine(c, step, `40 GOTO 40`)
+	typeLine(c, step, "RUN")
+	editorTickN(c, step, 2_000_000)
+	for i, v := range []int{88, 89, 0, 0, 0, 1, 1, 1, 42} {
+		require_eq(t, v, peek(c, uint32(640+i)), fmt.Sprint("checkpoint ", i))
+	}
+}

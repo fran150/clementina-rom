@@ -27,13 +27,13 @@ repo, `docs/sd.md` and `docs/sd-programmer-guide.md`.
 | --- | --- | --- |
 | `OPEN "file" FOR mode AS #n` | `mode` `INPUT`\|`OUTPUT`\|`APPEND`\|`UPDATE`, `n` 1–16 | Open a file on handle `n`. `OUTPUT` creates/truncates; `APPEND` creates or positions at the end. `UPDATE` opens/creates for reading and writing at position zero without truncation. |
 | `CLOSE #n` | `n` 1–16 | Close handle `n`. |
-| `BGET#n, v` | `n` 1–16, `v` a numeric variable | Read one byte from handle `n` into `v`. |
-| `BPUT#n, expr` | `n` 1–16 | Write the low byte of `expr` to handle `n`. |
+| `BGET#n, v` | `n` 1–16, `v` a numeric variable | Read one byte (0–255) from handle `n` into `v`. Past the end of the file `v` gets `0` and `EOF(n)` turns `1`; there is no error. |
+| `BPUT#n, expr` | `n` 1–16, `expr` 0–255 | Write one byte to handle `n`. Values outside 0–255 raise `ILLEGAL QUANTITY`. |
 | `SEEK#n, pos` | `pos` 0–4294967295 | Jump handle `n` to byte offset `pos`. |
 | `EOF(n)` | `n` 1–16 (function) | `1` once handle `n` has been read past its last byte, else `0`. |
-| `KILL "path"` | — | Delete a file. |
+| `KILL "path"` | — | Delete a file or an empty directory. |
 | `MKDIR "path"` | — | Create one directory (its parent must already exist). |
-| `RMDIR "path"` | — | Remove an empty directory. |
+| `RMDIR "path"` | — | Remove an empty directory. It shares `KILL`'s routine, so it deletes a file too. |
 | `NAME "old" AS "new"` | — | Rename or move a file or directory. |
 | `CD "path"` | — | Change the current directory. |
 | `DIR` | — | List the current directory. |
@@ -48,7 +48,9 @@ repo, `docs/sd.md` and `docs/sd-programmer-guide.md`.
 
 `OPEN`, `CLOSE`, `BGET#`, `BPUT#`, `SEEK#`, `EOF`, `KILL`, `MKDIR`, `RMDIR`,
 `NAME`, `CD`, `DIR`, `LOAD`, `SAVE`, `BLOAD`, `BSAVE`, and `SYS` are reserved
-words.
+words. `BGET#`, `BPUT#` and `SEEK#` are single keywords that include the `#`,
+so write them with no space before it: `BGET#1,V` works, `BGET #1,V` raises
+`SYNTAX ERROR`. `CLOSE #n`, `FLUSH #n` and `OPEN ... AS #n` take a space.
 
 Out-of-range file numbers (0, or above 16) raise `ILLEGAL QUANTITY`. A string
 expression is required wherever a path is expected; a number there raises

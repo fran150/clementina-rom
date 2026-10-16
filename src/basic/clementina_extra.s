@@ -3875,8 +3875,13 @@ BASIC_BGET:
         lda     #MIA_CMD_FS_READ
         jsr     mia_sd_cmd
         jne     mia_fileerr
-        jsr     mia_sd_select_transfer
-        lda     IDXA_PORT               ; the byte read
+        lda     #MIA_SD_CONTROL_RESULT_LEN_L
+        jsr     mia_sd_seek
+        lda     IDXA_PORT               ; bytes read: 1, or 0 past the end
+        beq     @store                  ; past the end: store 0, EOF says why
+        jsr     mia_sd_select_transfer  ; (the transfer buffer still holds
+        lda     IDXA_PORT               ; the previous byte then)
+@store:
         jmp     mia_store_byte          ; stores into the variable named next
 
 ; ----------------------------------------------------------------------------
