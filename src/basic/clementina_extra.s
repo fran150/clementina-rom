@@ -2496,7 +2496,8 @@ play_getc:                              ; C=0 at end; else C=1 and A = char (con
 
 ; --- PLAY number scan ------------------------------------------------------
 ; play_num: read a run of decimal digits (nothing consumed if none). Returns
-; X = value (mod 256), C=1 if >= 1 digit was read, else C=0. Uses PLAY_TMP.
+; X = value, C=1 if >= 1 digit was read, else C=0. A value over 255 gives
+; ILLEGAL QUANTITY (TRACK is its only user). Uses PLAY_TMP.
 play_num:
         lda     #$00
         sta     PLAY_TMP               ; accumulator
@@ -2512,6 +2513,8 @@ play_num:
         and     #$0F
         pha                            ; [digit]
         lda     PLAY_TMP
+        cmp     #26
+        jcs     trk_iq                 ; acc*10 would pass 255
         asl     a
         pha                            ; [digit, acc*2]
         asl     a
@@ -2524,6 +2527,7 @@ play_num:
         pla                            ; digit
         clc
         adc     PLAY_TMP
+        jcs     trk_iq                 ; 256-259
         sta     PLAY_TMP
         lda     #$01
         sta     PLAY_TMP+1
@@ -2733,9 +2737,8 @@ BASIC_TRACK:
 @tempo:
         jsr     trk_num_req
         cpx     #$00
-        bne     :+
-        ldx     #$01                    ; T0 -> 1
-:       stx     PLAY_TEMPO
+        jeq     trk_iq                  ; T is 1-255
+        stx     PLAY_TEMPO
         jmp     @loop
 @wave:
         jsr     trk_num_req
