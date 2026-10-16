@@ -286,7 +286,12 @@ END:
 .ifdef CLEMENTINA
         ; Entered directly by the "END" statement (STOP's own entry point
         ; above handles Ctrl-C/STOP) - stop the background sequencer here too.
+        ; php/plp for the same reason as STOP: END2's bne needs the Z flag the
+        ; dispatch's CHRGET left (set when nothing follows END), and
+        ; seq_stop_all returns with Z clear, which made END a no-op.
+        php
         jsr     seq_stop_all
+        plp
 .endif
         clc
 END2:
