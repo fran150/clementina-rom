@@ -46,6 +46,7 @@ with tempfile.TemporaryDirectory(prefix='clementina-input-test-') as directory:
         str(emulator / 'pkg/computers/clementina/basic_bload_test.go'): str(repo / 'tests/basic_bload_test.go'),
         str(emulator / 'pkg/computers/clementina/basic_sys_test.go'): str(repo / 'tests/basic_sys_test.go'),
         str(emulator / 'pkg/computers/clementina/basic_end_test.go'): str(repo / 'tests/basic_end_test.go'),
+        str(emulator / 'pkg/computers/clementina/basic_print_test.go'): str(repo / 'tests/basic_print_test.go'),
     }}
     # The emulator uses Go copy (memmove semantics), whereas Pico DMA reads
     # forward. Assert that the ROM's reserved memory descriptors always issue

@@ -166,7 +166,10 @@ L29D9:
         pla
         tax
   .else
-    .ifndef CONFIG_2
+    ; Commodore's CONFIG_2 skips this because its KERNAL tracks the column.
+    ; Clementina's POS, TAB and comma zones read POSX, so every line end
+    ; (CRDO, the end of INPUT, a CR inside a string) puts it back to 0.
+    .if .def(CLEMENTINA) || (!.def(CONFIG_2))
         lda     #$00
         sta     POSX
     .endif
