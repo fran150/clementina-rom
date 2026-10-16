@@ -4008,11 +4008,11 @@ BASIC_SAVE:
 ; ----------------------------------------------------------------------------
 ; LOAD "path" : replace the current program with a file's tokenized text,
 ; LOADSAVE_CHUNK bytes at a time - the reverse of SAVE. Clears variables,
-; arrays, and the string heap exactly like NEW (via FIX_LINKS, which every
-; other platform's LOAD in this codebase also ends with - apple/kim/
-; microtan/sym1_loadsave.s). Does not return to its caller: FIX_LINKS always
-; transfers control to the READY-prompt input loop directly, whether LOAD
-; ran from direct mode or from a running program - the same as NEW/SCRTCH.
+; arrays, and the string heap exactly like NEW (via the two steps of
+; FIX_LINKS, which every other platform's LOAD in this codebase ends with -
+; apple/kim/microtan/sym1_loadsave.s). Does not return to its caller: it ends
+; at RESTART, which prints READY and waits for a line, whether LOAD ran from
+; direct mode or from a running program (which stops there).
 ; A failed OPEN (bad filename, no such file) is caught before any of the
 ; current program is touched, so a failed LOAD leaves it intact.
 ; ----------------------------------------------------------------------------
@@ -4119,7 +4119,12 @@ BASIC_LOAD:
         sta     VARTAB
         lda     INDEX+1
         sta     VARTAB+1
-        jmp     FIX_LINKS
+        ; FIX_LINKS itself ends at L2351, the input loop past READY that a
+        ; typed program line returns to, so LOAD printed no READY. Run its two
+        ; steps here and end at RESTART instead.
+        jsr     SETPTRS
+        jsr     LE33D                   ; re-link the loaded lines
+        jmp     RESTART
 
 ; ----------------------------------------------------------------------------
 ; MIALOAD "path", addr[, len[, offset[, rows, filestride, ramstride]]] : load

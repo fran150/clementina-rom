@@ -40,7 +40,7 @@ repo, `docs/sd.md` and `docs/sd-programmer-guide.md`.
 | `DIR "path"` | — | List `path` without changing the current directory. |
 | `MIALOAD "path", addr[, len[, offset[, rows, filestride, ramstride]]]` | `addr`, `len`, `ramstride` 0–16777215; `offset`, `filestride` 0–4294967295; `rows` 0–65535 | Load a file straight into MIA RAM at a raw address, no CPU byte-touching. Omitted/zero `len` reads until EOF or the end of MIA RAM. `offset` starts that far into the file. `rows`, `filestride` and `ramstride` load a rectangle: `rows` rows of `len` bytes, each `filestride` bytes further into the file and `ramstride` bytes further on in MIA RAM. See [Partial loads](#partial-loads). |
 | `MIASAVE "path", addr, len` | | Save `len` bytes of MIA RAM starting at `addr` to a file. |
-| `LOAD "path"` | — | Replace the current program with a saved one. |
+| `LOAD "path"` | — | Replace the current program with a saved one and clear variables. Ends at the `READY.` prompt, also when a program runs it (that program stops there). |
 | `SAVE "path"` | — | Save the current program. |
 | `BLOAD "path"[, run][, addr]` | `run`/`addr` 16-bit CPU addresses | Load a file straight into CPU RAM at the address its own header specifies (or `addr`, if given), the way a C64 loads a game. `run`, if given and nonzero, jumps there once loaded instead of returning. |
 | `BSAVE "path", addr, len[, bank]` | `addr`/`len` 16-bit, `bank` 0–31 | Save `len` bytes of CPU RAM starting at `addr` to a file, in the format `BLOAD` reads. For `addr >= $8000` the file records `bank`, or the bank mapped now if `bank` is omitted. |

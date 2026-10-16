@@ -245,3 +245,50 @@ func TestBasicOpenAppend(t *testing.T) {
 	}
 }
 
+// fsRowAfter fails unless the first non-blank screen row after the one reading
+// `line` reads `want` (both trimmed). READY. always follows a blank row: its
+// message starts with CR, LF.
+func fsRowAfter(t *testing.T, c *ClementinaComputer, line, want string) {
+	t.Helper()
+	for row := 0; row < 24; row++ {
+		if strings.TrimRight(printScreenRow(c, row), " \x00") == line {
+			got := ""
+			for next := row + 1; next < 25 && got == ""; next++ {
+				got = strings.TrimRight(printScreenRow(c, next), " \x00")
+			}
+			if got != want {
+				dumpScreen(t, c.chips.mia.(videoReader))
+				t.Fatalf("after %q: want %q got %q", line, want, got)
+			}
+			return
+		}
+	}
+	dumpScreen(t, c.chips.mia.(videoReader))
+	t.Fatalf("no row reads %q", line)
+}
+
+// TestBasicLoadEndsAtReady checks LOAD prints READY, typed directly and when a
+// program runs it (that program stops there). LOAD used to jump into the input
+// loop past READY, so nothing was printed.
+func TestBasicLoadEndsAtReady(t *testing.T) {
+	c, step := bootClementinaToPrompt(t)
+	c.SetMiaSDFolder(t.TempDir())
+	typeLine(c, step, `10 PRINT 1`)
+	typeLine(c, step, `SAVE "P"`)
+	typeLine(c, step, "CLS")
+	typeLine(c, step, `LOAD "P"`)
+	editorTickN(c, step, 400_000)
+	fsRowAfter(t, c, `LOAD "P"`, "READY.")
+
+	typeLine(c, step, `10 PRINT "A":LOAD "P"`)
+	typeLine(c, step, `20 PRINT "B"`)
+	typeLine(c, step, "CLS")
+	typeLine(c, step, "RUN")
+	editorTickN(c, step, 800_000)
+	fsRowAfter(t, c, "RUN", "A")
+	fsRowAfter(t, c, "A", "READY.")
+	typeLine(c, step, "CLS")
+	typeLine(c, step, "LIST")
+	fsRowAfter(t, c, "LIST", " 10 PRINT 1")
+}
+
