@@ -9,44 +9,22 @@
 ; ============================================================================
 
 ; ----------------------------------------------------------------------------
-; MIA register block ($FFE0-$FFFF)
+; MIA: registers ($FFE0-$FFFF), status and IRQ bits, error codes, CFG field
+; ids, commands, MIA-owned index ids, index flag bits (IDX_FLAG_*, bit
+; numbers) and the MIA RAM layout, under MIA's own names. mia.inc is generated
+; by clementina-sdk from its specs; never edit it here. Update it by copying
+; the SDK's packages/runtime/asm/mia.inc (the SDK's drift check compares the
+; two). See src/include/README.md.
+;
+; Two MIA habits the kernel relies on:
+; - CFG ids $00-$0F configure the index bound to window A, $10-$1F the one
+;   bound to window B. Writing a current-address byte refreshes that window's
+;   data port, so a read right after repositioning returns the new byte.
+; - Render control fields (MIA_VIDEO_*_OFFSET, $00020-$0003F) are reached by
+;   binding MIA_VIDEO_INDEX_RENDER_CONTROL to window A and setting its address
+;   (vid_seek in clementina_extra.s); the page fits in one byte of address.
 ; ----------------------------------------------------------------------------
-IDXA_PORT          = $FFE0     ; index window A data port
-IDXA_SELECT        = $FFE1     ; index window A descriptor selector
-CFG_SELECT         = $FFE2     ; configuration field selector
-CFG_PORT           = $FFE3     ; configuration field data port
-IDXB_PORT          = $FFE4     ; index window B data port
-IDXB_SELECT        = $FFE5     ; index window B descriptor selector
-CMD_PARAM1         = $FFE6     ; parameter 1 for command
-CMD_PARAM2         = $FFE7     ; parameter 2 for command
-CMD_PARAM3         = $FFE8     ; parameter 3 for command
-CMD_TRIGGER        = $FFE9     ; write command id here to queue it
-STATUS_L           = $FFEA     ; status register
-STATUS_H           = $FFEB
-ERROR_L            = $FFEC     ; read-to-pop error queue
-ERROR_H            = $FFED
-IRQ_MASK_L         = $FFEE     ; Mask to enable / disable IRQs
-IRQ_MASK_H         = $FFEF
-IRQ_STATUS_L       = $FFF0     ; read-to-clear (clears all pending IRQ bits)
-IRQ_STATUS_H       = $FFF1     ; passive read; sample before $FFF0
-INPUT_STATUS       = $FFF2     ; input status
-INPUT_CHAR         = $FFF3     ; read-to-pop text FIFO ($00 when empty)
-INPUT_CHAR_COUNT   = $FFF4     ; characters in input fifo queue
-MIA_CTX            = $FFF5     ; context stack: write MIA_CTX_PUSH / MIA_CTX_POP
-NMI_VEC            = $FFFA     ; MIA-backed 6502 NMI vector
-RESET_VEC          = $FFFC     ; MIA-backed 6502 RESET vector
-IRQ_VEC            = $FFFE     ; MIA-backed 6502 IRQ/BRK vector
-
-; INPUT_STATUS bits
-INPUT_STATUS_TEXT_READY      = %00000001
-
-; MIA_CTX values. PUSH saves both window selections, CFG_SELECT, CMD_PARAM1-3
-; and the two descriptors bound to the windows; POP restores them.
-MIA_CTX_PUSH       = $01
-MIA_CTX_POP        = $02
-INPUT_STATUS_SOURCE_CONSOLE  = %00100000
-INPUT_STATUS_SOURCE_WIFI     = %01000000
-INPUT_STATUS_SOURCE_USB_HOST = %10000000  ; reserved for a later board's USB keyboard
+.include "mia.inc"
 
 ; ----------------------------------------------------------------------------
 ; 65C22 VIA in I/O slot 0 ($C000-$C3FF). Registers mirror every 16 bytes.
@@ -79,37 +57,6 @@ VIA_IER_SET         = %10000000
 VIA_T1_RELOAD       = 6250
 CURSOR_BLINK_TICKS  = 80
 
-; ----------------------------------------------------------------------------
-; MIA configuration field ids (CFG_SELECT values).
-; Ids $00-$0F configure the index currently selected in window A; $10-$1F the
-; index selected in window B. Bind an index with IDXA_SELECT/IDXB_SELECT first,
-; then write its fields through CFG_SELECT/CFG_PORT. Writing a current-address
-; byte refreshes that window's data port from the new address, so a read right
-; after repositioning the index returns the new byte (no re-select).
-; ----------------------------------------------------------------------------
-CFG_IDXA_ADDR_L    = $00
-CFG_IDXA_ADDR_M    = $01
-CFG_IDXA_ADDR_H    = $02
-CFG_IDXA_LIMIT_L   = $06
-CFG_IDXA_LIMIT_M   = $07
-CFG_IDXA_LIMIT_H   = $08
-CFG_IDXA_STP_L     = $09
-CFG_IDXA_STP_H     = $0A
-CFG_IDXA_FLAGS     = $0B
-CFG_IDXB_ADDR_L    = $10
-CFG_IDXB_ADDR_M    = $11
-CFG_IDXB_ADDR_H    = $12
-CFG_IDXB_LIMIT_L   = $16
-CFG_IDXB_LIMIT_M   = $17
-CFG_IDXB_LIMIT_H   = $18
-CFG_IDXB_STP_L     = $19
-CFG_IDXB_STP_H     = $1A
-CFG_IDXB_FLAGS     = $1B
-
-; STATUS_L bits
-MIA_STAT_CMD_RUNNING = %00000100
-MIA_STAT_DMA_RUNNING = %00001000
-
 ; Kernel/system-reserved MIA index descriptors. User code must leave $F0-$FF
 ; alone while using kernel services. Programs own $00-$4F; MIA owns $50-$EF
 ; (full table in docs/memory-map.md section 12).
@@ -119,82 +66,6 @@ KIDX_SCROLL_ATTR_SRC = $F2
 KIDX_SCROLL_ATTR_DST = $F3
 KIDX_MEMORY_SRC      = $F4
 KIDX_MEMORY_DST      = $F5
-
-; MIA-owned input index the kernel borrows (re-seeked before every read).
-IIDX_INPUT_STATE     = $60      ; 128-byte input state block @ $11000
-
-; Index descriptor flag bits
-IXF_R_STP          = %00000001 ; step after read
-IXF_W_STP          = %00000010 ; step after write
-IXF_DIR_BACK       = %00000100 ; step direction backward
-IXF_WRAP           = %00001000 ; wrap at range limits
-IXF_WRAP_IRQ       = %00010000 ; raise wrap IRQ
-
-; ----------------------------------------------------------------------------
-; MIA commands (CMD_TRIGGER values) used by the kernel
-; ----------------------------------------------------------------------------
-CMD_IDX_RESET_A    = $00
-CMD_IDX_RESET_B    = $01
-CMD_COPY_INDEXES   = $10
-CMD_COPY_RECT      = $11
-CMD_VIDEO_FULL_REFRESH = $42
-CMD_VIDEO_SET_MODE = $43
-
-; ----------------------------------------------------------------------------
-; MIA video: indexes and overlay text layer
-; ----------------------------------------------------------------------------
-VIDX_RENDER_CONTROL = $80      ; streams the 32-byte render control page ($20..)
-VIDX_LAYER_ENABLE   = $81      ; 1 byte: background/overlay/sprite enables
-VIDX_BANK_SELECT    = $85      ; 5 bytes: bg, bg alt, overlay, overlay alt, sprite
-VIDX_CHR_1BPP       = $86      ; 2 bytes: CHR_1BPP_MASK, CHR_1BPP_PLANES
-VIDX_BACKDROP_COLOR = $87      ; 1 byte: palette/color selector
-VIDX_PALETTE_0      = $90      ; first of 16 palette-bank indexes
-VIDX_OVERLAY_NT     = $B8      ; overlay nametable, 1000 bytes @ $10080
-VIDX_OVERLAY_ATTR   = $B9      ; overlay attributes, 1000 bytes @ $10468
-VIDX_BG_NT_0        = $A8      ; first of 8 raw BG nametable indexes, 1000 bytes each
-VIDX_BG_ATTR_0      = $B0      ; first of 8 raw BG attribute-table indexes, 1000 bytes each
-VIDX_CHR_BANK_0     = $A0      ; first of 8 raw CHR bank indexes, 6144 bytes each
-VIDX_OAM_0          = $C0      ; first of 32 direct OAM-entry indexes, 5 bytes each
-
-; Render control page ($00020-$0003F) field addresses, as the low byte of a
-; 24-bit MIA RAM address (mid/high are always $00 - the whole page fits in one
-; byte). Reach any of them by binding VIDX_RENDER_CONTROL to window A and
-; overriding its current address via CFG_IDXA_ADDR_L/M/H (see vid_seek in
-; clementina_extra.s), same trick snd_seek uses for the audio block.
-RC_LAYER_ENABLE     = $21      ; 1 byte: LAYER_BACKGROUND/LAYER_OVERLAY/LAYER_SPRITE
-RC_BG_VIEWPORT_MODE = $22      ; 1 byte: 0-5, canvas layout for the BG layer
-RC_BG_ACTIVE_SET    = $23      ; 1 byte: 0/1, selects BG table set (+4 offset)
-RC_SCROLL_X_L       = $24      ; 2 bytes LE: BG scroll X, pixels
-RC_SCROLL_X_H       = $25
-RC_SCROLL_Y_L       = $26      ; 2 bytes LE: BG scroll Y, pixels
-RC_SCROLL_Y_H       = $27
-RC_BG_CHR_BANK      = $28      ; 1 byte: CHR bank 0-7 the BG layer draws from
-RC_BG_ALT_CHR_BANK  = $29      ; 1 byte: CHR bank used where a cell sets CHR_ALT
-RC_OVERLAY_CHR_BANK = $2A
-RC_OVERLAY_ALT_CHR  = $2B
-RC_SPRITE_CHR_BANK  = $2C      ; 1 byte: CHR bank sprites draw from
-RC_CHR_1BPP_MASK    = $2D      ; 1 byte: bit n set -> CHR bank n decodes as 1bpp
-RC_CHR_1BPP_PLANES  = $2E      ; 1 byte: bg[1:0] spr[3:2] overlay[5:4] plane select
-RC_BACKDROP_COLOR   = $2F      ; 1 byte: also reachable via VIDX_BACKDROP_COLOR
-RC_OAM_LAST_INDEX   = $30      ; 1 byte: highest OAM index the renderer scans
-
-; Overlay nametable base, as a 24-bit MIA RAM address ($10080)
-OVNT_ADDR_L         = $80
-OVNT_ADDR_M         = $00
-OVNT_ADDR_H         = $01
-
-; Overlay attribute base, as a 24-bit MIA RAM address ($10468)
-OVATTR_ADDR_L       = $68
-OVATTR_ADDR_M       = $04
-OVATTR_ADDR_H       = $01
-
-; LAYER_ENABLE bits (bit0 background, bit1 overlay, bit2 sprite)
-LAYER_BACKGROUND    = %00000001
-LAYER_OVERLAY       = %00000010
-LAYER_SPRITE        = %00000100
-
-; VIDEO_MODE: bit0 = video enable.
-VIDEO_MODE_ENABLE   = %00000001
 
 ; MIA split-loads the selected font: ASCII text -> CHR bank 0 plane 0 (primary
 ; overlay bank), graphics/line set -> CHR bank 1 plane 0 (alternate overlay
@@ -275,7 +146,7 @@ KERN_LOAD          = KERN_BASE + $1B   ; stream a PRG file into CPU RAM (load.s)
 KERN_EDITKEY       = KERN_BASE + $1E   ; screen editor: next char of edited line
 KERN_CHROUT_GLYPH  = KERN_BASE + $21   ; A = tile -> console as a raw glyph (no ctrl)
 KERN_WOZMON        = KERN_BASE + $24   ; enter the WOZ monitor (see src/monitor)
-KERN_SET_BACKDROP  = KERN_BASE + $27   ; A = backdrop selector -> VIDX_BACKDROP_COLOR
+KERN_SET_BACKDROP  = KERN_BASE + $27   ; A = backdrop selector -> MIA_VIDEO_INDEX_BACKDROP_COLOR
 KERN_IRQ           = KERN_BASE + $2A   ; kernel IRQ handler; a program's own handler
                                        ; restores A/X/Y, then JMPs here to chain
 KERN_PLOT          = KERN_BASE + $2D   ; C=1: read cursor -> X=row, Y=column;

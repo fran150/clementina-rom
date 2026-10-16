@@ -16,6 +16,11 @@ Use firmware definitions as the source of truth for MIA registers, commands,
 status bits, IRQ bits, fixed indexes, and MIA RAM layouts. Use the emulator to
 verify CPU-visible behavior and memory decoding.
 
+The ROM takes those names from `src/include/mia.inc`, which clementina-sdk
+generates from its specs (`../clementina-sdk`). Don't define MIA constants in
+the ROM sources or edit `mia.inc` by hand: change the SDK spec, regenerate, and
+copy the file here (see `src/include/README.md`).
+
 ## Microsoft BASIC
 
 Use `mist64/msbasic` as the clean upstream source and Ben Eater's fork as a

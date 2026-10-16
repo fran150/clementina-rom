@@ -56,22 +56,8 @@
 KLOAD_HANDLE = 14              ; distinct from BASIC's own LOAD/SAVE handle (15)
 KLOAD_CHUNK  = 128
 
-; MIA SD/FS protocol constants (mirrors clementina_extra.s's private copies -
-; kernel code deliberately does not import those, see header comment).
-KLOAD_SD_INDEX_CONTROL  = $E0
-KLOAD_FS_INDEX_TRANSFER = $E4
-KLOAD_CMD_FS_OPEN       = $7B
-KLOAD_CMD_FS_READ       = $7C
-KLOAD_CMD_FS_CLOSE      = $7D
-KLOAD_SD_LAST_ERROR     = $02
-KLOAD_SD_REQUEST_LEN_L  = $08
-KLOAD_SD_RESULT_LEN_L   = $0A
-KLOAD_SD_OPEN_MODE      = $10
-KLOAD_SD_HANDLE_SELECT  = $2E
-KLOAD_FS_OPEN_READ      = $00
-KLOAD_SD_CONTROL_ADDR_M = $30
-KLOAD_SD_CONTROL_ADDR_H = $01
-KLOAD_STATUS_H_SD_BUSY  = %00000100
+; MIA's SD/FS names (MIA_SD_*, MIA_FS_*, MIA_CMD_FS_*) come from mia.inc,
+; which kernel.inc includes.
 
 ; Zero-page scratch, all within the kernel's own reserved block ($F0-$FB) -
 ; see kernel.inc. KPTR/KTMP carry the caller's inputs in; once the header is
@@ -90,15 +76,15 @@ KLOAD_SCRATCH = $FB    ; header addr_hi scratch while deciding the destination
 ; ----------------------------------------------------------------------------
 kld_seek:
         pha
-        lda     #KLOAD_SD_INDEX_CONTROL
+        lda     #MIA_SD_INDEX_CONTROL
         sta     IDXA_SELECT
         lda     #CFG_IDXA_ADDR_H
         sta     CFG_SELECT
-        lda     #KLOAD_SD_CONTROL_ADDR_H
+        lda     #^MIA_SD_CONTROL_OFFSET
         sta     CFG_PORT
         lda     #CFG_IDXA_ADDR_M
         sta     CFG_SELECT
-        lda     #KLOAD_SD_CONTROL_ADDR_M
+        lda     #>MIA_SD_CONTROL_OFFSET
         sta     CFG_PORT
         lda     #CFG_IDXA_ADDR_L
         sta     CFG_SELECT
@@ -111,11 +97,11 @@ kld_wait:
         and     #$04                    ; MIA_STAT_CMD_RUNNING
         bne     kld_wait
         lda     STATUS_H
-        and     #KLOAD_STATUS_H_SD_BUSY
+        and     #>MIA_STAT_SD_BUSY
         bne     kld_wait
         rts
 
-; A = command id. Clears CMD_PARAM1-3, triggers, waits, leaves SD_LAST_ERROR
+; A = command id. Clears CMD_PARAM1-3, triggers, waits, leaves MIA_SD_CONTROL_LAST_ERROR
 ; in A (Z set = success). Clobbers A,X.
 kld_cmd:
         pha
@@ -125,7 +111,7 @@ kld_cmd:
         pla
         sta     CMD_TRIGGER
         jsr     kld_wait
-        lda     #KLOAD_SD_LAST_ERROR
+        lda     #MIA_SD_CONTROL_LAST_ERROR
         jsr     kld_seek
         lda     IDXA_PORT
         rts
@@ -134,7 +120,7 @@ kld_cmd:
 kld_select_handle:
         txa
         pha
-        lda     #KLOAD_SD_HANDLE_SELECT
+        lda     #MIA_SD_CONTROL_HANDLE_SELECT
         jsr     kld_seek
         pla
         sta     IDXA_PORT
@@ -147,7 +133,7 @@ kld_select_handle:
 ; mia_sd_select_transfer's own fixed absolute address ($013440).
 ; Clobbers A.
 kld_select_transfer:
-        lda     #KLOAD_FS_INDEX_TRANSFER
+        lda     #MIA_FS_INDEX_TRANSFER
         sta     IDXA_SELECT
         lda     #CFG_IDXA_ADDR_H
         sta     CFG_SELECT
@@ -170,12 +156,12 @@ kld_select_transfer:
 kld_read_byte:
         ldx     #KLOAD_HANDLE
         jsr     kld_select_handle
-        lda     #KLOAD_SD_REQUEST_LEN_L
+        lda     #MIA_SD_CONTROL_REQUEST_LEN_L
         jsr     kld_seek
         lda     #$01
         sta     IDXA_PORT
         stz     IDXA_PORT
-        lda     #KLOAD_CMD_FS_READ
+        lda     #MIA_CMD_FS_READ
         jsr     kld_cmd
         jne     kload_err_safe
         jsr     kld_select_transfer
@@ -210,11 +196,11 @@ load:
 
         ldx     #KLOAD_HANDLE
         jsr     kld_select_handle
-        lda     #KLOAD_SD_OPEN_MODE
+        lda     #MIA_SD_CONTROL_OPEN_MODE
         jsr     kld_seek
-        lda     #KLOAD_FS_OPEN_READ
+        lda     #MIA_FS_OPEN_READ
         sta     IDXA_PORT
-        lda     #KLOAD_CMD_FS_OPEN
+        lda     #MIA_CMD_FS_OPEN
         jsr     kld_cmd
         jne     kload_err_safe          ; nothing written yet - safe to error
 
@@ -275,18 +261,18 @@ load:
 
         ldx     #KLOAD_HANDLE
         jsr     kld_select_handle
-        lda     #KLOAD_SD_REQUEST_LEN_L
+        lda     #MIA_SD_CONTROL_REQUEST_LEN_L
         jsr     kld_seek
         lda     KLOAD_CHUNKLEN
         sta     IDXA_PORT
         stz     IDXA_PORT
-        lda     #KLOAD_CMD_FS_READ
+        lda     #MIA_CMD_FS_READ
         jsr     kld_cmd
         jne     kload_err_unsafe
 
         lda     KLOAD_CHUNKLEN          ; stash the requested length across the
         pha                             ; result-length read below
-        lda     #KLOAD_SD_RESULT_LEN_L
+        lda     #MIA_SD_CONTROL_RESULT_LEN_L
         jsr     kld_seek
         lda     IDXA_PORT
         sta     KLOAD_CHUNKLEN          ; now the actual result length
@@ -334,7 +320,7 @@ load:
 @eof:
         ldx     #KLOAD_HANDLE
         jsr     kld_select_handle
-        lda     #KLOAD_CMD_FS_CLOSE
+        lda     #MIA_CMD_FS_CLOSE
         jsr     kld_cmd
         ; ignore a close failure here - we already have everything we came for
 
@@ -375,7 +361,7 @@ load:
 kload_err_close_safe:
         ldx     #KLOAD_HANDLE
         jsr     kld_select_handle
-        lda     #KLOAD_CMD_FS_CLOSE
+        lda     #MIA_CMD_FS_CLOSE
         jsr     kld_cmd                 ; best-effort close, ignore its result
 kload_err_safe:
 kload_err_unsafe:

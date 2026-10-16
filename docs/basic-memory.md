@@ -66,7 +66,7 @@ the firmware memory layout when selecting a region for data.
 ## Implementation
 
 No new MIA command or firmware protocol is required. The kernel uses the existing
-`CMD_COPY_INDEXES` (`$10`) engine and reserved scratch descriptors `$F4`/`$F5`.
+`MIA_CMD_COPY_INDEXES` (`$10`) engine and reserved scratch descriptors `$F4`/`$F5`.
 Each transfer sets an exclusive source limit and uses the existing zero command
 count to mean `limit-current`. A real zero-length BASIC request never starts DMA.
 

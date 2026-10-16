@@ -2,7 +2,7 @@
 ; video.s - palette load and video/overlay bring-up
 ; ----------------------------------------------------------------------------
 ; Included by kernel.s into the single kernel translation unit (after
-; kernel.inc), so every VIDX_*/CMD_* constant and the KZEROPAGE scratch are
+; kernel.inc), so every MIA_* constant and the KZEROPAGE scratch are
 ; already in scope and no .import/.export plumbing is required.
 ; ============================================================================
 
@@ -17,7 +17,7 @@ video_init:
         ; (overlay alternate bank). The overlay renders plane 0, so tile code N is
         ; the glyph for ASCII codepoint N and console output needs no screen-code
         ; translation. Per-cell CHR_ALT selects text (bank 0) vs graphics (bank 1).
-        lda #VIDX_BANK_SELECT
+        lda #MIA_VIDEO_INDEX_BANK_SELECT
         sta IDXA_SELECT
         lda #VIDEO_CHR_BANK_DEFAULT
         sta IDXA_PORT           ; background bank
@@ -28,7 +28,7 @@ video_init:
         lda #VIDEO_CHR_BANK_DEFAULT
         sta IDXA_PORT           ; sprite bank
 
-        lda #VIDX_CHR_1BPP
+        lda #MIA_VIDEO_INDEX_CHR_1BPP
         sta IDXA_SELECT
         lda #CHR_1BPP_BANKS_TEXT_GFX
         sta IDXA_PORT
@@ -38,33 +38,33 @@ video_init:
         jsr init_scroll_indexes
 
         ; Palette 0 color 0 is the blue screen backdrop.
-        lda #VIDX_BACKDROP_COLOR
+        lda #MIA_VIDEO_INDEX_BACKDROP_COLOR
         sta IDXA_SELECT
         lda #BACKDROP_BLUE
         sta IDXA_PORT
 
         ; Enable video output.
-        lda #VIDEO_MODE_ENABLE
+        lda #MIA_VIDEO_MODE_ENABLE
         sta CMD_PARAM1
         stz CMD_PARAM2
         stz CMD_PARAM3
-        lda #CMD_VIDEO_SET_MODE
+        lda #MIA_CMD_VIDEO_SET_MODE
         sta CMD_TRIGGER
 
         ; Enable the overlay layer (stream one byte through index $81).
-        lda #VIDX_LAYER_ENABLE
+        lda #MIA_VIDEO_INDEX_LAYER_ENABLE
         sta IDXA_SELECT
-        lda #LAYER_OVERLAY
+        lda #MIA_VIDEO_LAYER_OVERLAY
         sta IDXA_PORT
 
         ; Make sure the client picks up the whole initial screen.
-        lda #CMD_VIDEO_FULL_REFRESH
+        lda #MIA_CMD_VIDEO_FORCE_FULL_REFRESH
         sta CMD_TRIGGER
         rts
 
 ; ----------------------------------------------------------------------------
 ; set_backdrop - set the screen backdrop color. In: A = backdrop selector
-; (bits 0-2 = color index, bits 3-6 = palette bank; see VIDX_BACKDROP_COLOR).
+; (bits 0-2 = color index, bits 3-6 = palette bank; see MIA_VIDEO_INDEX_BACKDROP_COLOR).
 ; The renderer repaints the backdrop from VRAM every frame, so writing the
 ; selector is enough - no refresh command needed. The two-register window A
 ; write is fenced with sei so a cursor-blink IRQ (cursor_show/hide rebind
@@ -76,7 +76,7 @@ set_backdrop:
         php                     ; save the caller's interrupt-enable state
         sei
         pha
-        lda #VIDX_BACKDROP_COLOR
+        lda #MIA_VIDEO_INDEX_BACKDROP_COLOR
         sta IDXA_SELECT
         pla                     ; A = selector again
         sta IDXA_PORT
@@ -89,37 +89,37 @@ set_backdrop:
 init_scroll_indexes:
         lda #KIDX_SCROLL_NT_SRC
         sta IDXA_SELECT
-        lda #(OVNT_ADDR_L + SCR_COLS)
-        ldx #OVNT_ADDR_M
-        ldy #OVNT_ADDR_H
+        lda #<(MIA_VIDEO_OVERLAY_NT_OFFSET + SCR_COLS)
+        ldx #>MIA_VIDEO_OVERLAY_NT_OFFSET
+        ldy #^MIA_VIDEO_OVERLAY_NT_OFFSET
         jsr set_idxa_addr
-        lda #<(OVNT_ADDR_L + (SCR_ROWS * SCR_COLS))
-        ldx #(OVNT_ADDR_M + >(OVNT_ADDR_L + (SCR_ROWS * SCR_COLS)))
-        ldy #OVNT_ADDR_H
+        lda #<(MIA_VIDEO_OVERLAY_NT_OFFSET + (SCR_ROWS * SCR_COLS))
+        ldx #>(MIA_VIDEO_OVERLAY_NT_OFFSET + (SCR_ROWS * SCR_COLS))
+        ldy #^MIA_VIDEO_OVERLAY_NT_OFFSET
         jsr set_idxa_limit
 
         lda #KIDX_SCROLL_NT_DST
         sta IDXA_SELECT
-        lda #OVNT_ADDR_L
-        ldx #OVNT_ADDR_M
-        ldy #OVNT_ADDR_H
+        lda #<MIA_VIDEO_OVERLAY_NT_OFFSET
+        ldx #>MIA_VIDEO_OVERLAY_NT_OFFSET
+        ldy #^MIA_VIDEO_OVERLAY_NT_OFFSET
         jsr set_idxa_addr
 
         lda #KIDX_SCROLL_ATTR_SRC
         sta IDXA_SELECT
-        lda #(OVATTR_ADDR_L + SCR_COLS)
-        ldx #OVATTR_ADDR_M
-        ldy #OVATTR_ADDR_H
+        lda #<(MIA_VIDEO_OVERLAY_ATTR_OFFSET + SCR_COLS)
+        ldx #>MIA_VIDEO_OVERLAY_ATTR_OFFSET
+        ldy #^MIA_VIDEO_OVERLAY_ATTR_OFFSET
         jsr set_idxa_addr
-        lda #<(OVATTR_ADDR_L + (SCR_ROWS * SCR_COLS))
-        ldx #(OVATTR_ADDR_M + >(OVATTR_ADDR_L + (SCR_ROWS * SCR_COLS)))
-        ldy #OVATTR_ADDR_H
+        lda #<(MIA_VIDEO_OVERLAY_ATTR_OFFSET + (SCR_ROWS * SCR_COLS))
+        ldx #>(MIA_VIDEO_OVERLAY_ATTR_OFFSET + (SCR_ROWS * SCR_COLS))
+        ldy #^MIA_VIDEO_OVERLAY_ATTR_OFFSET
         jsr set_idxa_limit
 
         lda #KIDX_SCROLL_ATTR_DST
         sta IDXA_SELECT
-        lda #OVATTR_ADDR_L
-        ldx #OVATTR_ADDR_M
-        ldy #OVATTR_ADDR_H
+        lda #<MIA_VIDEO_OVERLAY_ATTR_OFFSET
+        ldx #>MIA_VIDEO_OVERLAY_ATTR_OFFSET
+        ldy #^MIA_VIDEO_OVERLAY_ATTR_OFFSET
         jsr set_idxa_addr
         rts

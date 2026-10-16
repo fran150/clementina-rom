@@ -167,7 +167,7 @@ there is nothing to bump when a new command lands.
 ## Register reference
 
 Render-control page (32 bytes, MIA RAM `$00020-$0003F`), reached by binding
-window A to `VIDX_RENDER_CONTROL` ($80) and repositioning its current address
+window A to `MIA_VIDEO_INDEX_RENDER_CONTROL` ($80) and repositioning its current address
 via `CFG_IDXA_ADDR_L/M/H` (`vid_seek` in `clementina_extra.s` - the same trick
 `snd_seek` uses for the audio block):
 
@@ -186,7 +186,7 @@ via `CFG_IDXA_ADDR_L/M/H` (`vid_seek` in `clementina_extra.s` - the same trick
 | `$0C` | `SPRITE_CHR_BANK` | 1 |
 | `$0D` | `CHR_1BPP_MASK` (bit n = bank n is 1bpp) | 1 |
 | `$0E` | `CHR_1BPP_PLANES` (bg[1:0] spr[3:2] ovl[5:4]) | 1 |
-| `$0F` | `BACKDROP_COLOR` (also `VIDX_BACKDROP_COLOR`/`BCOLOR`) | 1 |
+| `$0F` | `BACKDROP_COLOR` (also `MIA_VIDEO_INDEX_BACKDROP_COLOR`/`BCOLOR`) | 1 |
 | `$10` | `OAM_LAST_INDEX` | 1 |
 
 Other regions, each its own index descriptor(s):

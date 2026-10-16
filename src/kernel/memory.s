@@ -288,7 +288,7 @@ km_sub_count:
 ; DMA count=0 means source limit-current, an exclusive end, not a zero transfer.
 km_dma:
         stz km_n                ; COPY_INDEXES: third parameter 0, up to the limit
-        lda #CMD_COPY_INDEXES
+        lda #MIA_CMD_COPY_INDEXES
 ; A = command and km_n = its third parameter (COPY_RECT: rows, 0 = 256).
 km_dma_cmd:
         sta km_cmd
@@ -311,15 +311,15 @@ km_dma_cmd:
         ldx #0
         lda #KIDX_MEMORY_SRC
         jsr km_seek
-        lda #CFG_IDXA_LIMIT_H
+        lda #CFG_IDXA_LIM_H
         sta CFG_SELECT
         lda km_limit+2
         sta CFG_PORT
-        lda #CFG_IDXA_LIMIT_M
+        lda #CFG_IDXA_LIM_M
         sta CFG_SELECT
         lda km_limit+1
         sta CFG_PORT
-        lda #CFG_IDXA_LIMIT_L
+        lda #CFG_IDXA_LIM_L
         sta CFG_SELECT
         lda km_limit
         sta CFG_PORT
@@ -363,7 +363,7 @@ mia_mem_rect:
         bra @go
 @last:  lda km_rows
         sta km_n
-@go:    lda #CMD_COPY_RECT
+@go:    lda #MIA_CMD_COPY_RECT
         jsr km_dma_cmd
         lda km_rows+1
         beq km_rect_done            ; fewer than 256 rows: that was the last

@@ -13,6 +13,10 @@ make            # build build/kernel.bin (bottom-anchored, starts at $0400)
 make install    # copy kernel.bin into the emulator's embedded asset
 ```
 
+The kernel and BASIC take MIA's register, command, index and memory names from
+[src/include/mia.inc](src/include/mia.inc), which clementina-sdk generates from
+its specs. Don't edit it here; see [src/include/README.md](src/include/README.md).
+
 ## Monitor
 
 From BASIC, type `MON` to enter WozMon. From WozMon, type `Q` to return to the

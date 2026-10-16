@@ -12,14 +12,14 @@ ktime_snapshot = CLOCK_SNAPSHOT  ; ms32, 60 Hz count24, version
 ; Returns C=1 if MIA filled it (CLOCK_VERSION = 1), C=0 on firmware without
 ; the clock. Clobbers A/X/Y. Foreground only.
 timing_read:
-        lda #$55
+        lda #MIA_CMD_CLOCK_SNAPSHOT
         ldx #0
         ldy #0
         jsr input_command
         ldx #0
 @read:  txa
         clc
-        adc #$78
+        adc #(MIA_CLOCK_SNAPSHOT_OFFSET - MIA_INPUT_STATE_OFFSET)
         jsr input_read_byte
         sta ktime_snapshot,x
         inx
@@ -52,7 +52,7 @@ timing_set:
         sta CMD_PARAM2
         lda ktime_snapshot+6
         sta CMD_PARAM3
-        lda #$56
+        lda #MIA_CMD_CLOCK_SET_TI
         sta CMD_TRIGGER
 @done:  lda STATUS_L
         and #MIA_STAT_CMD_RUNNING
