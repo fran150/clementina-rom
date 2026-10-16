@@ -1372,8 +1372,9 @@ L3C3A:
 ; STRING POINTED TO BY TXTPTR, LEADING '$' ALREADY SCANNED BY FRM_ELEMENT
 ; (eval.s). Accumulates an unsigned 16-bit value from hex digits 0-9/A-F
 ; (uppercase only, matching this BASIC's keyword/variable convention) via
-; shift-and-OR, then floats it in one shot through GIVAYF - no per-digit
-; float math needed the way decimal FIN above does. Extra digits past 4
+; shift-and-OR, then floats it in one shot as an unsigned number, the way
+; LINPRT does (so $FFFF is 65535, not -1) - no per-digit float math needed
+; the way decimal FIN above does. Extra digits past 4
 ; simply shift out the top, wrapping mod $10000, same as real hardware -
 ; not treated as an error. A run of zero hex digits (e.g. bare "$" followed
 ; by a non-hex character) evaluates as 0, TXTPTR left at the offending
@@ -1417,8 +1418,12 @@ FINH:
         sta     TMPEXP
         jmp     @next
 @done:  lda     EXPON                   ; high byte
-        ldy     TMPEXP                  ; low byte
-        jmp     GIVAYF
+        sta     FAC+1
+        lda     TMPEXP                  ; low byte
+        sta     FAC+2
+        ldx     #$90                    ; 16-bit integer exponent
+        sec                             ; C=1: positive (GIVAYF would take
+        jmp     FLOAT2                  ; bit 15 as the sign)
 .endif
 
 ; ----------------------------------------------------------------------------
