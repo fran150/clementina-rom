@@ -239,3 +239,19 @@ func TestBasicMemoryRectangles(t *testing.T) {
 	require_eq(t, 0, vr.DebugReadVideo(210600), "no 301st row")
 	require_eq(t, 0, vr.DebugReadVideo(203000), "zero rows fill nothing")
 }
+
+// TestBasicPeekNeedsNumber checks PEEK rejects a string argument. Function
+// arguments arrive unchecked, and PEEK("A") used to read the string's
+// descriptor as an address and return 76.
+func TestBasicPeekNeedsNumber(t *testing.T) {
+	c, step := bootClementinaToPrompt(t)
+	vr := c.chips.mia.(videoReader)
+	typeLine(c, step, "CLS")
+	typeLine(c, step, `PRINT PEEK("A")`)
+	if _, ok := screenContainsRow(vr, "?TYPE MISMATCH"); !ok {
+		dumpScreen(t, vr)
+		t.Fatal("PEEK accepted a string")
+	}
+	typeLine(c, step, "POKE 640,7:POKE 641,PEEK(640)")
+	require_eq(t, 7, peek(c, 641), "PEEK of a number still works")
+}

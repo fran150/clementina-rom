@@ -44,6 +44,11 @@ GETADR:
 ; "PEEK" FUNCTION
 ; ----------------------------------------------------------------------------
 PEEK:
+.ifdef CLEMENTINA
+; Function arguments arrive unchecked (UNARY only checks the result), and
+; GETADR would read a string descriptor as a number: PEEK("A") gave 76.
+        jsr     CHKNUM
+.endif
 .ifdef CONFIG_PEEK_SAVE_LINNUM
         lda     LINNUM+1
         pha
