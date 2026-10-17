@@ -21,10 +21,15 @@ MEMERR:
 ERROR:
 .ifdef CLEMENTINA
         ; Any runtime error (any statement, anywhere) funnels through here
-        ; before STKINI resets the stack - stop the background sequencer
-        ; before the message prints. X (the error-message table offset) is
-        ; the only significant input; preserve it across the call via A
-        ; (msbasic.s targets plain 6502 here - no phx/plx).
+        ; before STKINI resets the stack. Map BASIC's bank 0 back first:
+        ; machine code running in another bank (SYS, BANK) can raise an error
+        ; through the kernel's BAS_* entries, and BASIC's heap reaches up to
+        ; $BFFF. Then stop the background sequencer before the message
+        ; prints. X (the error-message table offset) is the only significant
+        ; input; preserve it across the call via A (msbasic.s targets plain
+        ; 6502 here - no stz, phx or plx).
+        lda     #0
+        sta     VIA_ORA
         txa
         pha
         jsr     seq_stop_all

@@ -26,6 +26,8 @@
 .import BASIC_COLD_START
 .import BASIC_WARM_START
 .import WOZMON
+; BASIC routines behind the BAS_* entries (exported by clementina_extra.s)
+.import CHKCOM, FRMNUM, FRMEVL, GETADR, GETBYT, PTRGET, ERROR, LINPRT
 
 ; ----------------------------------------------------------------------------
 ; Kernel zero page ($00F0-, see clementina.cfg)
@@ -68,6 +70,15 @@ jumptab_start:
         jmp plot                ; KERN_PLOT
         jmp timing_read         ; KERN_RDTIM
         jmp settim              ; KERN_SETTIM
+        ; BASIC entry points: valid only while BASIC is in memory (kernel.inc)
+        jmp CHKCOM              ; BAS_CHKCOM
+        jmp FRMNUM              ; BAS_FRMNUM
+        jmp FRMEVL              ; BAS_FRMEVL
+        jmp GETADR              ; BAS_GETADR
+        jmp GETBYT              ; BAS_GETBYT
+        jmp PTRGET              ; BAS_PTRGET
+        jmp ERROR               ; BAS_ERROR
+        jmp LINPRT              ; BAS_LINPRT
 
 ; Compile-time guard: confirm the table is exactly KERN_JUMPTAB_SIZE bytes
 ; (kernel.inc) - a relative check, independent of where the linker ends up

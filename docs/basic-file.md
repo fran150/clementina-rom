@@ -203,7 +203,9 @@ transfer, not a bound expression vector like `USR()`. A routine at
 `$8000-$BFFF` runs with the `BANK` bank mapped, and bank 0 is mapped back
 when it returns. A program meant to take over the machine permanently should
 be started with `BRUN` instead; `SYS` is for calling a subroutine and getting
-control back.
+control back. The routine can read arguments written after the address, as in
+`SYS 49152,10,4660`, through the kernel's `BAS_*` entries (`BAS_CHKCOM`,
+`BAS_GETBYT`, `BAS_FRMNUM`, `BAS_GETADR`; `docs/memory-map.md` §6).
 
 ### Example
 
