@@ -1,5 +1,5 @@
 ; ============================================================================
-; video.s - palette load and video/overlay bring-up
+; video.s - video and overlay bring-up
 ; ----------------------------------------------------------------------------
 ; Included by kernel.s into the single kernel translation unit (after
 ; kernel.inc), so every MIA_* constant and the KZEROPAGE scratch are
@@ -12,11 +12,13 @@
 ; video_init - configure font state, enable overlay, request refresh
 ; ----------------------------------------------------------------------------
 video_init:
-        ; MIA split-loads the default font: ASCII text into CHR bank 0 plane 0
-        ; (overlay primary bank) and the graphics/line set into CHR bank 1 plane 0
-        ; (overlay alternate bank). The overlay renders plane 0, so tile code N is
-        ; the glyph for ASCII codepoint N and console output needs no screen-code
-        ; translation. Per-cell CHR_ALT selects text (bank 0) vs graphics (bank 1).
+        ; MIA loads the default font and palette when video starts. With the
+        ; clascii charset, CHR bank 0 plane 0 (overlay primary bank) holds the
+        ; 256 glyphs and bank 1 plane 0 (overlay alternate bank) the same glyphs
+        ; reversed; the older openroms charset puts a graphics/line set in bank 1.
+        ; The overlay renders plane 0, so tile code N is the glyph for ASCII
+        ; codepoint N and console output needs no screen-code translation.
+        ; Per-cell CHR_ALT selects bank 1.
         lda #MIA_VIDEO_INDEX_BANK_SELECT
         sta IDXA_SELECT
         lda #VIDEO_CHR_BANK_DEFAULT
