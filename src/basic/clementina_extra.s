@@ -3619,8 +3619,12 @@ mia_sd_load_trigger:
 ; mia_sd_save_trigger: same preconditions as mia_sd_load_trigger, in reverse -
 ; triggers FS_SAVE_FROM_MIA_RAM (create/truncate; use OPEN+BPUT# instead if
 ; appending is ever needed). VID_COUNT is zero-extended into the 32-bit
-; SD_TRANSFER_LEN field. Clobbers A,X.
+; SD_TRANSFER_LEN field; mia_sd_save_trigger24 takes bits 16-23 in A
+; instead. Clobbers A,X.
 mia_sd_save_trigger:
+        lda     #$00
+mia_sd_save_trigger24:
+        pha
         jsr     mia_sd_set_dest
         lda     #MIA_SD_CONTROL_OPEN_MODE
         jsr     mia_sd_seek
@@ -3632,20 +3636,10 @@ mia_sd_save_trigger:
         sta     IDXA_PORT
         lda     VID_COUNT+1
         sta     IDXA_PORT
-        lda     #$00
+        pla
         sta     IDXA_PORT
-        sta     IDXA_PORT
+        stz     IDXA_PORT
         lda     #MIA_CMD_FS_SAVE_FROM_MIA_RAM
-        jsr     mia_sd_cmd
-        jne     mia_fileerr
-        rts
-
-; mia_sd_part_trigger: same preconditions as mia_sd_load_trigger, with
-; SD_TRANSFER_LEN and the SD_PART_* fields already written. Triggers
-; FS_LOAD_PART: a run of the file from an offset, or a rectangle of rows.
-mia_sd_part_trigger:
-        jsr     mia_sd_set_dest
-        lda     #MIA_CMD_FS_LOAD_PART
         jsr     mia_sd_cmd
         jne     mia_fileerr
         rts
@@ -4138,144 +4132,48 @@ BASIC_LOAD:
         jmp     RESTART
 
 ; ----------------------------------------------------------------------------
-; MIALOAD "path", addr[, len[, offset[, rows, filestride, ramstride]]] : load
-; a file straight into MIA RAM at a raw address (0-16777215, well past MIA's
-; 256KB) - zero CPU byte-touching. This is the generic counterpart to
-; CHRLOAD/PALLOAD/etc.: those wrap the same underlying job with a safe,
-; bank/offset-checked address; MIALOAD exposes the raw address directly, for
-; anything without its own convenience wrapper (audio registers, or any other
-; MIA RAM region).
-;   len omitted or 0: load until EOF or the end of MIA RAM.
-;   offset: start that far into the file (FS_LOAD_PART) instead of at 0.
-;   rows, filestride, ramstride: load a rectangle - rows of len bytes, each
-;   filestride further into the file and ramstride further on in MIA RAM.
-; Up to 65535 bytes with no offset use FS_LOAD_TO_MIA_RAM, exactly as before;
-; everything else is FS_LOAD_PART. Each field goes into the SD/FS control block
-; as soon as it's parsed, since later argument expressions may clobber FAC,
-; LINNUM and TEMP scratch (VID_ADDR/VID_ADDR2 are statement-only).
+; MIALOAD "path", addr : load a whole file straight into MIA RAM at a raw
+; address (0-16777215, well past MIA's 256KB) - zero CPU byte-touching. This
+; is the generic counterpart to CHRLOAD/PALLOAD/etc.: those wrap the same
+; underlying job with a safe, bank/offset-checked address; MIALOAD exposes
+; the raw address directly, for anything without its own convenience wrapper
+; (audio registers, or any other MIA RAM region). It stops at the end of the
+; file or of MIA RAM. Loading part of a file is left to assembly
+; (FS_LOAD_PART), and moving a rectangle to MCOPY.
 ; ----------------------------------------------------------------------------
 BASIC_MIALOAD:
-        jsr     FRMEVL                  ; evaluate the path expression
-        bit     VALTYP
-        jpl     mia_typerr              ; must be a string
-        jsr     FREFAC                  ; A = length, INDEX = pointer
-        jsr     mia_sd_write_path
+        jsr     mia_parse_path_expr
         jsr     CHKCOM
         jsr     FRMNUM
         jsr     mia_getadr24            ; VID_ADDR = 24-bit address
-        stz     VID_COUNT
+        jsr     need_end
+        stz     VID_COUNT               ; 0: the whole file
         stz     VID_COUNT+1
-        jsr     CHRGOT                  ; peek: is a trailing ",len" present?
-        cmp     #','
-        jne     mia_sd_load_trigger     ; no: the whole file
-        jsr     CHRGET
-        jsr     FRMNUM
-        jsr     mia_getint24            ; FAC = len
-        lda     #MIA_SD_CONTROL_TRANSFER_LEN0
-        jsr     mia_sd_seek
-        jsr     mia_sd_put_fac32        ; FS_LOAD_PART's bytes per row
-        ldx     #2
-@len:   lda     FAC_LAST-2,x            ; VID_ADDR2 = len, high byte first
-        sta     VID_ADDR2,x
-        dex
-        bpl     @len
-        lda     FAC_LAST
-        sta     VID_COUNT               ; FS_LOAD_TO_MIA_RAM's 16-bit maxlen
-        lda     FAC_LAST-1
-        sta     VID_COUNT+1
-        jsr     CHRGOT                  ; peek: is a trailing ",offset" present?
-        cmp     #','
-        beq     @offset
-        lda     VID_ADDR2               ; no offset: up to 65535 bytes is the
-        jeq     mia_sd_load_trigger     ; whole-file job, as it always was
-        lda     #MIA_SD_CONTROL_PART_OFFSET0        ; longer: FS_LOAD_PART from the start
-        jsr     mia_sd_seek
-        ldx     #4
-@zero:  stz     IDXA_PORT
-        dex
-        bne     @zero
-        bra     @run
-@offset:
-        jsr     CHRGET
-        jsr     FRMNUM
-        jsr     fs_integer32
-        lda     #MIA_SD_CONTROL_PART_OFFSET0
-        jsr     mia_sd_seek
-        jsr     mia_sd_put_fac32
-        lda     VID_ADDR2
-        ora     VID_ADDR2+1
-        ora     VID_ADDR2+2
-        bne     @rows
-        lda     #MIA_SD_CONTROL_TRANSFER_LEN0       ; len 0: up to EOF or the end of MIA RAM,
-        jsr     mia_sd_seek             ; $40000 - (addr mod $40000) bytes
-        sec
-        lda     #$00
-        sbc     VID_ADDR
-        sta     IDXA_PORT
-        lda     #$00
-        sbc     VID_ADDR+1
-        sta     IDXA_PORT
-        lda     VID_ADDR+2              ; lda/and/sta keep the borrow in C
-        and     #$03
-        sta     VID_ADDR2               ; (len was 0, so its copy is free)
-        lda     #$04
-        sbc     VID_ADDR2
-        sta     IDXA_PORT
-        stz     IDXA_PORT
-@rows:  jsr     CHRGOT                  ; peek: is a trailing ",rows" present?
-        cmp     #','
-        beq     @rect
-@run:   lda     #MIA_SD_CONTROL_PART_ROWS_L         ; rows 0: one contiguous run
-        jsr     mia_sd_seek
-        stz     IDXA_PORT
-        stz     IDXA_PORT
-        jmp     mia_sd_part_trigger
-@rect:  jsr     CHRGET
-        jsr     FRMNUM
-        jsr     GETADR                  ; LINNUM = rows (0-65535)
-        lda     #MIA_SD_CONTROL_PART_ROWS_L
-        jsr     mia_sd_seek
-        lda     LINNUM
-        sta     IDXA_PORT
-        lda     LINNUM+1
-        sta     IDXA_PORT
-        jsr     CHKCOM
-        jsr     FRMNUM
-        jsr     fs_integer32            ; bytes between rows in the file
-        lda     #MIA_SD_CONTROL_PART_FILE_STRIDE0
-        jsr     mia_sd_seek
-        jsr     mia_sd_put_fac32
-        jsr     CHKCOM
-        jsr     FRMNUM
-        jsr     mia_getint24            ; bytes between rows in MIA RAM
-        lda     #MIA_SD_CONTROL_PART_RAM_STRIDE_L
-        jsr     mia_sd_seek
-        jsr     mia_sd_put_fac32        ; 24-bit field; the fourth byte lands in
-        jmp     mia_sd_part_trigger     ; reserved $3D as the zero it must be
+        jmp     mia_sd_load_trigger
 
 ; ----------------------------------------------------------------------------
-; MIASAVE "path", addr, len : save `len` bytes of MIA RAM starting at `addr`
-; to a file. len is mandatory here (unlike MIALOAD's optional maxlen): MIA
-; RAM has no "file size" of its own until told how much to write, the same
-; asymmetry GW-BASIC's own BLOAD/BSAVE have.
+; MIASAVE "path", addr, len : save `len` bytes (24-bit, so all of MIA RAM
+; fits) of MIA RAM starting at `addr` to a file. len is mandatory here
+; (unlike MIALOAD): MIA RAM has no "file size" of its own until told how
+; much to write, the same asymmetry GW-BASIC's own BLOAD/BSAVE have.
 ; ----------------------------------------------------------------------------
 BASIC_MIASAVE:
-        jsr     FRMEVL
-        bit     VALTYP
-        jpl     mia_typerr
-        jsr     FREFAC
-        jsr     mia_sd_write_path
+        jsr     mia_parse_path_expr
         jsr     CHKCOM
         jsr     FRMNUM
         jsr     mia_getadr24            ; VID_ADDR = 24-bit address
         jsr     CHKCOM
         jsr     FRMNUM
-        jsr     GETADR                  ; LINNUM = len (16-bit)
-        lda     LINNUM
+        jsr     mia_getint24            ; FAC_LAST-2..FAC_LAST = len
+        lda     FAC_LAST
         sta     VID_COUNT
-        lda     LINNUM+1
+        lda     FAC_LAST-1
         sta     VID_COUNT+1
-        jmp     mia_sd_save_trigger
+        lda     FAC_LAST-2
+        sta     VID_ADDR2               ; len bits 16-23 (VID_ADDR2 is free here)
+        jsr     need_end
+        lda     VID_ADDR2
+        jmp     mia_sd_save_trigger24
 
 ; ----------------------------------------------------------------------------
 ; BLOAD "path"[, addr] : stream a file straight into CPU RAM at its header

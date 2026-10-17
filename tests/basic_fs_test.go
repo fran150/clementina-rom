@@ -175,11 +175,12 @@ func TestBasicFSExtensionsErrors(t *testing.T) {
 	}
 }
 
-// MIALOAD's offset and rectangle forms load part of a file with FS_LOAD_PART;
-// the plain forms keep FS_LOAD_TO_MIA_RAM, and lengths over 65535 now work.
-func TestBasicMialoadParts(t *testing.T) {
+// MIALOAD loads a whole file at a 24-bit address, including files over
+// 65535 bytes; the old length, offset and rectangle arguments give SYNTAX
+// ERROR before anything loads. MIASAVE takes a 24-bit length.
+func TestBasicMialoadWholeFile(t *testing.T) {
 	dir := t.TempDir()
-	grid := make([]byte, 160) // 10 rows of 16 bytes: byte (row, col) = row*16 + col
+	grid := make([]byte, 160)
 	for i := range grid {
 		grid[i] = byte(i)
 	}
@@ -196,31 +197,34 @@ func TestBasicMialoadParts(t *testing.T) {
 	c.SetMiaSDFolder(dir)
 	vr := c.chips.mia.(videoReader)
 	for _, line := range []string{
-		`10 MIALOAD "MAP.BIN",200000,20,100`,
-		`20 MIALOAD "MAP.BIN",201000,4,37,3,16,4`,
-		`30 MIALOAD "MAP.BIN",202000,0,150`,
-		`40 MIALOAD "MAP.BIN",203000,0`,
-		`50 MIALOAD "BIG.BIN",100000,70000`,
-		`60 POKE 640,42`, `70 GOTO 70`,
+		`10 MIALOAD "MAP.BIN",$31A78`, // 203384
+		`20 MIALOAD "BIG.BIN",100000`,
+		`30 MIASAVE "OUT.BIN",100000,70000`,
+		`40 POKE 640,42`,
+		`50 MIALOAD "MAP.BIN",200000,20`,
+		`60 POKE 641,42`, `70 GOTO 70`,
 	} {
 		typeLine(c, step, line)
 	}
 	typeLine(c, step, "RUN")
 	editorTickN(c, step, 3_000_000)
-	require_eq(t, 42, peek(c, 640), "MIALOAD program finished")
-	for i := 0; i < 20; i++ {
-		require_eq(t, 100+i, vr.DebugReadVideo(uint32(200000+i)), fmt.Sprintf("range byte %d", i))
+	require_eq(t, 42, peek(c, 640), "MIALOAD and MIASAVE ran")
+	require_eq(t, 0, peek(c, 641), "the old length form stopped the program")
+	if _, ok := screenContainsRow(vr, "?SYNTAX ERROR"); !ok {
+		dumpScreen(t, vr)
+		t.Fatal("no SYNTAX ERROR for the old length form")
 	}
-	require_eq(t, 0, vr.DebugReadVideo(200020), "nothing past the range")
-	for i, want := range []int{37, 38, 39, 40, 53, 54, 55, 56, 69, 70, 71, 72} {
-		require_eq(t, want, vr.DebugReadVideo(uint32(201000+i)), fmt.Sprintf("rectangle byte %d", i))
-	}
-	for i := 0; i < 10; i++ {
-		require_eq(t, 150+i, vr.DebugReadVideo(uint32(202000+i)), fmt.Sprintf("to-EOF byte %d", i))
-	}
-	require_eq(t, 0, vr.DebugReadVideo(202010), "the file ended")
-	require_eq(t, 159, vr.DebugReadVideo(203000+159), "whole-file load")
+	require_eq(t, 0, vr.DebugReadVideo(200000), "the old length form loaded nothing")
+	require_eq(t, 0, vr.DebugReadVideo(203384), "first byte of the whole-file load")
+	require_eq(t, 159, vr.DebugReadVideo(203384+159), "last byte of the whole-file load")
 	require_eq(t, 69999%251, vr.DebugReadVideo(100000+69999), "last byte of a 70000-byte load")
+	out, err := os.ReadFile(filepath.Join(dir, "OUT.BIN"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out) != string(big) {
+		t.Fatalf("OUT.BIN is %d bytes, want the 70000 loaded", len(out))
+	}
 }
 
 // TestBasicOpenAppend opens a file FOR APPEND. The tokenizer stores the END
