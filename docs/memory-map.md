@@ -1,15 +1,24 @@
 # Mapping the Clementina
 
 A location-by-location map of the Clementina 6502 address space, in the spirit
-of *Mapping the Commodore 64*. This is a **living document**: as the kernel,
-BASIC port, and architecture evolve, add and revise entries here so there is a
-single authoritative description of what every meaningful address does.
+of *Mapping the Commodore 64*. It describes the current build: when the kernel,
+BASIC or the hardware change, change it with them. How the layout got here is
+in [history/memory-map.md](history/memory-map.md).
 
-- Source of truth for hardware decoding: the Go emulator
-  (`clementina-6502`, `pkg/computers/clementina`) and the MIA firmware
-  (`clementina-mia`).
-- Source of truth for kernel symbols: [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
-  Keep the two in sync — if you change an address in one, change it here.
+- Hardware decoding: the Go emulator (`clementina-6502`,
+  `pkg/computers/clementina`), the MIA firmware (`clementina-mia`) and the
+  schematics ([clementina-hardware](https://github.com/fran150/clementina-hardware)).
+- Kernel symbols: [`src/kernel/kernel.inc`](../src/kernel/kernel.inc). If you
+  change an address there, change it here.
+- Shared tables: clementina-sdk's specs list every zero-page location (BASIC's
+  included), system page variable and VIA register
+  ([`cpu-memory-map.json`](https://github.com/fran150/clementina-sdk/blob/main/specs/cpu-memory-map.json)),
+  the MIA RAM map
+  ([`mia-ram-map.json`](https://github.com/fran150/clementina-sdk/blob/main/specs/mia-ram-map.json))
+  and all 256 index ids
+  ([`mia-indexes.json`](https://github.com/fran150/clementina-sdk/blob/main/specs/mia-indexes.json)).
+  Its drift check compares them with MIA's headers and this build, so this
+  page summarizes those tables instead of copying them.
 
 Numbers are hexadecimal unless noted. "MIA RAM" means the 256 KiB internal to
 MIA, reached only through the indexed windows — it is **not** in the 6502
@@ -24,7 +33,7 @@ The 65C02 sees 64 KiB. Decoding (from the Clementina CS logic):
 | Range | Size | Region | Notes |
 | --- | --- | --- | --- |
 | `$0000–$7FFF` | 32 KiB | **Base RAM** | Flat, always present. Holds zero page, stack, the kernel image, and BASIC's workspace. |
-| `$8000–$BFFF` | 16 KiB window | **Extended RAM** | A 16 KiB window into 512 KiB of banked RAM. Bank selected by VIA Port A (PA0–PA4 → 32 banks). |
+| `$8000–$BFFF` | 16 KiB window | **Extended RAM** | A 16 KiB window into 512 KiB of banked RAM. Bank selected by VIA Port A (PA0–PA4 → 32 banks, §9 and §10). |
 | `$C000–$DFFF` | 8 KiB | **I/O** | 8 device slots of 1 KiB each. The 65C22 VIA is in slot 0 (`$C000–$C3FF`). |
 | `$E000–$FFFF` | 8 KiB | **MIA region** | The 32 MIA registers at `$FFE0–$FFFF`. MIA sees only A0–A4, so `$E000–$FFDF` repeats them every 32 bytes; never use those mirrors (§11). |
 
@@ -42,28 +51,12 @@ CPU: **65C02S** (the `STZ`, `BRA`, `PHX/PLX`, etc. extensions are available).
 | `$0436–…` | Rest of the image: `DIR_NAME_BUF` (§7.5), kernel+WozMon (§7), then BASIC (§8) |
 | `…–$BFFF` | BASIC's free workspace / heap (§8), filling everything above the image |
 
-**2026-09-14 bottom-anchor rework** (reversing the 2026-09-13 top-anchored/
-descending-loader design described in older commits): the image is anchored
-to a fixed **low** start, `$0400` (right after working RAM), and grows
-upward — **KERNEL → WOZMON → BASIC**, in that order, so the jump table (§6)
-always starts exactly at `$0400` no matter how large the rest of the image
-grows. Base RAM has no unused gap: working RAM, the image and the heap are
-contiguous (§7.5 has the history). The heap fills everything above the image, up through `$BFFF`; since
-the image (kernel+WozMon+BASIC, ~24 KiB today) fits entirely below `$8000`
-but the heap above it does not, BASIC's logical workspace continues into
-Extended RAM bank 0 at `$8000-$BFFF` for its upper part — bank 0 must stay
-selected while BASIC runs (§9). See §8 and §13 for why and how. The
-rationale for anchoring this way (rather than back at the top): everything
-from `$0400` through `$BFFF` — the fixed-low `KERNEL` region (jump table +
-kernel code + WozMon) excepted, which is permanently resident and never a
-load target — is *reclaimable*. A loaded machine-code program that no
-longer needs BASIC can overwrite BASIC's own resident region and heap
-simply by loading over it (`BRUN`, §8), the same way a C64 game overwrites
-BASIC. Top-anchoring couldn't offer this: it put
-~16 KiB of permanently-resident code (including the hottest routine in the
-system, `CHRGET`, and the jump table itself) inside the banked Extended RAM
-window, so *any* code that ever switched banks away from bank 0 risked
-unmapping its own next instruction.
+The image is anchored at `$0400` and grows upward: the jump table,
+`DIR_NAME_BUF`, the kernel, WozMon, then BASIC. BASIC's heap fills everything
+above it up to `$BFFF`, so base RAM has no unused gap. The image fits below
+`$8000` but the heap does not, so the heap's upper 16 KiB is Extended RAM
+bank 0, which stays selected while BASIC runs (§8, §9). Everything from `$1600`
+up can be reclaimed by a program that no longer needs BASIC (§8).
 
 ---
 
@@ -80,6 +73,11 @@ top.
 | `$E0–$E7` | System | Spare. Kept next to the programs' block so it can be handed to programs later without splitting it. |
 | `$E8–$EF` | WozMon | Its eight variables (`XAML` … `MODE`), used only while it runs. Outside BASIC's block, so `MON` … `Q` keeps the program and its variables. |
 | `$F0–$FF` | Kernel | `$F0–$FB` used (table below), `$FC–$FF` spare. |
+
+BASIC's own locations are not listed here one by one. clementina-sdk's
+[`cpu-memory-map.json`](https://github.com/fran150/clementina-sdk/blob/main/specs/cpu-memory-map.json)
+(`pages`, `ZERO_PAGE`) has every zero-page location with its name, size and
+owner, BASIC's 67 included, checked against this build's symbols.
 
 Rules:
 
@@ -172,9 +170,9 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 | --- | --- | --- | --- |
 | `$0300` | `CURSOR_X` | 1 | Text cursor column, `0..39`. |
 | `$0301` | `CURSOR_Y` | 1 | Text cursor row, `0..24`. |
-| `$0302` | `TEXT_ATTR` | 1 | Live overlay pen for new console cells. Bits `0-3` select the palette bank; the default is palette `0` white text over the blue backdrop. BASIC output drives this transiently; the editor reasserts `EDITOR_PEN` into it whenever it takes control. |
+| `$0302` | `TEXT_ATTR` | 1 | Live overlay pen: the attribute byte (§12) for new console cells. Bits `0-3` select the palette bank; the default, `$00`, is palette `0`, white text over the blue backdrop. BASIC output drives this transiently; the editor reasserts `EDITOR_PEN` into it whenever it takes control. |
 | `$0303` | `LAST_KEY` | 1 | Debug: last byte returned by `CHRIN`. Watch this in the emulator's memory window to confirm input before attaching a video client. |
-| `$0304` | `EDITOR_PEN` | 1 | Persistent editor pen. The pen the screen editor sets from the keyboard (ESC commands) and reasserts into `TEXT_ATTR` at each line edit, so the cursor and typed text keep their color across BASIC output (LIST, messages, styled `PRINT`). Was `KEY_COUNT` (a write-only debug counter). |
+| `$0304` | `EDITOR_PEN` | 1 | Persistent editor pen. The pen the screen editor sets from the keyboard (ESC commands) and reasserts into `TEXT_ATTR` at each line edit, so the cursor and typed text keep their color across BASIC output (LIST, messages, styled `PRINT`). |
 | `$0305` | `KLOAD_SAVED_BANK` | 1 | `KERN_LOAD`: the bank mapped when it started, selected again when it returns or fails. |
 | `$0306` | `DATA_BANK` | 1 | The bank BASIC's `BANK` statement picked for `BLOAD`, `BRUN`, `BSAVE`, `PEEK`, `POKE` and `SYS` at `$8000-$BFFF`. 0 at cold and warm start. |
 | `$0307` | `KLOAD_RUN_BANK` | 1 | `KERN_LOAD`: the bank it was asked to load into, mapped again before it jumps. |
@@ -196,10 +194,10 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 | `$037E` | `CURSOR_BLINK_ACTIVE` | 1 | Nonzero while `CHRIN` is polling and the Timer 1 IRQ handler may toggle the software cursor. |
 | `$037F` | `CURSOR_BLINK_COUNT` | 1 | VIA Timer 1 ticks remaining before the next cursor toggle. |
 | `$0380–$03CF` | `EDIT_ATTR_BUF` | 80 | Screen editor: harvested per-cell attributes, parallel to `EDIT_BUF`. BASIC copies these into styled heap strings for direct/input-buffer literals. |
-| `$03D0` | `EDIT_MODE` | 1 | Phase 5 glyph mode (`0..2`), used by the editor to map typed `$20-$7E` to alternate tile ranges. |
+| `$03D0` | `EDIT_MODE` | 1 | Glyph mode (`0..2`), used by the editor to map typed `$20-$7E` to alternate tile ranges ([phase5-charset-keyboard.md](phase5-charset-keyboard.md)). |
 | `$03D1` | `EDIT_PAINT` | 1 | Nonzero while Paint mode is active. |
 | `$03D2` | `EDIT_CMD_PENDING` | 1 | Nonzero between `ESC` and its command key. |
-| `$03D3–$03FC` | `STYLE_SIDE_BUF` | 42 | BASIC tokenizer scratch for Phase 6 styled program-literal sidecars. Captures compact literal attribute records before appending them to the stored program line. `$03D3–$03D4` are also reused as a transient LIST line-pointer save, and `$03D3–$03F8` (38 bytes) as `TRACK`'s MML-compile-time state (including its optional explicit-address parse, JUMP-delta scratch and `&` tie state) and `BAND`/`VTAKE`/`VGIVE`'s voice-mask scratch (tokenizer and `TRACK`/`BAND`/`VTAKE`/`VGIVE` never run at the same moment). |
+| `$03D3–$03FC` | `STYLE_SIDE_BUF` | 42 | BASIC tokenizer scratch for styled program-literal sidecars ([styled-strings.md](styled-strings.md)). Captures compact literal attribute records before appending them to the stored program line. `$03D3–$03D4` are also reused as a transient LIST line-pointer save, and `$03D3–$03F8` (38 bytes) as `TRACK`'s MML-compile-time state (including its optional explicit-address parse, JUMP-delta scratch and `&` tie state) and `BAND`/`VTAKE`/`VGIVE`'s voice-mask scratch (tokenizer and `TRACK`/`BAND`/`VTAKE`/`VGIVE` never run at the same moment). |
 | `$03FD` | `BASIC_DEFAULT_ATTR` | 1 | BASIC default output attribute set by `COLOR`, `FLIPX`, `FLIPY`, and `ALT`. |
 | `$03FE` | `BASIC_STYLE_MASK` | 1 | BASIC style override mask set by `STYLE n`, stored in overlay-attribute bit form (`$0F`, `$10`, `$20`, `$80`). |
 | `$03FF` | `STYLE_BASE_LEN` | 1 | BASIC tokenizer scratch: tokenized line length before any style sidecar is appended. |
@@ -212,13 +210,9 @@ The **stable ABI**. Each entry is a 3-byte `JMP`. Callers (BASIC, WozMon, user
 programs) bind to these fixed addresses; the routines behind them may move
 freely.
 
-> **2026-09-14 bottom-anchor rework**: the jump table is placed **first** in
-> `clementina.cfg`'s `SEGMENTS` list, so it lands on the bottom 54 bytes of
-> the image — always `$0400-$0435`, right after working RAM — no matter how
-> large the rest of the image grows. `KERN_BASE` (`kernel.inc`) is the plain
-> fixed constant `$0400`, a true compile-time constant that never needs
-> bumping. See §8 and §13 for the full picture and the single-pass build
-> that makes this work.
+The jump table is the first segment in `clementina.cfg`, so it is always the
+bottom 54 bytes of the image, `$0400-$0435`, however large the rest grows.
+`KERN_BASE` (`kernel.inc`) is the constant `$0400`.
 
 | Addr | Symbol | In | Out | Description |
 | --- | --- | --- | --- | --- |
@@ -240,12 +234,6 @@ freely.
 | `$042D` | `KERN_PLOT` | `C`=1: — / `C`=0: `X`=row, `Y`=column | `C`=1: `X`=row, `Y`=column / `C`=0: `C`=0, or `C`=1 if out of range | Read or move the text cursor, with the C64's `PLOT` registers. With `C`=0 it moves the cursor to row `0..24`, column `0..39`; an out-of-range position returns `C`=1 and moves nothing. `A` is preserved. BASIC's `POS`/`TAB` column is not updated. |
 | `$0430` | `KERN_RDTIM` | — | `C`=1 if valid; `A`/`X`/`Y` clobbered | Copy MIA's clock to `CLOCK_SNAPSHOT` (`$02F8–$02FF`, §4). `C`=0 means the MIA firmware has no clock. Foreground only. |
 | `$0433` | `KERN_SETTIM` | `A`/`X`/`Y` = low/middle/high byte | `A`/`X`/`Y` clobbered | Set MIA's 60 Hz count (what BASIC reads as `TI`). MIA ignores values of 5,184,000 or more. Also leaves the value in `CLOCK_60HZ`. Foreground only. |
-
-> **2026-10-11**: the `KERN_STOP` and `KERN_SAVE` stubs
-> were removed and every later entry moved down 3 or 6 bytes. Neither ever did
-> anything: BASIC checks Ctrl-C itself in `ISCNTC`, and `SAVE`/`BSAVE` are
-> BASIC-resident wrappers around MIA's file commands, which machine code can
-> issue directly.
 
 > When you add a kernel call, append a new `JMP` to the table in
 > `src/kernel/kernel.s`, add the `KERN_*` equate in `kernel.inc`, bump
@@ -290,20 +278,36 @@ A program has four options:
 
 Put the kernel's handler back before returning to BASIC with `RTS`, or the
 vector may point into memory BASIC reuses. `KERN_WARMSTART` and reset restore
-it automatically.
+it automatically. To take interrupts from another VIA source, see "Using
+another VIA interrupt" in §10.
 
-## 7. Kernel code and data (after `DIR_NAME_BUF`, from `$045E` today)
+---
+
+## 7. Kernel code and data
 
 Internal routines (`KERNCODE`/`RODATA`/`WOZCODE` segments). These addresses
-are **not** ABI; reach them only through the jump table. The kernel+WozMon
-portion of the image is ~4.4 KiB (`$0400`-`$15A8` today); see §8 for the
-combined kernel+WozMon+BASIC image size and how it's anchored. Notable
-internal routines:
+are **not** ABI; reach them only through the jump table. In the current build
+the segments sit as below; `build/kernel.map` lists them for any build.
 
-- `video_init` — select MIA CHR bank `0` for the overlay, mark bank `0` as 1bpp,
-  set the blue backdrop, enable video output and the overlay layer, then force a
-  full refresh. Startup palette RGB data is seeded by MIA firmware/emulator video
-  initialization, not by the kernel.
+| Segment | Range | Holds |
+| --- | --- | --- |
+| `JUMPTAB` | `$0400–$0435` | The jump table (§6) |
+| `DIRBUF` | `$0436–$045D` | `DIR_NAME_BUF` (§7.5) |
+| `KERNCODE` | `$045E–$1467` | Kernel code, one translation unit (`kernel.s` includes the other files) |
+| `RODATA` | `$1468–$14B0` | The startup banner text |
+| `WOZCODE` | `$14B1–$15A6` | WozMon |
+
+All of these sit in the `KERNEL` region of `clementina.cfg`, `$0400–$15FF`;
+`ld65` fails the build if they outgrow it. BASIC starts right after the last
+one (§8). Notable internal routines:
+
+- `video_init` (`video.s`): through `MIA_VIDEO_INDEX_BANK_SELECT` it picks CHR
+  bank 0 for the background, background alt, overlay and sprite layers and
+  bank 1 for the overlay alt; it marks banks 0 and 1 as 1bpp with the overlay
+  on plane 0, points the scroll indexes `$F0–$F3` at the overlay, writes
+  backdrop palette 0 color 0, enables video with `MIA_CMD_VIDEO_SET_MODE`,
+  turns on the overlay layer and asks for a full refresh. It loads no font and
+  no palette: MIA's firmware and the emulator do that when video starts.
 - `cursor_to_idxa` — bind the overlay index `$B8` to window A and set its
   current address (via CFG) to the cell for `CURSOR_X/Y`.
 - `cursor_attr_to_idxa` — bind the overlay attribute index `$B9` to window A
@@ -315,29 +319,34 @@ internal routines:
   output (PRINT/LIST). `chrin` shows it (in `EDITOR_PEN`) while waiting for a key,
   and the Timer-1 IRQ blinks it — mirroring how the C64/Spectrum only cursor during
   input/editing.
-- `char_to_tile` — convert ASCII-ish kernel strings/input into the
-  C64-style screen codes used by the default PETSCII font bank.
+- `chrout_glyph` / `put_glyph_raw` — draw a byte as a raw tile, with no control
+  codes (behind `KERN_CHROUT_GLYPH`).
 - `set_idxa_addr` / `set_idxa_limit` — write the current/limit address of the
   index selected in window A through the CFG registers.
 - `newline` / `scroll_up` — row advance and DMA-assisted scroll: kernel-reserved
   indexes `$F0-$F3` copy the overlay nametable and attributes up by one row,
   then the last row is blanked through `$B8/$B9`.
-- `via_init` — initialize the 65C22 VIA: Port A selects external RAM bank 0,
-  and Timer 1 free-runs as the kernel tick (`KJIFFY` and the cursor blink).
+- `edit_line` / `harvest_line` (`editor.s`) — the screen editor behind
+  `KERN_EDITKEY`: ESC commands, glyph modes, Paint mode, and the harvest of the
+  logical line under the cursor into `EDIT_BUF`/`EDIT_ATTR_BUF`.
+- `via_init` / `exram_select_basic_bank` (`interrupts.s`) — set up the VIA at
+  reset, and map Extended RAM bank 0 at reset and warm start (§10).
 - `irq_handler` / `nmi_handler` — `irq_handler` (also `KERN_IRQ`, §6)
   read-clears MIA `IRQ_STATUS_L`, counts VIA Timer 1 ticks in `KJIFFY`, and
   toggles the cursor only while `CHRIN` is
   polling for input. The toggle is bracketed by `MIA_CTX` push and pop (§11),
   so the code it interrupts finds window A and `CFG_SELECT` as it left them.
+  `nmi_handler` is a bare `RTI`.
+- `load` (`load.s`) — `KERN_LOAD`, the kernel-resident file loader (§8).
 - `mia_mem_*` (`memory.s`) — raw MIA RAM read, write, copy, fill, and the
   rectangle copy and fill behind BASIC's `MCOPY`/`MFILL`; see
   `docs/basic-memory.md`.
 
 ---
 
-## 7.5. `DIR_NAME_BUF` (right after the jump table, `$0436–$045D` today)
+## 7.5. `DIR_NAME_BUF` (right after the jump table)
 
-`DIR_NAME_BUF` (40 bytes) is a transient scratch buffer `DIR`
+`DIR_NAME_BUF` (40 bytes, `$0436–$045D`) is a transient scratch buffer `DIR`
 (`docs/basic-file.md`) reads one directory entry's name into before printing
 any of it. BASIC declares it in `src/basic/clementina_extra.s`, in the
 `DIRBUF` segment, which `clementina.cfg` places right after the jump table so
@@ -346,74 +355,46 @@ nothing needs it to survive between `DIR` invocations, so it simply moves up
 3 bytes whenever the jump table grows. It is part of the loaded image (40
 zero bytes in `kernel.bin`).
 
-Until 2026-10-13 the image started at `$04B7`. That left `$0400–$048E`
-(143 bytes, once the retired background-`PLAY` control block, `BGP_*`)
-unused, with this buffer fixed at `$048F`. Moving the image down to `$0400`
-closed the gap; those bytes went to BASIC's heap.
-
 ---
 
 ## 8. BASIC free workspace (`__BASICMEM_LAST__ … $BFFF`)
 
-**2026-09-14 bottom-anchor rework** (reversing the 2026-09-13 top-anchored/
-descending-loader design). BASIC's program text, variables, arrays, and
-strings live between `TXTTAB` and `MEMSIZ`, exactly as before - what changed
-is where the *image* sits relative to that heap. The loaded kernel+WozMon+
-BASIC image briefly sat **above** the heap (ending exactly at `$BFFF`,
-descending-loader design); it is now bottom-anchored instead, sitting
-**below** the heap, starting exactly at `$0400` (right after working RAM)
-and growing upward through **KERNEL → WOZMON → BASIC** - see §13 for the
-loader that makes this possible with zero wasted address space, in a single
-`ld65` pass (no two-pass "measure, then relink" build needed: a fixed
-*start* lets the linker place everything forward natively, unlike a fixed
-*end*, which needs the start computed backward from the total size first).
+BASIC's program text, variables, arrays and strings live between `TXTTAB` and
+`MEMSIZ`, above the image:
 
-Concretely: `KERNEL` (`clementina.cfg`) is a generously-sized MEMORY region
-(`$0400`, size `$1200`) holding the jump table, `DIR_NAME_BUF` and kernel+WozMon; `BASICMEM` starts immediately
-after it ends (`__KERNEL_LAST__`, ld65-defined) and holds BASIC's own
-core+tables+extensions, growing up to `$C000` (immediately below I/O).
-`TXTTAB` (bottom of the heap) is set directly from `__BASICMEM_LAST__`, a
-symbol `clementina.cfg` exports marking wherever BASIC's own image content
-actually ends; `MEMSIZ` (top of the heap) is simply the fixed hardware
-boundary `$C000` - BASIC's cold-start (`init.s`) reads `__BASICMEM_LAST__`
-directly instead of running the generic RAM probe upward from a low start,
-since that probe writes test patterns byte-by-byte and would corrupt the
-live, running image if it ever reached it (the image now sits *below* the
-heap, not above it, so there's nothing to discover at runtime either way).
+- `BASICMEM` (`clementina.cfg`) starts right after the `KERNEL` region's
+  content (`__KERNEL_LAST__`) and holds BASIC's own code, tables and
+  extensions.
+- `TXTTAB`, the bottom of the heap, is `__BASICMEM_LAST__`, where BASIC's image
+  ends. BASIC's cold start (`init.s`) takes it from the linker instead of
+  running msbasic's RAM probe, which writes test patterns and would corrupt the
+  running image.
+- `MEMSIZ`, the top, is `$C000`, where I/O begins.
 
-With the current ~24.1 KiB image (kernel+WozMon+BASIC, `$0400`-`$6456`
-today), this gives BASIC **23,465 bytes free** (`$6457` to `$BFFF`) - an
-image that
-needs no manual boundary maintenance as commands are added: there is no
-`MAX_KERNEL_BYTES`-style hand-maintained ceiling. `KERNEL`'s own `$1200`
-region size in `clementina.cfg` is a soft ceiling only kernel+WozMon growth
-can hit (`ld65` fails loudly if it ever does) - ordinary BASIC-side growth
-(new statements, bigger tables) only ever eats into free heap bytes, never a
-hand-maintained budget.
+So the heap gets every byte the image doesn't use, and adding a command only
+moves `TXTTAB` up. Run `make` to see the current split; it prints a line like
+the one for the current build:
 
-`clementina-6502` mirrors a piece of this in test code and needs updating
-whenever addresses in this section move again: `pkg/computers/clementina/
-guessing_game_test.go` (a CPU-runaway sanity check's valid-PC range) — grep
-that repo for the current hex value before moving `KERN_BASE` again.
+```text
+Built build/kernel.bin (24399 bytes): kernel+wozmon $0400-0x15A6, basic 0x15A7-0x634E, heap 0x634F-$BFFF
+```
 
-> **Known landmine — avoid `TXTTAB` in ~`[$39FE, $3AC0]`.** A pre-existing latent
-> bug (present on the stock baseline, independent of the extension tokens) makes
-> `INPUT` misread its buffer and re-prompt `??` when the program text begins in
-> that ~200-byte window. `TXTTAB` (`__BASICMEM_LAST__`) currently sits far above
-> it (`$6457` today) and moves only as the image itself grows/shrinks, but the
-> root cause is still not diagnosed - re-check this if the image's size changes
-> enough to approach that window.
+That leaves the heap 23,729 bytes (`$634F–$BFFF`).
 
-Bank 0 must remain selected while BASIC is active - the image itself
-(kernel+WozMon+BASIC, ~24.0 KiB) fits entirely below `$8000` today, but the
-**heap** above it does not: `TXTTAB`..`MEMSIZ` spans from `$6457` up through
-`$BFFF`, so its upper ~16 KiB (program text/variables/arrays/strings, once
-the heap grows that far) lives in Extended RAM bank 0. Changing PA0-PA4 away
-from bank 0 while BASIC is still running would therefore replace part of the
-live heap out from under it; kernel warm start restores bank 0 before
-returning to the interpreter. BASIC's `BANK` statement doesn't map a bank
-itself: `BLOAD`, `BRUN`, `BSAVE`, `PEEK`, `POKE` and `SYS` map the bank it
-picked only while they work at `$8000-$BFFF`, then map bank 0 back (§9).
+> **Known issue: avoid `TXTTAB` in about `$39FE–$3AC0`.** `INPUT` misreads its
+> buffer and prompts `??` again when the program text begins in that window.
+> The cause is not found yet; the bug predates the Clementina statements.
+> `TXTTAB` is far above that window, but check again if the image ever shrinks
+> that far.
+
+Bank 0 must stay selected while BASIC is active. The image fits below `$8000`,
+but the heap does not: its upper 16 KiB (program text, variables, arrays and
+strings, once they grow that far) is Extended RAM bank 0. Mapping another bank
+while BASIC runs would swap part of the live heap out from under it; warm start
+maps bank 0 again before returning to the interpreter. BASIC's `BANK`
+statement doesn't map a bank itself: `BLOAD`, `BRUN`, `BSAVE`, `PEEK`, `POKE`
+and `SYS` map the bank it picked only while they work at `$8000-$BFFF`, then
+map bank 0 back (§9).
 
 ### Where machine code can go
 
@@ -443,7 +424,8 @@ resuming BASIC after using any other bank. Banks 1–31 are entirely free for
 bank-aware access: BASIC's `BANK n` picks one for `BLOAD`, `BRUN`, `BSAVE`,
 `PEEK`, `POKE` and `SYS` (`docs/basic-file.md`), and a RAM disk, paged
 data/assets, or large buffers can live there too. `BANK 0` is safe above a
-lowered `MEMSIZ` (§8).
+lowered `MEMSIZ` (§8). Machine code switches banks itself through the VIA;
+see "Switching banks" in §10.
 
 ---
 
@@ -453,16 +435,137 @@ Eight 1 KiB device slots decoded from this 8 KiB region.
 
 | Range | Slot | Device |
 | --- | --- | --- |
-| `$C000–$C3FF` | 0 | **65C22 VIA**. Port A drives Extended RAM banking; Port B, CA1/CA2 and CB1/CB2 are free and wired to the user port header. Registers repeat every 16 bytes within the slot. Timer 1 is configured by the kernel as a free-running IRQ source for cursor blink. |
+| `$C000–$C3FF` | 0 | **65C22 VIA** (below). Port A selects the Extended RAM bank, Timer 1 is the kernel's tick, and Port B and CA/CB go to the user port. |
 | `$C400–$DFFF` | 1–7 | Free I/O slots, one per `IOCS1`–`IOCS7` line on the expansion bus headers. A card claims a slot by jumpering one of those lines. |
 
 > Hardware note: `IRQB` is a wired-AND line. MIA and the VIA each pull it low
 > through a Schottky diode against a 4.7 kΩ pull-up, so neither output can fight
 > the other. Expansion cards join the same way (their own Schottky diode or an
-> open-drain output). `NMIB` (4.7 kΩ) and `RDY` (1 kΩ) are also pulled up on the
-> board and exposed on the expansion headers, so cards can pull them low too.
-> The IRQ handler has to poll each possible source (VIA `IFR`, MIA, any cards)
-> to find out which one asserted the line.
+> open-drain output). `NMIB` (4.7 kΩ) and `RDY` (2.2 kΩ) are also pulled up on
+> the board and exposed on the expansion headers, so cards can pull them low
+> too. The IRQ handler has to poll each possible source (VIA `IFR`, MIA, any
+> cards) to find out which one asserted the line.
+
+### The VIA (`$C000–$C3FF`)
+
+A W65C22S. Its 16 registers repeat every 16 bytes across the slot; programs
+use `$C000–$C00F`. clementina-sdk's
+[`cpu-memory-map.json`](https://github.com/fran150/clementina-sdk/blob/main/specs/cpu-memory-map.json)
+(`via`) lists all 16 with what the kernel does in each. In short:
+
+| Part | Registers | Used for |
+| --- | --- | --- |
+| Port A, PA0–PA4 | `ORA` `$C001`, `DDRA` `$C003` | The Extended RAM bank, 0-31, mapped at `$8000–$BFFF`. Outputs. |
+| Port A, PA5–PA7 | the same | Nothing. Not connected on the board; inputs. |
+| Port B, PB0–PB7 | `ORB` `$C000`, `DDRB` `$C002` | Free. On the user port. The kernel never touches them. |
+| CA1, CA2, CB1, CB2 | `PCR` `$C00C` | Free. On the user port. |
+| Timer 1 | `$C004–$C007`, `ACR` bits 7-6 | The kernel's tick: free-running, an IRQ every 6250 PHI2 cycles. |
+| Timer 2, shift register | `$C008–$C00A`, `ACR` bits 5-0 | Free. |
+| Interrupts | `IFR` `$C00D`, `IER` `$C00E` | Only Timer 1's is enabled. |
+
+**The user port.** J3, a 2×10 header at the board's edge, carries PB0–PB7,
+CA1, CA2, CB1, CB2, `~RESB`, 3.3 V, 5 V and ground. Its pin numbers and the
+rules for cards are in clementina-hardware's README
+([Connectors](https://github.com/fran150/clementina-hardware#connectors)). The
+port pins are 3.3 V logic: never put 5 V on one, and drive LEDs through a
+resistor, since the pins have no current limiting.
+
+**Timer 1.** `via_init` starts it at reset in free-running mode with the PB7
+output off, reloading from `VIA_T1_RELOAD` (6250), so it interrupts 192 times
+a second at MIA's 1.2 MHz default. Each interrupt adds one to `KJIFFY` (§2)
+and, while `CHRIN` waits for a key, counts down the cursor blink (a toggle
+every 80 ticks). Both follow PHI2, not wall time. "Taking over the IRQ" (§6)
+shows how to change its rate, stop it, or chain a handler in front of it.
+
+**What reset and warm start set.** At reset `via_init` maps bank 0
+(`ORA = 0`, then `DDRA = %00011111`), turns every interrupt source off and
+clears its flag, sets `ACR` bits 7-6 for Timer 1 (bits 5-0 stay as reset left
+them, 0), loads and starts Timer 1, and enables its interrupt. Warm start
+(`KERN_WARMSTART`, and WozMon's `Q`) only maps bank 0 again (`ORA` and `DDRA`
+as at reset) and resets `DATA_BANK` to 0. It leaves Port B, `PCR`, `ACR`,
+Timer 1 and `IER` as the program left them, so a stopped or retimed Timer 1
+stays that way until the next reset.
+
+#### Switching banks
+
+Write the bank number to `ORA`. The whole byte can go there, because PA5–PA7
+are not connected; `KERN_LOAD` and BASIC write it the same way.
+
+```asm
+VIA_ORA = $C001
+
+        lda #5
+        sta VIA_ORA             ; bank 5 at $8000-$BFFF
+        lda $8000               ; ... read and write the bank ...
+        stz VIA_ORA             ; bank 0 again before returning to BASIC
+        rts
+```
+
+- Code running inside `$8000–$BFFF` must not switch away from its own bank:
+  the next instruction would come from the new one.
+- The kernel's IRQ handler and everything it touches sit below `$8000`, so an
+  interrupt in the middle needs no `SEI`.
+- A program called with `SYS` returns to BASIC with bank 0 mapped. `SYS` to an
+  address in `$8000–$BFFF` maps the `BANK` statement's bank before the call
+  and bank 0 after it (§9).
+
+#### Using another VIA interrupt
+
+Every VIA interrupt source but Timer 1 is off after reset. To use one, for
+example CA1 on the user port (falling edge after reset; `PCR` bit 0 set makes
+it the rising edge):
+
+1. Chain a handler in front of the kernel's, as in "Taking over the IRQ" (§6).
+   The kernel's handler clears only Timer 1, so the program's handler clears
+   its own flag, by writing that bit back to `IFR`, before it chains.
+2. Enable the source by writing `IER` with bit 7 set and the source's bit set.
+   Writing it with bit 7 clear turns the source off again.
+3. Turn the source off before returning to BASIC. Warm start puts the kernel's
+   handler back in `IRQ_VEC` but leaves `IER` alone, and a source that fires
+   with no one to clear it holds `IRQB` low, so BASIC hangs in an endless
+   interrupt.
+
+```asm
+VIA_IFR  = $C00D
+VIA_IER  = $C00E
+IRQ_VEC  = $FFFE
+KERN_IRQ = $042A
+CA1      = %00000010
+
+ca1_on:
+        sei
+        lda #<ca1_irq
+        sta IRQ_VEC
+        lda #>ca1_irq
+        sta IRQ_VEC+1
+        lda #CA1
+        sta VIA_IFR             ; drop a stale CA1 flag
+        lda #($80 | CA1)
+        sta VIA_IER             ; enable CA1
+        cli
+        rts
+
+ca1_irq:
+        pha
+        lda VIA_IFR
+        and #CA1
+        beq @chain
+        sta VIA_IFR             ; clear the CA1 flag
+        ; ... the work, leaving X and Y as they were ...
+@chain: pla
+        jmp KERN_IRQ            ; KJIFFY, the cursor and MIA's IRQ status
+
+ca1_off:
+        lda #CA1
+        sta VIA_IER             ; bit 7 clear: disable CA1
+        sei
+        lda #<KERN_IRQ          ; the kernel's handler again
+        sta IRQ_VEC
+        lda #>KERN_IRQ
+        sta IRQ_VEC+1
+        cli
+        rts
+```
 
 ---
 
@@ -478,7 +581,7 @@ command like `$FFE9`. Programs use `$FFE0–$FFFF` only and never touch
 
 ### MIA register block (`$FFE0–$FFFF`)
 
-All 32 registers, named in [`src/include/mia.inc`](../src/include/mia.inc), which `kernel.inc` and BASIC include. clementina-sdk generates that file from its specs, under MIA's own names.
+All 32 registers, named in [`src/include/mia.inc`](../src/include/mia.inc), which `kernel.inc` and BASIC include. clementina-sdk generates that file from its specs, under MIA's own names; [`mia-registers.json`](https://github.com/fran150/clementina-sdk/blob/main/specs/mia-registers.json) adds each register's access type.
 
 | Addr | Name | Description |
 | --- | --- | --- |
@@ -501,7 +604,7 @@ All 32 registers, named in [`src/include/mia.inc`](../src/include/mia.inc), whic
 | `$FFF0` | `IRQ_STATUS_L` | Pending IRQ flags, low byte. **Read-to-clear**: reading clears all IRQ_STATUS bits and deasserts IRQ. |
 | `$FFF1` | `IRQ_STATUS_H` | Pending IRQ flags, high byte. Passive read — sample this before `$FFF0` if you need high-byte flags. Bit 15 = aggregate `IRQ_TRIGGERED`. |
 | `$FFF2` | `INPUT_STATUS` | Text availability, held-input summaries, active source. Bit 0 = `INPUT_TEXT_READY`. |
-| `$FFF3` | `INPUT_CHAR` | Read-to-pop text FIFO. Returns `$00` when empty. PETSCII-compatible bytes. |
+| `$FFF3` | `INPUT_CHAR` | Read-to-pop text FIFO. Returns `$00` when empty. ASCII text and the key codes in clementina-mia's [`docs/input.md`](https://github.com/fran150/clementina-mia/blob/main/docs/input.md#key-codes). |
 | `$FFF4` | `INPUT_CHAR_COUNT` | Number of bytes queued in the text FIFO. |
 | `$FFF5` | `MIA_CTX` | Context stack for interrupt handlers: write `$01` to save the index-window, CFG and command-parameter state, `$02` to restore it. See clementina-mia's README, "Context stack". |
 | `$FFF6–$FFF9` | reserved | Read as zero. |
@@ -522,17 +625,13 @@ All 32 registers, named in [`src/include/mia.inc`](../src/include/mia.inc), whic
 
 ### MIA RAM map
 
-MIA RAM is split at `$14000`. The MIA firmware owns everything below it and
-programs own everything above it. The authoritative table is the "MIA RAM map"
-in `clementina-mia`'s README.
-
-| Range | Size | Owner | Use |
-| --- | --- | --- | --- |
-| `$00000-$10D4F` | 68,944 B | MIA video | Local header and render control, palettes (`$00100`), CHR banks (`$00200`), background nametables and attributes (`$0C200`), overlay (`$10080`), OAM (`$10850`) |
-| `$11000-$1107F` | 128 B | MIA input | Input state; clock snapshot at `$11078-$1107F` |
-| `$12000-$1204F` | 80 B | MIA audio | Audio registers |
-| `$13000-$13BFF` | 3 KiB | MIA SD/FS | Control block and buffers |
-| `$14000-$3FFFF` | 176 KiB | **Programs** | Free. Decimal 81920-262143. |
+MIA RAM is 256 KiB, `$00000–$3FFFF`, split at `$14000`. The firmware owns
+everything below it: video at `$00000`, input at `$11000`, audio at `$12000`
+and SD/FS at `$13000`, with reserved gaps between them. Programs own
+`$14000–$3FFFF` (176 KiB, decimal 81920-262143). Every block with its exact
+range, size and owner is in clementina-sdk's
+[`mia-ram-map.json`](https://github.com/fran150/clementina-sdk/blob/main/specs/mia-ram-map.json),
+and clementina-mia's README has the same map.
 
 Rules for programs:
 
@@ -540,8 +639,7 @@ Rules for programs:
   points it (an index, a DMA copy, an SD transfer, a sequencer track), and no
   reset clears it. The serial console's `audio seq test` debug command is the
   one exception: it writes the top 1 KiB.
-- The gaps below `$14000` (`$10D50-$10FFF`, `$11080-$11FFF`, `$12050-$12FFF`,
-  `$13C00-$13FFF`) belong to the firmware, kept for its future state.
+- The gaps below `$14000` belong to the firmware, kept for its future state.
 - Write below `$14000` only through the documented video, input, audio and
   SD/FS layouts.
 - BASIC's `TRACK` puts voice `v` at `$14000 + v * $1000` when no address is
@@ -556,31 +654,10 @@ There are 256 of them, ids `$00-$FF`. A program binds one to window A or B
 (`IDXA_SELECT`/`IDXB_SELECT`) and then reads or writes MIA RAM through that
 window's data port.
 
-### Who owns which id
-
-| Ids | Owner | Use |
-| --- | --- | --- |
-| `$00-$4F` | **Programs** | Free. Never configured or touched by the firmware, the kernel or BASIC. |
-| `$50-$57` | MIA input | Keyboard/keypad bitmap probes (`MIA_INPUT_INDEX_KEYBOARD_PROBE_0-7`) |
-| `$58-$5F` | MIA input | Consumer bitmap probes (`MIA_INPUT_INDEX_CONSUMER_PROBE_0-7`) |
-| `$60-$68` | MIA input | Input state block, bitmaps, mouse, gamepads `0-3`, input control |
-| `$69-$6F` | — | Reserved for MIA input |
-| `$70-$72` | MIA video | Local control page (never syncs to the video client) |
-| `$73-$7F` | — | Reserved for MIA video local control |
-| `$80-$88` | MIA video | Render control page and its fields |
-| `$89-$8F` | — | Reserved for MIA video render control |
-| `$90-$9F` | MIA video | Palette banks `0-15` |
-| `$A0-$A7` | MIA video | CHR banks `0-7`, 6,144 bytes each |
-| `$A8-$AF` | MIA video | Background nametables `0-7`, 1,000 bytes each |
-| `$B0-$B7` | MIA video | Background attribute tables `0-7`, 1,000 bytes each |
-| `$B8-$B9` | MIA video | Overlay nametable and attributes (the console) |
-| `$BA-$BF` | — | Reserved for MIA video |
-| `$C0-$DF` | MIA video | Direct OAM entries, sprites `0-31`, 5 bytes each |
-| `$E0-$E5` | MIA SD/FS | Control, sector, path, directory entry, transfer, second path |
-| `$E6-$EB` | MIA audio | Whole audio block, voices `0-3`, header |
-| `$EC-$EF` | MIA audio | Per-voice sequencer status |
-| `$F0-$F5` | Kernel | Scroll DMA (`$F0-$F3`), memory copy and fill (`$F4-$F5`) |
-| `$F6-$FF` | Kernel | Reserved for the kernel |
+The ids split three ways: `$00-$4F` are the programs', `$50-$EF` are MIA's
+(input, video, SD/FS and audio, in that order) and `$F0-$FF` are the kernel's.
+Every id with its name and target is in clementina-sdk's
+[`mia-indexes.json`](https://github.com/fran150/clementina-sdk/blob/main/specs/mia-indexes.json).
 
 Rules for programs:
 
@@ -601,11 +678,10 @@ Rules for programs:
 
 | Index | Purpose | MIA RAM target |
 | --- | --- | --- |
-| `$90-$97` (`MIA_VIDEO_INDEX_PALETTE_0-7`) | Startup palette upload | palette banks `0-7` |
-| `$85` (`MIA_VIDEO_INDEX_BANK_SELECT`) | Select CHR bank `0` for bg/overlay/sprite consumers | render control `$28-$2C` |
-| `$86` (`MIA_VIDEO_INDEX_CHR_1BPP`) | Mark CHR bank `0` as 1bpp and use overlay plane `1` | render control `$2D-$2E` |
-| `$87` (`MIA_VIDEO_INDEX_BACKDROP_COLOR`) | Select palette `0`, color `0` as the blue backdrop | render control `$2F` |
-| `$81` (`MIA_VIDEO_INDEX_LAYER_ENABLE`) | Enable the overlay layer | render control `$21` |
+| `$85` (`MIA_VIDEO_INDEX_BANK_SELECT`) | `video_init`: CHR bank `0` for the background, background alt, overlay and sprites, bank `1` for the overlay alt | render control `$28-$2C` |
+| `$86` (`MIA_VIDEO_INDEX_CHR_1BPP`) | `video_init`: CHR banks `0` and `1` decoded as 1bpp (`CHR_1BPP_BANKS_TEXT_GFX`), overlay on plane `0` (`CHR_1BPP_PLANES_OVERLAY0`) | render control `$2D-$2E` |
+| `$87` (`MIA_VIDEO_INDEX_BACKDROP_COLOR`) | `video_init` and `KERN_SET_BACKDROP`: the backdrop selector, palette `0` color `0` (blue) at cold start | render control `$2F` |
+| `$81` (`MIA_VIDEO_INDEX_LAYER_ENABLE`) | `video_init`: enable the overlay layer | render control `$21` |
 | `$B8` (`MIA_VIDEO_INDEX_OVERLAY_NT`) | Console **write cursor**: bound to window A; positioned per `CURSOR_X/Y` via CFG | overlay nametable cell |
 | `$B9` (`MIA_VIDEO_INDEX_OVERLAY_ATTR`) | Console **attribute cursor**: bound to window A after each tile write | overlay attribute cell |
 | `$F0` (`KIDX_SCROLL_NT_SRC`) | Kernel-reserved scroll DMA source | overlay nametable + 40, limit = overlay nametable end |
@@ -619,64 +695,57 @@ Rules for programs:
 
 ### Overlay text layer
 
-The console is the MIA overlay layer: a fixed **40×25** screen-space grid of
-tile indices in MIA RAM at `$10080` (1000 bytes), with matching attributes at
-`$10468` (1000 bytes), rendered by the remote video client. The kernel converts
-printable ASCII-ish bytes to the screen-code tile indices used by MIA's default
-PETSCII font bank before writing the nametable.
+The console is MIA's overlay layer: a fixed **40×25** grid of tile codes at MIA
+RAM `$10080` (1000 bytes), with one attribute byte per cell at `$10468` (1000
+bytes), drawn by the video client on top of every other layer.
 
-CFG now configures whichever index a window has selected (firmware fix), so the
-console drives the overlay index `$B8` directly: it binds `$B8` to window A and
-sets its current address (via the window-A CFG fields) to the cursor cell before
-each write. Cold start also initializes fixed kernel scroll indexes `$F0-$F3`;
-`scroll_up` uses `MIA_CMD_COPY_INDEXES` with byte count `0` to copy each source
-range up to its source limit without moving the indexes.
-
-Cold start loads a blue/white default palette, sets the backdrop to palette `0`
-color `0`, sets `TEXT_ATTR = 0` so new text uses palette `0` color `1` (white),
-selects CHR bank `0` for the overlay, and sets bit `0` in `CHR_1BPP_MASK` so
-the default PETSCII charset is decoded as 1bpp instead of 3bpp. The overlay uses
-plane `1`, the lowercase/uppercase PETSCII set; lowercase ASCII `a-z` is
-converted to screen codes `1-26`, while uppercase, digits, punctuation, and
-space are written unchanged.
+- **Tile codes.** `CHROUT` writes the character byte itself as the tile code,
+  so tile N is the glyph for ASCII N. There is no screen-code translation.
+  Control codes it interprets (§6) never reach the screen; `CHROUT_GLYPH`
+  draws any byte as a tile.
+- **Font.** `video_init` decodes CHR banks 0 and 1 as 1bpp and has the overlay
+  read plane 0 of each. MIA's firmware and the emulator load the charset when
+  video starts. With the default `clascii` set, bank 0 holds the 256 glyphs
+  and bank 1 the same glyphs reversed, and a cell's `CHR_ALT` attribute bit
+  picks bank 1. [phase5-charset-keyboard.md](phase5-charset-keyboard.md) has
+  the glyph layout.
+- **Attributes.** Bits 0-3 pick the palette bank, bit 4 flips X, bit 5 flips Y,
+  bit 6 is priority and bit 7 is `CHR_ALT`. Pixel value 1 draws color 1 of the
+  cell's palette bank; pixel value 0 is transparent, so the backdrop shows
+  through. `TEXT_ATTR` (§5) is the attribute new cells get; the cold-start
+  value `$00` is palette 0, white.
+- **Palette.** The kernel loads none. MIA's firmware and the emulator seed all
+  16 banks at video start, and the backdrop is palette 0 color 0, blue.
+- **Cursor and scrolling.** The console binds `$B8` to window A and sets its
+  current address (through the window-A CFG fields) to the cursor cell before
+  each write, then does the same with `$B9` for the attribute. `scroll_up`
+  copies both planes up one row with `MIA_CMD_COPY_INDEXES` through `$F0-$F3`,
+  with byte count `0` so each copy runs to its source limit without moving the
+  indexes.
 
 ---
 
 ## 13. Boot sequence
 
-**2026-09-14 bottom-anchor rework** (reversing the 2026-09-13 top-anchored/
-descending-loader design): MIA's bootstrap loader writes **ascending** (from
-a fixed low address, incrementing) - the classic loader direction. This is
-what lets the image start exactly at `$0400` with zero wasted space,
-regardless of how large it grows: the loader's start address is always the
-same fixed constant (`$0400`), and the image's actual *end* — which does
-vary release to release — is simply wherever the incrementing writes stop,
-never something the firmware needs to know or recompute.
-
-1. MIA powers up in **loader mode**: it writes a tiny self-modifying loader
-   into the register block and points RESET at `$FFE0`.
-2. The loader streams `kernel.bin` into base RAM **ascending from `$0400`**:
-   the first byte transmitted lands at `$0400`, the next at `$0401`, and so
-   on, forward through `kernel_data[]` while the write target increments —
-   the image ends up in the same byte order it was linked in.
+1. MIA powers up in **loader mode**: it fills the register block with a tiny
+   self-modifying loader and points RESET at `$FFE0`.
+2. The loader streams `kernel.bin` into base RAM **ascending from `$0400`**,
+   in the byte order it was linked in.
 3. MIA switches to **normal mode**: it restores the normal register block and
-   sets `RESET_VEC` (and defaults `NMI_VEC`/`IRQ_VEC`) to `$0400` — the fixed
-   start of the jump table (§6), same as the loader's own start point.
-4. The 6502 is released from reset and jumps to `$0400` → `KERN_COLDSTART`.
-5. `COLDSTART` installs real NMI/IRQ handlers into `$FFFA/$FFFE`, initializes
-   the console, clears the screen, prints the banner, and enters the loop.
+   points `RESET_VEC`, `NMI_VEC` and `IRQ_VEC` at `$0400`, the start of the
+   jump table (§6).
+4. The 6502 leaves reset and jumps to `$0400`, `KERN_COLDSTART`.
+5. Cold start installs the kernel's NMI and IRQ handlers, sets up the VIA
+   (§10) and video (§7), clears the screen, prints the banner, enables
+   interrupts and enters BASIC's cold start.
 
-> Two fixed constants drive this, in both the firmware (`clementina-mia`
-> `src/mia/sys/mia.c`: `kernel_load_bottom_address`/`kernel_target_address`)
-> and the emulator (`clementina-6502` `pkg/components/mia/registers.go`:
-> `miaKernelLoadBottomAddress`/`miaKernelTargetAddress`) — both **`$0400`**
-> (where the ascending loader starts writing, and the jump table's start /
-> the RESET-NMI-IRQ vector target — the same address, since the loader
-> direction now matches the jump table's own fixed position). Neither needs
-> to change as the ROM image grows or shrinks — that's the whole point of
-> anchoring to a fixed low start. They would only need to move together if
-> the working-RAM footprint below `$0400` itself changed, which is rare and
-> deliberate (the last move, from `$04B7`, is in §7.5).
+The load address is a fixed constant in both loaders: `kernel_load_bottom_address`
+and `kernel_target_address` in clementina-mia's `src/mia/sys/mia.c`, and
+`miaKernelLoadBottomAddress`/`miaKernelTargetAddress` in clementina-6502's
+`pkg/components/mia/registers.go`, all `$0400`. The image size never enters
+into it, so a bigger or smaller ROM needs no change there. If `KERN_BASE`
+itself ever moves, those constants move with it, and so does the valid-PC
+range in clementina-6502's `pkg/computers/clementina/guessing_game_test.go`.
 
 ---
 
@@ -687,7 +756,11 @@ never something the firmware needs to know or recompute.
   `$0300` page (persistent) or the kernel zero-page block (hot/pointer), and
   add a row here.
 - When you add a kernel call, follow the rule in §6 and document the row.
-- Keep "open items" inline as block quotes so they are easy to find and clear.
+- Describe the current build only. When something changes, rewrite the entry
+  and put the story of the change, if it is worth keeping, in
+  [history/memory-map.md](history/memory-map.md).
+- Give each size or boundary that moves with the build once (§8), and say
+  where the build prints it.
 - Prefer absolute, concrete addresses over "somewhere around" once a thing is
   pinned down by the build.
 

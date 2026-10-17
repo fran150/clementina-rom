@@ -1,71 +1,55 @@
 # Styled strings — per-character attributes in BASIC strings
 
-Status: **styled strings working through Phase 6 program-literal sidecars —
-emulator-validated** (2026-06-24). Phases 0–5 and the initial Phase 6 sidecar,
-`LIST`, `$0D` raw-glyph, and `DATA`/`READ` paths are implemented; BASIC
-default/style-policy commands remain future work.
-Validated with
-`10 POKE 770,5 : 20 INPUT A$ : 30 PRINT A$ : 40 PRINT LEFT$(A$,3):PRINT "X"+A$`:
-typed `FRAN` echoed in palette 5, `LEFT$` kept the style, and `"X"+A$` rendered
-the literal `X` white (DEFAULT_ATTR) with `FRAN` still palette 5 — confirming
-capture, slice/concat propagation, and heap-vs-literal classification.
-
-This document is the authoritative record of the design discussion for giving
-Clementina BASIC strings *per-character display attributes* (palette, flip X/Y,
-priority, alternate bank) that travel **with** the string, so a program can
-type/print styled text without C64-style inline color/reverse control codes. It
-exists so the design survives a lost session — read it before resuming work.
+Clementina BASIC strings carry a display attribute for every character
+(palette, flip X/Y and alternate bank) that travels **with** the string, so a
+program can type and print styled text without C64-style inline color or
+reverse codes. This page is the reference for how that works. How it was built,
+phase by phase, is in [history/styled-strings.md](history/styled-strings.md).
 
 ---
 
-## 1. Goal
+## 1. What a styled string is
 
 The MIA overlay stores the screen as two parallel planes: a **nametable** (one
-tile/glyph byte per cell, at `$10080`) and an **attribute** plane (one attribute
-byte per cell, at `$10468`). The attribute byte selects palette (bits 0-3
-today), and is intended to also carry flip-X, flip-Y, priority, and
-alternate-bank. See [memory-map §12](memory-map.md).
+tile/glyph byte per cell, at `$10080`) and an **attribute** plane (one
+attribute byte per cell, at `$10468`). The attribute byte holds the palette,
+flip-X, flip-Y, priority and alternate-bank bits
+([memory-map.md §12](memory-map.md)).
 
-We want a character's attribute to be remembered as part of a BASIC string. When
-the user types `A` (flipped, blue, reversed) into a string and later `PRINT`s
-it, it should render exactly as typed — the attribute is stored alongside the
-character, not encoded as inline escape/color codes that consume string length
-and break formatting (the C64 approach we are deliberately *not* using).
+A character's attribute is remembered as part of the BASIC string. When the
+user types `A` (flipped, blue, reversed) into a string and later `PRINT`s it,
+it renders exactly as typed. The attribute is stored alongside the character,
+not encoded as escape codes that consume string length and break formatting.
 
 ---
 
-## 2. How MS BASIC stores strings today (investigation result)
+## 2. MS BASIC string storage
 
-Confirmed by reading [src/basic/string.s](../src/basic/string.s),
-[print.s](../src/basic/print.s), [zeropage.s](../src/basic/zeropage.s):
+The design builds on how msbasic stores strings ([src/basic/string.s](../src/basic/string.s),
+[print.s](../src/basic/print.s), [zeropage.s](../src/basic/zeropage.s)):
 
 - **A string is a 3-byte descriptor** `[length, ptr_lo, ptr_hi]`. `length` is a
-  single byte → **255 chars max**. Descriptors live in the variable table,
-  arrays, and the temp-descriptor stack (`TEMPST`, `PUTNEW` at string.s:110).
+  single byte, so **255 characters at most**. Descriptors live in the variable
+  table, arrays and the temp-descriptor stack (`TEMPST`).
 - **Characters are contiguous bytes**, in one of two homes:
-  - **In program text**, for string *literals*. `STRLT2` does **not** copy a
-    literal to the heap — it points the descriptor straight into the tokenized
-    program (string.s:88-96). Only volatile sources (the input buffer) are
-    copied. Consequence: `A$="HELLO"` consumes **zero** string heap.
-  - **In the string heap**, growing **down** from `FRETOP` toward `STREND`, for
-    anything built at runtime. `GARBAG` compacts it (string.s:185).
-- **Every routine assumes 1 byte = 1 character**: `MOVSTR1` copies byte-by-byte
-  (string.s:458), `LEN` returns the length byte raw (string.s:685), `CAT` adds
-  lengths (string.s:404), `LEFT$/MID$/RIGHT$` index by byte offset, `CHR$` makes
-  a 1-byte string, `ASC` reads one byte.
-- **PRINT** (`STRPRT`, print.s:274) loops the bytes and calls `OUTDO → MONCOUT`
-  (kernel `CHROUT`) once per byte.
-- **Attributes are NOT in the data stream today.** Kernel `chrout` writes the
-  tile byte to the nametable and writes the **global** `TEXT_ATTR` (`$0302`) to
-  the attribute plane (console.s:196-205). Color today = one current-attribute
-  variable, exactly like the C64's "current color."
+  - **In program text**, for string literals. `STRLT2` points the descriptor
+    straight into the tokenized program and copies only volatile sources (the
+    input buffer). `A$="HELLO"` uses no string heap.
+  - **In the string heap**, growing down from `FRETOP` toward `STREND`, for
+    anything built at runtime. `GARBAG` compacts it.
+- **Every routine treats 1 byte as 1 character**: `MOVSTR1` copies byte by
+  byte, `LEN` returns the length byte, `CAT` adds lengths,
+  `LEFT$`/`MID$`/`RIGHT$` index by byte offset, `CHR$` makes a 1-byte string
+  and `ASC` reads one byte.
+- **PRINT** (`STRPRT`) calls `OUTDO → MONCOUT` (the kernel's `CHROUT`) once per
+  byte, and `CHROUT` writes the tile and the current `TEXT_ATTR` (`$0302`).
 
 Zero-page anchors (zeropage.s): `STREND`, `FRETOP`, `FRESPC`, `MEMSIZ`,
 `INDEX`, `DSCPTR`, `TEMPST`. Heap strings occupy `[FRETOP .. MEMSIZ)`.
 
 ---
 
-## 3. Chosen design
+## 3. The design
 
 ### 3.1 Layout — struct-of-arrays inside one allocation
 
@@ -83,90 +67,76 @@ descriptor [N, ptr]:
 ```
 
 The descriptor is **unchanged**: `length` still holds the **logical char count**
-`N` (≤ 255). This means **untouched**: `LEN`, string comparison (compares only
-the first `N` bytes → style-insensitive, which is the desired default), `ASC`,
-`VAL`, the 255 limit, and the descriptor/variable/array storage format.
+`N` (≤ 255). So these are untouched: `LEN`, string comparison (it compares only
+the first `N` bytes, so it ignores style), `ASC`, `VAL`, the 255 limit, and the
+descriptor/variable/array storage format.
 
-Why SoA-in-block (not interleaved char,attr pairs, not a twin/parallel heap):
+Why one block of two runs:
 
 - **Aliasing just works.** `A$ = B$` copies the 3-byte descriptor; both point at
   the same block, so both see the same attrs. No deep copy.
 - **GC stays one contiguous move.** `GARBAG` relocates a string as a single run;
   the only change is the span is `2N` instead of `N`.
 - **Matches the hardware.** Chars and attrs are each contiguous, mirroring the
-  MIA's two separate planes — `PRINT` can blast the char run and the attr run as
-  two straight copies instead of striding interleaved pairs.
-- **Literals can carry style inline later** (option B) because char+attr stay
-  adjacent.
+  MIA's two separate planes.
 
-The one cost vs. interleaving: slice/concat must locate the **source's** attr
-sub-block, which sits at `source_ptr + source_len`. For a substring that means
-the **parent** length — which is already in hand at the call site (`DSCPTR`).
-See §3.4.
+The cost: slicing and concatenation must find the **source's** attribute run at
+`source_ptr + source_len`. For a substring that is the **parent's** length,
+which the call site already has in `DSCPTR` (§3.4).
 
-### 3.2 Allocation — reserve `2N` without a 16-bit length and without a cap
+### 3.2 Allocation — reserve `2N` without a 16-bit length
 
-`GETSPA` (string.s:146) computes `FRETOP - A` where the **subtraction is already
-16-bit** (it borrows into `FRETOP+1`); only the *amount* `A` is 8-bit. To reserve
-`2N` we subtract `N` **twice** — `(FRETOP - N) - N` — with borrows propagating
-correctly for `N` up to 255 (→ 510 bytes). So:
+`GETSPA` computes `FRETOP - A`, and the subtraction is already 16-bit (it
+borrows into `FRETOP+1`); only the amount `A` is 8-bit. To reserve `2N` it
+subtracts `N` **twice**, `(FRETOP - N) - N`, which works for `N` up to 255
+(510 bytes). So:
 
-- The stored length stays a **single byte** (`N`, ≤ 255). We never need `2N` to
-  fit in 8 bits.
-- **No 127 cap.** Full 255-char styled strings work.
-- Every other place that uses length as a byte count for movement/free uses the
-  same "do it with `N` twice" via the existing 16-bit pointer math: `FRETMP`
-  (free, string.s:517-522 — add `N` twice), `GARBAG` /
-  `MOVE_HIGHEST_STRING_TO_TOP` (span end = `LOWTR + N + N`, string.s:379-384,
-  moved by the 16-bit `BLTU2`).
+- The stored length stays a **single byte** (`N`, ≤ 255), and full 255-character
+  styled strings work.
+- Every other place that moves or frees a string does the same "`N` twice" with
+  the existing 16-bit pointer math: `FRETMP` (free: add `N` twice), and
+  `GARBAG` / `MOVE_HIGHEST_STRING_TO_TOP` (span end = `LOWTR + N + N`, moved by
+  the 16-bit `BLTU2`).
+
+Styled strings cost twice the heap of plain ones, inside BASIC's free
+workspace ([memory-map.md §8](memory-map.md)).
 
 ### 3.3 Default attribute & minted strings
 
-`DEFAULT_ATTR = $00` (palette 0 = white on blue, matching the cold-start
-`TEXT_ATTR`, memory-map §5). Strings minted without style — `CHR$`, `STR$`,
-numeric→string, etc. — fill their attr half with `DEFAULT_ATTR`.
+`DEFAULT_ATTR = $00` (palette 0, white on blue, the cold-start `TEXT_ATTR`,
+memory-map §5). Strings minted without style — `CHR$`, `STR$`, numeric to
+string and so on — fill their attribute half with `DEFAULT_ATTR`.
 
-The fill happens once in `STRSPA` (the single allocation chokepoint) via
-`fill_attr_default`. **Gotcha:** `STRSPA`/`GETSPA` contractually return `A = N`,
-and the literal-copy path (`STRLT2`/`LD399`) uses that `A` as the byte count for
-the following `MOVSTR`. So `fill_attr_default` **must preserve `A`** (it saves/
-restores it). Forgetting this makes input-buffer→heap literal copies move 0 bytes
-— the heap char half stays uninitialized — which manifested as direct-mode
-`PRINT "HELLO"` printing nothing while program-mode literals (copied in-place,
-no `MOVSTR`) worked.
+The fill happens once, in `STRSPA` (the single allocation chokepoint), through
+`fill_attr_default`. `STRSPA`/`GETSPA` return `A = N`, and the literal-copy
+path (`STRLT2`/`LD399`) uses that `A` as the byte count for the next `MOVSTR`,
+so `fill_attr_default` **must preserve `A`**.
 
 ### 3.4 Slicing & concatenation
 
-`LEFT$/MID$/RIGHT$` already **copy** into a fresh allocation (`STRSPA` +
-`MOVSTR1`, string.s:568-598) — they do not alias into the parent. So we add a
-**second copy pass** for the attr run. Concretely, after the existing char copy:
+`LEFT$/MID$/RIGHT$` **copy** into a fresh allocation (`STRSPA` + `MOVSTR1`);
+they don't alias into the parent. `slice_attrs` adds a **second copy pass** for
+the attribute run, after the character copy:
 
 - The slice's attr **source** = `parent_ptr + parentLen + start` = `INDEX +
   parentLen`. `parentLen` is still readable at `(DSCPTR),0` (FRETMP doesn't
   touch `DSCPTR`).
 - The slice's attr **destination**: after the char `MOVSTR1`, `FRESPC` has
-  auto-advanced by `count` (string.s:469-474), so it is **already** at the
-  result's attr region.
-- So: `INDEX += (DSCPTR),0`, reload `count`, `jsr MOVSTR1` again. ~8 instructions.
+  auto-advanced by `count`, so it is already at the result's attr region.
 
-`CAT` (string.s:404-433): result attr region starts at the new total length;
-each source's attrs are found via that source's own length.
+`CAT` (`cat_attrs`): the result's attribute region starts at the new total
+length, and each source's attrs are found through that source's own length.
+Both use `append_attr_run`, which copies the run for a heap source and steps
+`FRESPC` over it (keeping the default fill) for a program-text literal.
+`classify_heap` decides which, while the source is still live (§5).
 
-### 3.5 Literals — initial decision (option A)
+### 3.5 Literals and the style sidecar
 
-String literals live in **program text** and have **no attr half**. They render
-with `DEFAULT_ATTR`. `PRINT`/`LIST` distinguish a heap string (has an attr half)
-from a program-text literal by a **pointer range check** (`ptr` in the heap
-`[FRETOP .. MEMSIZ)` → read attrs at `ptr+N`; otherwise use `DEFAULT_ATTR`),
-mirroring `STRLT2`'s existing input-buffer check (string.s:88-96).
-
-Programs that use no styling pay **nothing** — backward compatible.
-
-**Phase 6 initial implementation:** per-character styled literals typed into
-program lines. Do **not** hide bytes inside quotes or inline the style data in
-the executable token stream. Keep the normal tokenized line intact through its
-`$00` terminator, then append a Clementina-only **style sidecar** before the next
-BASIC line:
+String literals in stored program lines keep their typed attributes in a
+Clementina-only **style sidecar**, appended to the stored line after its `$00`
+terminator, so the tokenized line itself is unchanged. A literal with no
+sidecar record has no attribute half and prints at the BASIC pen (§3.6). The
+layout:
 
 ```text
 [next lo][next hi][line lo][line hi][tokenized text...][$00]
@@ -175,86 +145,85 @@ BASIC line:
 ...
 ```
 
-`literal_offset` is the offset of the first literal character within the tokenized
-line text (not the opening quote), `literal_len` is the character count, and the
-following bytes are raw overlay attribute bytes. The tokenizer records every
-non-empty quoted literal while entering a numbered line; lines with no quoted
-literals have no sidecar. `$CE,$FF` is the magic marker: `$FF` is impossible as a
-next-line pointer high byte in Clementina's `$0000-$7FFF` base-RAM program area,
-so old/plain lines will not be misread as styled sidecars.
+`literal_offset` is the offset of the first literal character within the
+tokenized line text (not the opening quote), `literal_len` is the character
+count, and the following bytes are raw overlay attribute bytes. The tokenizer
+records every non-empty quoted literal while entering a numbered line; lines
+with no quoted literals have no sidecar. `$CE,$FF` is the marker: `$FF` can't
+be a next-line pointer's high byte in Clementina's base-RAM program area, so a
+plain line is never misread as a sidecar. The tokenizer builds the records in
+`STYLE_SIDE_BUF` (`$03D3`, 42 bytes, memory-map §5) before appending them. If
+a line's records don't fit there (a 4-byte header plus 2 bytes and one byte
+per character for each literal), the whole line is stored unstyled.
 
-Runtime rule: when `STRLIT`/`STRLT2` evaluates a program-text literal, look for a
-sidecar record covering that literal. If none exists, keep the current fast path:
-the descriptor points directly into program text and prints with the default
-attribute. If a record exists, allocate a normal styled heap string, copy the
-literal bytes into the char half, copy the sidecar attrs into the attr half, and
-return that temp. From that point onward, existing styled-string machinery
-(`PRINT`, assignment, `CAT`, `LEFT$`/`MID$`/`RIGHT$`) works unchanged.
+When `STRLIT`/`STRLT2` evaluates a program-text literal, it looks for a sidecar
+record covering it (`styled_program_literal_to_heap`). With none, the
+descriptor points straight into program text as usual. With one, it allocates a
+styled heap string, copies the literal into the character half and the sidecar
+attrs into the attribute half, and returns that temp. From there `PRINT`,
+assignment, `CAT` and the slices work unchanged.
 
-BASIC line input must not apply the old terminal-era printable-ASCII filter to
-Clementina editor harvests. `KERN_EDITKEY` already performs interactive editing
-and then doles raw overlay tile bytes from `EDIT_BUF`; `INLIN` stores those bytes
-verbatim, using `EDIT_STATE` only to distinguish a harvested `$0D` tile from the
-synthetic final RETURN. This is what lets glyph-mode tiles such as `$A1`, `$91`,
-`$0D`, or `$02` survive inside quoted program literals.
+BASIC's line input keeps the bytes the screen editor harvests. `KERN_EDITKEY`
+does the interactive editing and then doles raw overlay tile bytes from
+`EDIT_BUF`; `INLIN` stores them verbatim, using `EDIT_STATE` only to tell a
+harvested `$0D` tile from the final RETURN. That is how glyph-mode tiles such
+as `$A1`, `$91`, `$0D` or `$02` survive inside quoted program literals.
 
 Editor-harvested bytes outside printable ASCII (`<$20` or `>=$7F`) get
-`STRING_RAW_TILE` (`$40`) ORed into their string/sidecar attr byte. That bit is
-internal to BASIC string storage, reusing the currently unexposed overlay
-priority bit. `styled_outc` checks it to draw control-range tiles raw (including
-tile `$0D`) and masks it back out before writing `TEXT_ATTR`, so it never reaches
-the overlay attribute plane as priority. Minted strings (`CHR$`, `STR$`,
-numeric strings) keep `DEFAULT_ATTR`, so `CHR$(13)` still prints a newline.
+`STRING_RAW_TILE` (`$40`) ORed into their string or sidecar attribute byte.
+That bit is internal to BASIC's string storage and reuses the overlay priority
+bit, which the editor never sets. `styled_outc` checks it to draw
+control-range tiles raw (including tile `$0D`) and masks it out before writing
+`TEXT_ATTR`, so it never reaches the overlay as priority. Minted strings
+(`CHR$`, `STR$`, numeric strings) keep `DEFAULT_ATTR`, so `CHR$(13)` still
+prints a newline.
 
-Any code that advances between program lines must skip the optional sidecar.
-`FIX_LINKS` and sequential execution line advance do this now; `LIST` follows the
-rebuilt next-line links and does not print sidecar bytes. `LIST` also renders
-quoted literals with their stored attrs, so listing and re-entering a program
-preserves visible style naturally through the existing screen harvest. Important
-implementation gotcha: `LIST` must preserve `LOWTRX` across `LINPRT` before
-scanning for the sidecar, because line-number formatting can clobber that scratch
-pointer via the string output path. `LIST` must also treat high bytes inside
-quotes as glyphs instead of BASIC tokens. `DATA`/`READ` scanning also skips
-sidecars when walking to the next DATA statement.
+Code that walks from one program line to the next skips the sidecar:
+`FIX_LINKS`, sequential execution, `LIST` (which follows the next-line links
+and never prints sidecar bytes) and the `DATA`/`READ` scan
+(`style_skip_sidecar_at_index_y`). `LIST` shows quoted literals in their stored
+attrs, so listing a program and re-entering the lines keeps their style through
+the screen harvest, and it treats high bytes inside quotes as glyphs, not
+tokens.
 
 ### 3.6 Present (PRINT)
 
-`STRPRT` (print.s) walks the chars. For a heap (styled) string it combines each
-char's stored attr with the BASIC default/policy, writes the effective attr to the
-kernel's global `TEXT_ATTR` (`$0302`), then outputs the char. Genuinely unstyled
-output — numbers, unstyled literals, messages — has no attr half and prints at the
-**BASIC pen** (`@lit`). String literals that were *written* in a color are not
-unstyled: they are promoted to heap strings carrying their attrs (a direct-mode
-literal via `STRLT2`/`EDIT_ATTR_BUF`, a program literal via
-`styled_program_literal_to_heap`) and take the heap path in their written colors.
-So `PRINT "FRAN";A` prints `FRAN` in its stored color but the number `A` in the
-BASIC pen.
+`STRPRT` (print.s) jumps to `STRPRT_STYLED`, which walks the characters. For a
+heap (styled) string it combines each character's stored attribute with the
+BASIC default and policy, writes the result to the kernel's `TEXT_ATTR`
+(`$0302`) and outputs the character. Unstyled output — numbers, unstyled
+literals, messages — has no attribute half and prints at the **BASIC pen**.
+Literals written in a color are promoted to heap strings with their attrs (a
+direct-mode literal through `STRLT2`/`EDIT_ATTR_BUF`, a program literal through
+its sidecar) and print in their written colors. So `PRINT "FRAN";A` prints
+`FRAN` in its stored color and the number `A` in the BASIC pen.
 
-The pen model keeps the **editor pen and the BASIC pen independent** — the editor
-pen the user sets with ESC is never clobbered by BASIC output:
+The **editor pen and the BASIC pen are independent**; BASIC output never
+changes the pen the user set with ESC:
 
-- **Editor pen / current pen** — the kernel/editor `TEXT_ATTR` (`$0302`); set from
-  the keyboard (ESC commands) and used for the cursor preview, new typed/stamped
-  cells, and the color newly typed text is stored with (which is what a string
-  literal carries into `PRINT`). It is *persistent*: `STRPRT_STYLED` saves it at
-  entry and restores it at every exit, so styled output leaves it unchanged and the
-  cursor keeps its color across a `PRINT`.
-- **BASIC default attribute / BASIC pen** — `BASIC_DEFAULT_ATTR` (`$03FD`); set by
-  `COLOR`/`FLIPX`/`FLIPY`/`ALT` (which no longer touch `TEXT_ATTR`). Used for
-  (a) system messages — startup/error/`READY.` text and `INPUT` prompts, which
-  `STROUT` prints by loading the BASIC pen into `TEXT_ATTR` and restoring the editor
-  pen afterwards — (b) unstyled `PRINT` output such as numbers and program-text
-  literals (`STRPRT_STYLED` @lit) — and (c) as the override source for styled
-  strings via the mask.
+- **Editor pen / current pen** — the kernel's `TEXT_ATTR` (`$0302`), kept in
+  `EDITOR_PEN` (`$0304`). The keyboard sets it (ESC commands); it colors the
+  cursor, new typed or stamped cells, and so the literals typed with it.
+  `STRPRT_STYLED` saves it at entry and restores it at every exit, and the
+  editor puts `EDITOR_PEN` back into `TEXT_ATTR` at each line edit, so its
+  color survives `LIST`, errors and styled `PRINT`.
+- **BASIC default attribute / BASIC pen** — `BASIC_DEFAULT_ATTR` (`$03FD`), set
+  by `COLOR`/`FLIPX`/`FLIPY`/`ALT`. It colors (a) system messages — startup,
+  error and `READY.` text and `INPUT` prompts, which `STROUT` prints by loading
+  the BASIC pen into `TEXT_ATTR` and restoring the editor pen after (`ERROR`
+  sets the whole error line to it) — (b) unstyled `PRINT` output such as
+  numbers and unstyled literals, and (c) the override source for styled
+  strings through the mask. `COLOR` does not change the color of typed text;
+  that is the editor pen.
 - **Style policy mask** — `BASIC_STYLE_MASK` (`$03FE`). Effective output attr:
 
 ```text
 effective = (stored_attr & ~override_mask) | (BASIC_DEFAULT_ATTR & override_mask)
 ```
 
-`BASIC_STYLE_MASK = $00` means AUTO/use stored sidecar or heap attrs.
-`BASIC_STYLE_MASK = $BF` means override palette, flip-X, flip-Y, and CHR_ALT from
-`BASIC_DEFAULT_ATTR` while leaving the internal raw-tile bit 6 alone.
+`BASIC_STYLE_MASK = $00` means AUTO: use the stored sidecar or heap attrs.
+`BASIC_STYLE_MASK = $BF` overrides palette, flip-X, flip-Y and CHR_ALT from
+`BASIC_DEFAULT_ATTR` and leaves the internal raw-tile bit 6 alone.
 
 User-facing commands:
 
@@ -278,191 +247,108 @@ Screen commands (out-of-range values raise `ILLEGAL QUANTITY`):
   `0-15`, the same color `COLOR n` gives text; `BCOLOR 6` restores the default
   blue.
 
-Output depends on whether the string is a **heap** string (carries an attribute
-half — can hold Phase 5 graphic tile codes) or a program-text **literal/message**
-(no attr half, plain unstyled text):
+Output depends on whether the string is a **heap** string (it has an attribute
+half and can hold graphic tile codes) or a program-text **literal or message**
+(no attribute half, plain text):
 
-- **Literals/messages → plain `OUTDO`** (the pre-Phase-5 behavior). They contain
-  CR/LF formatting that `chrout` must interpret — message strings begin with a
-  CR+LF and the LF (`$0A`) must be *ignored*. Drawing those raw would stamp a blank
-  LF glyph at column 0 of every message line (the bug that shipped briefly).
-- **Heap strings → `styled_outc`.** Graphic tile codes `$80–$FF` (and mode-2 wraps
-  into `$00–$3E`) collide with `chrout`'s control codes (`$0D` CR,
+- **Literals and messages → plain `OUTDO`.** They contain CR/LF formatting that
+  `chrout` must interpret: message strings begin with CR+LF, and the LF (`$0A`)
+  must be *ignored*.
+- **Heap strings → `styled_outc`.** Graphic tile codes `$80–$FF` (and mode-2
+  wraps into `$00–$3E`) collide with `chrout`'s control codes (`$0D` CR,
   `$11/$13/$1D/$91/$9D` cursor moves). Plain text `$20-$7E` goes through `OUTDO`
-  (keeps `Z14`/`POSX` bookkeeping). Untagged `$0D` remains newline (`OUTDO` +
-  `PRINTNULLS`, so `CHR$(13)` still breaks lines). Tagged control-range bytes and
-  all other non-plain bytes are drawn as **raw tiles** via
-  `MONCOUT_GLYPH → KERN_CHROUT_GLYPH` (`$0421`), advancing `POSX` one column and
-  honoring `Z14`.
+  (keeping the `Z14`/`POSX` bookkeeping). An untagged `$0D` stays a newline
+  (`OUTDO` + `PRINTNULLS`, so `CHR$(13)` still breaks lines). Tagged
+  control-range bytes and all other non-plain bytes are drawn as **raw tiles**
+  via `MONCOUT_GLYPH → KERN_CHROUT_GLYPH` (`$0421`), advancing `POSX` one column
+  and honoring `Z14`.
 
-See [phase5-charset-keyboard.md §6.1](phase5-charset-keyboard.md). Remaining
-literal-storage limit: tile `$00` cannot be represented directly inside stored
-BASIC source text because `$00` terminates a tokenized line.
+See [phase5-charset-keyboard.md §6.1](phase5-charset-keyboard.md). One storage
+limit remains: tile `$00` can't be stored inside BASIC program text, because
+`$00` ends a tokenized line.
 
 ### 3.7 Capture (INPUT / screen editor)
 
-Mechanism (Phase 4):
+1. **Harvest** — `harvest_line` (editor.s) reads the overlay nametable into
+   `EDIT_BUF` through index `$B8`, and the matching **attribute plane** cells
+   into the parallel `EDIT_ATTR_BUF` (`$0380`, 80 bytes). Same start cell, same
+   count.
+2. **Alignment** — BASIC's `INLIN` stores the doled characters at
+   `INPUTBUFFER,x` from `x = 0` (inline.s), and the editor doles `EDIT_BUF`
+   from index 0, so `EDIT_ATTR_BUF[k]` is the attribute of `INPUTBUFFER[k]`.
+   `INLIN` stores the already-edited bytes raw, high bytes and control-range
+   tiles included, instead of filtering to printable ASCII.
+3. **Route into the string** — the input-buffer-to-heap literal copy
+   (`STRLT2`/`LD399`, taken when the literal lives in the input buffer's page,
+   `$02xx`) copies, after the character `MOVSTR`, `N` attribute bytes from
+   `EDIT_ATTR_BUF + (STRNG1 − INPUTBUFFER)` into the new string's attribute
+   half (`FRESPC`, already at `base + N`). This replaces the `DEFAULT_ATTR`
+   fill for input-buffer strings only; minted strings keep the default fill.
 
-1. **Harvest** — `harvest_line` (editor.s) already reads the overlay nametable
-   into `EDIT_BUF` via index `$B8`. It now also reads the matching **attribute
-   plane** cells into a parallel `EDIT_ATTR_BUF` (kernel RAM at `$0380`, 80
-   bytes, in the free `$0380–$03FF` region). Same start cell, same count.
-2. **Alignment** — BASIC's `INLIN` stores the doled chars at `INPUTBUFFER,x`
-   from `x = 0` (inline.s), and the editor doles `EDIT_BUF` from index 0, so
-   `EDIT_ATTR_BUF[k]` is the attribute of `INPUTBUFFER[k]`. For Clementina,
-   `INLIN` trusts this already-edited stream and stores raw glyph bytes, including
-   high bytes and control-range tiles, instead of filtering to printable ASCII.
-3. **Route into the string** — the input-buffer→heap literal copy (`STRLT2`/
-   `LD399`, taken when the literal lives in the input buffer's page, `$02xx`) copies,
-   after the character `MOVSTR`, `N` attribute bytes from
-   `EDIT_ATTR_BUF + (STRNG1 − INPUTBUFFER)` into the new string's attribute half
-   (`FRESPC`, already positioned at `base + N`). This overrides the
-   `DEFAULT_ATTR` fill for input-buffer strings only; minted strings (`CHR$`,
-   `STR$`) keep the default fill. Program-text literals (`PUTNEW`, no `MOVSTR`)
-   are unaffected → still `DEFAULT_ATTR` (option B territory).
+Typed cells get the editor pen, which the keyboard sets (`ESC 0–F` color,
+`ESC R/H/V` reverse and flip, `ESC P` Paint mode — see
+[phase5-charset-keyboard.md](phase5-charset-keyboard.md)). A program can also
+set it with `POKE 770,n` (770 = `$0302` = `TEXT_ATTR`). `READ`/`DATA` values
+come from program text and get `DEFAULT_ATTR`.
 
-Source of non-default attributes during typing: the kernel paints typed cells
-with the current `TEXT_ATTR`. Phase 5 now sets that pen from the keyboard
-(`ESC 0–F` color, `ESC R/H/V` reverse/flip, `ESC P` Paint mode — see
-[phase5-charset-keyboard.md](phase5-charset-keyboard.md)); it can still be set
-programmatically with `POKE 770,n` (770 = `$0302` = `TEXT_ATTR`). `READ`/`DATA`
-come from program text → `DEFAULT_ATTR`.
+Example: `10 POKE 770,5` / `20 INPUT A$` / `30 PRINT A$`, RUN, type some text,
+and it prints back in palette 5. The `?` prompt is drawn through `OUTDO`, which
+doesn't reset `TEXT_ATTR`, so the pen survives into the editor.
 
-Test: `10 POKE 770,5` / `20 INPUT A$` / `30 PRINT A$`, RUN, type text → it should
-print back in palette 5 (the `?` prompt is drawn via `OUTDO`, which does not
-reset `TEXT_ATTR`, so the pen survives into the editor).
+### 3.8 Charset
 
-### 3.8 Charset (parallel track) — see Phase 5 spec
-
-Default 1bpp charset using **two banks**: bank 0 = regular glyphs, bank 1 =
-reversed (0/1 swapped) at the **same** positions; "reverse" = the CHR_ALT
-attribute bit. **Superseded detail:** the original "C64 SHIFT/COMMODORE held
-combinations select glyphs" idea was dropped — held modifiers corrupt the FIFO
-byte (host composition/suppression), so glyph selection is instead done
-kernel-side via three *glyph modes* on clean ASCII, plus an ESC-prefix command
-layer for color/flip/reverse. Full design (input model, attribute bits, modes,
-commands, Paint mode, cursor indicators, charset tile map) is the authoritative
-[phase5-charset-keyboard.md](phase5-charset-keyboard.md). Authoring via
-`tools/tile-editor.html`.
+The default 1bpp charset uses two banks: bank 0 holds the glyphs and bank 1
+the same glyphs reversed at the same positions, so "reverse" is the `CHR_ALT`
+attribute bit. Glyph selection, the ESC commands, Paint mode, the cursor
+indicators and the charset tile map are in
+[phase5-charset-keyboard.md](phase5-charset-keyboard.md). The charset is
+authored in `tools/tile-editor.html`.
 
 ---
 
-## 4. Change map (files)
+## 4. Where the code is
 
-| File | Change |
+| File | Styled-string work |
 | --- | --- |
-| `src/basic/string.s` | `GETSPA` reserve `2N` (subtract `N` twice) + OOM retry; `STRSPA`; `MOVSTR`/`MOVSTR1` copy attr run; `FRETMP` free `2N`; `GARBAG`/`MOVE_HIGHEST_STRING_TO_TOP` span `N+N`; `CAT`; `CHRSTR` + other minted strings fill `DEFAULT_ATTR`; `LEFTSTR`/`RIGHTSTR`/`MIDSTR` second copy pass; literal range marker in `STRLT2` |
-| `src/basic/print.s` | `STRPRT` per-char `TEXT_ATTR`; heap-vs-literal range check |
-| `src/basic/var.s` | string `LET` — descriptor copy fine (aliasing safe); heap allocations get attr halves |
-| `src/basic/input.s` / token | `INPUT` capture of attrs |
-| `src/kernel/editor.s` | harvest overlay attribute plane into `EDIT_ATTR_BUF` |
-| `src/kernel/console.s` | optional reverse-as-alt-bank in `chrout`; per-char `TEXT_ATTR` already supported |
-| `src/basic/defines_clementina.s` | `STYLED_STRINGS` flag, `DEFAULT_ATTR` |
-| charset assets + `tools/tile-editor.html` | two-bank 1bpp font + glyph-mode/ESC styling workflow |
-| Future Phase 6 | `program.s` tokenizer/LIST/line traversal, `string.s` literal evaluation, `clementina_extra.s`/`print.s` default/style policy, `defines_clementina.s` runtime defaults |
+| `src/basic/string.s` | `2N` allocation (`GETSPA`, `STRSPA`, `fill_attr_default`), free and garbage collection of `2N` spans, the attribute copies of `CAT`/`LEFT$`/`MID$`/`RIGHT$` (`cat_attrs`, `slice_attrs`, `append_attr_run`, `classify_heap`), input-buffer capture from `EDIT_ATTR_BUF`, program-literal promotion (`styled_program_literal_to_heap`) |
+| `src/basic/print.s` | `STRPRT` jumps to `STRPRT_STYLED` |
+| `src/basic/clementina_extra.s` | `STRPRT_STYLED`, `styled_outc`, `MONCOUT_GLYPH`, `COLOR`/`FLIPX`/`FLIPY`/`ALT`/`STYLE` |
+| `src/basic/program.s` | Sidecars: appending them to stored lines, skipping them between lines, `LIST` |
+| `src/basic/inline.s` | `INLIN` keeps raw harvested bytes, using `EDIT_STATE` |
+| `src/basic/defines_clementina.s` | `STYLED_STRINGS`, `DEFAULT_ATTR`, `STRING_RAW_TILE`, the buffer addresses |
+| `src/kernel/editor.s` | `harvest_line` fills `EDIT_ATTR_BUF` |
 
-**Untouched:** `LEN`, comparison, `ASC`, `VAL`, descriptor layout, 255 limit,
-variable/array storage.
+`STYLED_STRINGS` gates the whole feature, so it can be turned off to compare
+with stock behavior.
 
 ---
 
-## 5. Open questions
+## 5. Heap or literal: the `FRETOP` test
 
-- ~~Exact heap-vs-literal boundary for the range check.~~ **Resolved: `FRETOP`.**
-  `STRPRT_STYLED` classifies a string as heap (has an attr half) when its data
-  pointer is `>= FRETOP`. `STREND` does **not** work: with
-  `CONFIG_SCRTCH_ORDER = 2`, the cold-start "BYTES FREE" message prints *before*
-  `SCRTCH` initializes `STREND` ([init.s:420-426](../src/basic/init.s#L420)), so
-  an `INDEX >= STREND` test reads garbage and styles the startup messages with
-  random flip/palette bits. `FRETOP` is set to `MEMSIZ` far earlier
-  ([init.s:303](../src/basic/init.s#L303)), so it is always valid.
-  **Caveat (resolved in Phase 1c):** `STRPRT` calls `FREFAC`, which frees a
-  printed *temp* before classification, raising `FRETOP` above it. A freed temp
-  keeps its bytes (incl. its attr half), so the fix is to *classify before the
-  free*: `STRPRT` snapshots `FRETOP` into `DEST` *before* `FREFAC`, and
-  `STRPRT_STYLED` classifies the data pointer against that snapshot. The same
-  "classify before the free" rule is applied in slicing/`CAT` (`classify_heap`
-  runs while the source is still live, against the live `FRETOP`).
-- Style-sensitive comparison? Default **no** (compare chars only). Revisit if a
-  use case appears.
-- Memory budget: styled strings cost 2× heap inside BASIC's free workspace
-  ([memory-map §8](memory-map.md)), whose upper 16 KiB is Extended RAM bank 0.
-  Relocating the attr half to a separate bank remains rejected due to
-  bank-switch cost inside GC.
-- Phase 6 styled program literals: sidecar format, line-skip helper, `LIST`
-  rendering, `$0D` raw-glyph disambiguation, and `DATA`/`READ` sidecar walking
-  are implemented. Remaining work: runtime default/style policy; see §3.5/§3.6.
+`PRINT`, slicing and `CAT` must know whether a string has an attribute half.
+`STRPRT_STYLED` calls a string a heap string when its data pointer is
+`>= FRETOP`; anything below is program text or the input buffer.
+
+- `STREND` can't be the boundary: with `CONFIG_SCRTCH_ORDER = 2`, the cold-start
+  "BYTES FREE" message prints *before* `SCRTCH` sets `STREND`
+  ([init.s](../src/basic/init.s)). `FRETOP` is set to `MEMSIZ` much earlier,
+  so it is always valid.
+- **Classify before the free.** `STRPRT` calls `FREFAC`, which frees a printed
+  temp and raises `FRETOP` above it. A freed temp keeps its bytes, attribute
+  half included, so `STRPRT` snapshots `FRETOP` into `DEST` *before* `FREFAC`,
+  and `STRPRT_STYLED` classifies against that snapshot. Slicing and `CAT` follow
+  the same rule: `classify_heap` runs while the source is still live, against
+  the live `FRETOP`.
+
+String comparison ignores style: it compares characters only.
 
 ---
 
-## 6. Execution plan (phased)
+## 6. Tests
 
-Status as of 2026-06-24. The emulator embeds `kernel.bin` at compile time, so
-after `make install` the emulator must be **rebuilt** (`go run`), not just reset.
-
-- **Phase 0 — foundations — DONE.** This doc, plus `STYLED_STRINGS`,
-  `DEFAULT_ATTR`, and `TEXT_ATTR` in `defines_clementina.s`. Builds.
-- **Phase 1a — `2N` size agreement — DONE, emulator-validated.** `GETSPA`
-  reserves `2N` (stack-peek double subtract); `MOVE_HIGHEST_STRING_TO_TOP`
-  relocates `2N`; `FRETMP` frees `2N`. Validated: `FRE(0)=19276`, GC stress
-  clean, all string ops correct. Attr half was dead at this point.
-- **Phase 1b — default-fill attr half — DONE.** `fill_attr_default` (in
-  `string.s`) hooked into `STRSPA`. Two bugs fixed here: (1) `tya` clobbering the
-  fill value → gradient garbage; (2) clobbering `A`, which broke the literal-copy
-  `MOVSTR` byte count (see §3.3 gotcha) → direct-mode strings came up empty.
-- **Phase 2 + 3 — present + classify — DONE (working in emulator).**
-  `STRPRT` → absolute `jmp STRPRT_STYLED` (routine lives in the `EXTRA` segment,
-  `clementina_extra.s`, to dodge `CODE`-segment branch-range limits). Classifies
-  by `INDEX >= FRETOP` (not `STREND` — uninitialized at cold start, see §5);
-  heap → per-char `TEXT_ATTR`, literal → `DEFAULT_ATTR`. With all attrs default,
-  output is plain white and correct.
-- **Phase 1c — propagate real attrs — DONE (emulator-validated).**
-  `LEFT$`/`MID$`/`RIGHT$` add a second copy pass (`slice_attrs`) and
-  `CAT` appends both source attr runs (`cat_attrs`), each source's attrs found at
-  `source_ptr + source_len`. A shared `append_attr_run` copies the run for heap
-  sources or steps `FRESPC` over it (keeping the default fill) for program-text
-  literals. `classify_heap` distinguishes the two *before* any free (a freed temp
-  keeps its bytes; only the address test would lie). Freed-temp classification in
-  `STRPRT` fixed via the `DEST` = pre-`FREFAC` `FRETOP` snapshot. Scratch: `DEST`
-  (block-move pointer, free in these windows; set after any GC inside `STRSPA`).
-- **Phase 4 — capture — DONE (emulator-validated).**
-  4a: `harvest_line` (editor.s) reads the overlay attribute plane into
-  `EDIT_ATTR_BUF` (`$0380`, parallel to `EDIT_BUF`). 4b: the input-buffer→heap
-  copy (`LD399`, string.s) routes `N` attr bytes from
-  `EDIT_ATTR_BUF + (STRNG1 − INPUTBUFFER)` into the new string's attr half (over
-  the `DEFAULT_ATTR` fill). First point where styling originates from typing.
-- **Phase 5 — charset + keyboard glyph entry — PARTLY IMPLEMENTED
-  (2026-06-24).** Full spec in
-  [phase5-charset-keyboard.md](phase5-charset-keyboard.md):
-  256 glyphs in two banks (bank 0 normal, bank 1 reversed; reverse = CHR_ALT);
-  3 kernel-side glyph modes (`tile = (ascii + mode*$60) & $FF`); pen =
-  `TEXT_ATTR` bits (palette/flip-X/flip-Y/reverse); ESC-prefix command layer +
-  Paint mode; cursor = live pen preview (8 indicator tiles `$F8–$FF`). FIFO-only
-  and source-agnostic (WiFi/USB-host/console). 5a-5e are done; 5f (console ANSI
-  decoder) is deferred.
-- **Phase 6 — styled program literals + BASIC style defaults — IMPLEMENTED.**
-  Stores literal attrs in the program-line sidecar described in §3.5. Runtime
-  `BASIC_DEFAULT_ATTR` + `BASIC_STYLE_MASK` are controlled by `COLOR`, `FLIPX`,
-  `FLIPY`, `ALT`, and `STYLE n` (§3.6).
-- **Phase 7 — editor pen / BASIC pen independence — IMPLEMENTED.** BASIC no
-  longer overwrites the editor pen. `COLOR`/`FLIPX`/`FLIPY`/`ALT` set
-  `BASIC_DEFAULT_ATTR` only (dropped the `sta TEXT_ATTR` sync). `STRPRT_STYLED`
-  saves the pen at entry and restores it at every exit (heap loop no longer resets
-  to the BASIC default). Unstyled output (numbers, unstyled literals) prints at the
-  BASIC pen (`@lit`); string literals written in a color are promoted to heap
-  strings and keep their written colors (heap path), so `PRINT "FRAN";A` prints
-  `FRAN` in its stored color and the number `A` in the BASIC pen. System messages
-  route through `STROUT`, which loads `BASIC_DEFAULT_ATTR` into `TEXT_ATTR` for the
-  message and restores the editor pen after. The whole error line is set to the
-  BASIC pen at the top of `ERROR` (so the `?<name>` prefix matches the `ERROR`
-  suffix); the cursor is an
-  input-time construct redrawn only by `chrin`, and the editor reasserts
-  `EDITOR_PEN` (`$0304`) into `TEXT_ATTR` at each line edit so its color survives
-  any BASIC output (LIST/errors/styled PRINT). Emulator-validated
-  (`TestPenIndependence`, `TestUnstyledNumberUsesBasicPen`,
-  `TestErrorMessageUsesBasicPen`, `TestCursor*`, `pkg/computers/clementina`).
-  Note: `COLOR` governs system messages and the styled-string override source, not
-  the color of typed text (that is the editor pen, carried by the string literal).
-
-Verification: `make` builds `build/kernel.bin`; `make install` copies it into the
-emulator asset; then rebuild the emulator (`go run`) to re-embed it.
+clementina-6502 covers styled strings in `pkg/computers/clementina`, among them
+`TestPhase5StyledHarvestCapturesAttribute`, `TestPenIndependence`,
+`TestUnstyledNumberUsesBasicPen`, `TestErrorMessageUsesBasicPen` and the
+`TestCursor*` tests. To test a ROM change, `make` builds `build/kernel.bin`,
+`make install` copies it into the emulator, and the emulator must be rebuilt
+(`go run`) to embed it; `tests/run_input.py` does the same without installing.

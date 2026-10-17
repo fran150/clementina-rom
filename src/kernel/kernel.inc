@@ -59,7 +59,7 @@ CURSOR_BLINK_TICKS  = 80
 
 ; Kernel/system-reserved MIA index descriptors. User code must leave $F0-$FF
 ; alone while using kernel services. Programs own $00-$4F; MIA owns $50-$EF
-; (full table in docs/memory-map.md section 12).
+; (docs/memory-map.md section 12; every id in clementina-sdk specs/mia-indexes.json).
 KIDX_SCROLL_NT_SRC   = $F0
 KIDX_SCROLL_NT_DST   = $F1
 KIDX_SCROLL_ATTR_SRC = $F2
@@ -72,7 +72,7 @@ KIDX_MEMORY_DST      = $F5
 ; bank). The overlay renders plane 0; per-cell CHR_ALT selects the text bank (0)
 ; or the graphics bank (1). Tile code == ASCII codepoint in the text bank.
 VIDEO_CHR_BANK_DEFAULT   = $00         ; text / primary bank (also bg and sprite)
-VIDEO_CHR_BANK_GRAPHICS  = $01         ; alternate overlay bank: graphics / line set
+VIDEO_CHR_BANK_GRAPHICS  = $01         ; alternate overlay bank: reversed glyphs (clascii)
 CHR_1BPP_BANKS_TEXT_GFX  = %00000011   ; CHR banks 0 and 1 decoded as 1bpp
 CHR_1BPP_PLANES_OVERLAY0 = %00000000   ; overlay 1bpp plane selector = plane 0
 
