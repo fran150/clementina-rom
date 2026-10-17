@@ -15,6 +15,13 @@ MIA's own video, input, audio and SD state (see
 | `MFILL address,length,value` | address 0–262143; length 0–262144; value 0–255 | Fill a block with a repeated byte. |
 | `MFILL address,length,value,rows,stride` | length, rows and stride 0–65535 | Fill a rectangle: `rows` rows of `length` bytes, each starting `stride` bytes after the last. |
 
+Addresses can be written in hex: a `$` literal takes 1 to 6 hex digits
+(`$0`-`$FFFFFF`, 0-16777215), so `MPOKE $20000,42` is `MPOKE 131072,42`. A
+digit that would take it past `$FFFFFF` gives `?OVERFLOW`. The hex digits after
+a `$` are stored as typed, so the `CD` in `$CD00` is never read as the `CD`
+keyword; a `$` right after a letter or digit ends a string variable name
+(`A$`) instead.
+
 Numeric expressions are accepted, including nested `MPEEK` calls. Fractions
 truncate using BASIC's normal integer conversion. Negative values, out-of-range
 arguments, and any block extending beyond address 262143 produce

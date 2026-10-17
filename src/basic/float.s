@@ -1367,30 +1367,29 @@ L3C3A:
 
 .ifdef CLEMENTINA
 ; ----------------------------------------------------------------------------
-; CONVERT HEX STRING TO FP VALUE IN FAC ($nnnn HEX LITERAL)
+; CONVERT HEX STRING TO FP VALUE IN FAC ($hhhhhh HEX LITERAL)
 ;
 ; STRING POINTED TO BY TXTPTR, LEADING '$' ALREADY SCANNED BY FRM_ELEMENT
-; (eval.s). Accumulates an unsigned 16-bit value from hex digits 0-9/A-F
-; (uppercase only, matching this BASIC's keyword/variable convention) via
-; shift-and-OR, then floats it in one shot as an unsigned number, the way
-; LINPRT does (so $FFFF is 65535, not -1) - no per-digit float math needed
-; the way decimal FIN above does. Extra digits past 4
-; simply shift out the top, wrapping mod $10000, same as real hardware -
-; not treated as an error. A run of zero hex digits (e.g. bare "$" followed
-; by a non-hex character) evaluates as 0, TXTPTR left at the offending
-; character for the caller to handle as it would any other token.
+; (eval.s). Accumulates an unsigned 24-bit value from hex digits 0-9/A-F
+; (uppercase only: the tokenizer folds them, see TOKENIZE_HEX in program.s)
+; straight into FAC+1 (high) .. FAC+3 (low), then floats it in one shot as an
+; unsigned number, so $FFFF is 65535 and $FFFFFF is 16777215 - no per-digit
+; float math needed the way decimal FIN above does. Up to 6 significant
+; digits, enough for any MIA RAM address; a digit that would push a value
+; past $FFFFFF gives OVERFLOW instead of wrapping (leading zeros are fine).
+; A run of zero hex digits (e.g. bare "$" followed by a non-hex character)
+; evaluates as 0, TXTPTR left at the offending character for the caller to
+; handle as it would any other token.
 ;
-; Reuses TMPEXP/EXPON as a throwaway 16-bit accumulator - FIN's own scratch
-; pair, safe here since FIN and FINH are never in flight at the same time
-; (one numeric literal is either decimal or hex, never both). Placed after
-; the whole FIN/GETEXP cluster (not spliced into the middle of it) since
-; FIN's own internal branches to FIN9/GETEXP are 8-bit relative and can't
-; reach over a block inserted between them.
+; Placed after the whole FIN/GETEXP cluster (not spliced into the middle of
+; it) since FIN's own internal branches to FIN9/GETEXP are 8-bit relative and
+; can't reach over a block inserted between them.
 ; ----------------------------------------------------------------------------
 FINH:
         lda     #$00
-        sta     TMPEXP
-        sta     EXPON
+        sta     FAC+1
+        sta     FAC+2
+        sta     FAC+3
 @next:  jsr     CHRGET
         bcc     @digit                  ; C=0 -> ASCII '0'-'9', A=that char
         jsr     ISLETC                  ; C=1 -> A-Z letter, A preserved
@@ -1405,25 +1404,26 @@ FINH:
 @digit: sec
         sbc     #$30                    ; '0' -> 0-9
 @accum: pha
-        asl     TMPEXP
-        rol     EXPON
-        asl     TMPEXP
-        rol     EXPON
-        asl     TMPEXP
-        rol     EXPON
-        asl     TMPEXP
-        rol     EXPON
+        lda     FAC+1
+        and     #$F0
+        beq     @room                   ; top digit free: room for one more
+        jmp     OVERFLOW                ; a 7th significant digit
+@room:  ldx     #4
+@shift: asl     FAC+3
+        rol     FAC+2
+        rol     FAC+1
+        dex
+        bne     @shift
         pla
-        ora     TMPEXP
-        sta     TMPEXP
+        ora     FAC+3
+        sta     FAC+3
         jmp     @next
-@done:  lda     EXPON                   ; high byte
-        sta     FAC+1
-        lda     TMPEXP                  ; low byte
-        sta     FAC+2
-        ldx     #$90                    ; 16-bit integer exponent
-        sec                             ; C=1: positive (GIVAYF would take
-        jmp     FLOAT2                  ; bit 15 as the sign)
+@done:  lda     #$00
+        sta     FAC+4
+        ldx     #$98                    ; 24-bit integer exponent
+        sec                             ; C=1: positive
+        jmp     LDB21                   ; FLOAT2's tail, past its clearing of
+                                        ; FAC+3/FAC+4 (A=0 there too)
 .endif
 
 ; ----------------------------------------------------------------------------
