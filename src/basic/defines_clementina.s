@@ -160,6 +160,10 @@ RAMSTART2        := KERN_BASE
 ; BASIC-resident; only BLOAD hands off to the kernel, through KERN_LOAD.
 ; Jump table offsets are the kernel ABI (kernel.inc) and never change.
 KERN_LOAD := KERN_BASE + $1B
+; The bank BANK picked for BLOAD, BRUN, BSAVE, PEEK, POKE and SYS at
+; $8000-$BFFF. A kernel variable (KVARS + $06 in kernel.inc) so warm start
+; can set it back to 0.
+DATA_BANK := $0306
 SAVE:
         jmp BASIC_SAVE
 LOAD:

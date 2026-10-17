@@ -26,25 +26,20 @@
 ; where loading is safe.
 ;
 ; Entry (set by the caller before JMP load):
+;   A             = the bank to use at $8000-$BFFF (BASIC passes DATA_BANK).
+;   C             = 0 to return when done, 1 to jump.
 ;   KPTR ($F0-F1) = destination override address, or $0000 to use the file's
-;                   own 2-byte header address (the file's header bytes are
-;                   always consumed either way).
-;   KTMP ($F2-F3) = run address, or $0000 to return to the caller instead of
-;                   jumping there once loading finishes.
+;                   own header address (the header is always consumed).
+;   KTMP ($F2-F3) = with C=1, the run address, or $0000 for the first byte
+;                   loaded. Ignored with C=0.
 ; Exit:
-;   RTS if KTMP was $0000, with the bank mapped at entry selected again;
-;   otherwise JMP to KTMP, IRQs enabled, leaving the last bank written
-;   selected. Never both.
+;   C=0: RTS with the bank mapped at entry selected again.
+;   C=1: JMP to the run address with IRQs enabled and bank A selected.
 ;
-; PRG format (see docs/basic-file.md):
-;   [addr_lo][addr_hi]            addr_hi < $80 -> base RAM
-;   [addr_lo][addr_hi][bank]      addr_hi in $80-$BF -> the bank byte (0-31)
-;                                 follows and selects the bank
-; An override (KPTR) replaces the header's address, and the header's bank if
-; any: it loads into whatever bank is mapped at entry (bank 0 while BASIC
-; runs). A destination at $C000 or above (I/O, MIA registers) is refused.
-; Data that reaches $C000 continues at $8000 in the next bank; data that runs
-; past $7FFF from base RAM continues into the mapped bank.
+; PRG format (see docs/basic-file.md): [addr_lo][addr_hi] then the data. The
+; header address and an override must both be below $C000 (I/O and the MIA
+; region are not RAM). Bytes from $8000 up go to bank A; data that reaches
+; $C000 continues at $8000 in the next bank.
 ; ============================================================================
 
 ; .macpack longbranch already active by this point in kernel.s's include
@@ -150,7 +145,7 @@ kld_select_transfer:
         rts
 
 ; Read one byte from the open file into A. Uses a 1-byte FS_READ, same idiom
-; BGET# uses. Only used for the 2-or-3-byte PRG header, where the simplicity
+; BGET# uses. Only used for the 2-byte PRG header, where the simplicity
 ; of one-byte-at-a-time outweighs the chunking BASIC_LOAD needs for whole
 ; programs. Clobbers A,X.
 kld_read_byte:
@@ -189,10 +184,13 @@ kld_chunk_request_len:
 
 ; ----------------------------------------------------------------------------
 load:
+        and     #VIA_DDRA_BANK_BITS
+        sta     KLOAD_BANK              ; bank for $8000-$BFFF
+        sta     KLOAD_RUN_BANK          ; mapped again for a jump
+        ror     KLOAD_MODE              ; bit 7 = C: jump when done
         lda     VIA_ORA
         and     #VIA_DDRA_BANK_BITS
         sta     KLOAD_SAVED_BANK        ; put back on return or error
-        sta     KLOAD_BANK              ; default: load into the mapped bank
 
         ldx     #KLOAD_HANDLE
         jsr     kld_select_handle
@@ -210,42 +208,33 @@ load:
         jsr     kld_read_byte
         sta     KLOAD_SCRATCH           ; addr_hi, temp home until decided
 
-        ; A header address in $8000-$BFFF is followed by its bank byte.
-        cmp     #$80
-        bcc     @header_done
-        cmp     #$C0
-        jcs     kload_err_close_safe    ; $C000 and up is I/O/MIA, not RAM
-        jsr     kld_read_byte           ; bank byte
-        cmp     #32
-        jcs     kload_err_close_safe    ; only 32 banks exist (0-31)
-        sta     KLOAD_BANK
-@header_done:
-
         ; Destination = override (KPTR) if given, else the header's own.
         lda     KPTR
         ora     KPTR+1
-        bne     @override
-
+        bne     @have_dest
         lda     KLOAD_CHUNKLEN
         sta     KPTR
         lda     KLOAD_SCRATCH
         sta     KPTR+1
-        bra     @have_dest
 
-@override:
-        lda     KLOAD_SAVED_BANK        ; an override loads into the mapped bank
-        sta     KLOAD_BANK
+@have_dest:
         lda     KPTR+1
         cmp     #$C0
         jcs     kload_err_close_safe    ; $C000 and up is I/O/MIA, not RAM
 
-@have_dest:
         ; A run load may overwrite whatever IRQ_VEC points at, so mask IRQs
-        ; while copying; the final JMP re-enables them.
+        ; while copying; the final JMP re-enables them. Without a run
+        ; address it jumps to the first byte loaded.
+        bit     KLOAD_MODE
+        bpl     @dest_decided
+        sei
         lda     KTMP
         ora     KTMP+1
-        beq     @dest_decided
-        sei
+        bne     @dest_decided
+        lda     KPTR
+        sta     KTMP
+        lda     KPTR+1
+        sta     KTMP+1
 
 @dest_decided:
         ; Chunked copy, mirroring BASIC_LOAD's own 128-byte pattern
@@ -324,22 +313,20 @@ load:
         jsr     kld_cmd
         ; ignore a close failure here - we already have everything we came for
 
-        lda     KTMP
-        ora     KTMP+1
-        bne     @go_run
+        bit     KLOAD_MODE
+        bmi     @go_run
 
-        ; No run address: put back the bank mapped at entry (bank 0 for
-        ; BASIC) and return normally.
+        ; Returning: put back the bank mapped at entry (bank 0 for BASIC).
         lda     KLOAD_SAVED_BANK
         sta     VIA_ORA
         rts
 
 @go_run:
         ; Handing off for good - re-enable interrupts (matches a freshly
-        ; reset machine's state) and jump, leaving whichever bank the run
-        ; address itself needs selected (never forced back to bank 0 here -
-        ; the destination bank, if any, is exactly what the loaded program
-        ; expects to find mapped).
+        ; reset machine's state) and jump with the bank the caller asked for
+        ; mapped, whichever bank the last byte landed in.
+        lda     KLOAD_RUN_BANK
+        sta     VIA_ORA
         cli
         jmp     (KTMP)
 
@@ -367,9 +354,8 @@ kload_err_safe:
 kload_err_unsafe:
         lda     KLOAD_SAVED_BANK
         sta     VIA_ORA
-        lda     KTMP
-        ora     KTMP+1
-        beq     @fileerr
+        bit     KLOAD_MODE
+        bpl     @fileerr
         cli                             ; undo a run load's SEI
 @fileerr:
         jmp     mia_fileerr

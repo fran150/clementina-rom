@@ -276,6 +276,11 @@ MATHTBL:
         ext_keyword_rts "CLOSE",   BASIC_CLOSE
         ext_keyword_rts "BGET#",   BASIC_BGET
         ext_keyword_rts "BPUT#",   BASIC_BPUT
+        ; Appended (table #2 has no room): the bank BLOAD, BRUN, BSAVE, PEEK,
+        ; POKE and SYS use at $8000-$BFFF, and BLOAD's run form (see
+        ; clementina_extra.s).
+        ext_keyword_rts "BANK",    BASIC_BANK
+        ext_keyword_rts "BRUN",    BASIC_BRUN
         end_ext_token_tables
 
 ; ----------------------------------------------------------------------------

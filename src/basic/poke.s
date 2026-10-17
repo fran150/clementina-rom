@@ -75,7 +75,11 @@ LD6F3:
 		nop
 		nop
 .endif
+.ifdef CLEMENTINA
+        jsr     bank_peek               ; the BANK bank at $8000-$BFFF
+.else
         lda     (LINNUM),y
+.endif
         tay
 .ifdef CONFIG_PEEK_SAVE_LINNUM
         pla
@@ -93,8 +97,12 @@ POKE:
         jsr     GTNUM
         txa
         ldy     #$00
+.ifdef CLEMENTINA
+        jmp     bank_poke               ; the BANK bank at $8000-$BFFF
+.else
         sta     (LINNUM),y
         rts
+.endif
 
 ; ----------------------------------------------------------------------------
 ; "WAIT" STATEMENT

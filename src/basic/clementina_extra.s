@@ -44,8 +44,9 @@ ZP_FREE_START     = $98    ; keep in sync with src/kernel/kernel.inc
 .assert Z14 < TEMPPT, error, "Z14 shares a byte with TEMPPT"
 
 ; VIA Port A output register - selects the Extended RAM bank mapped at
-; $8000-$BFFF (PA0-PA4, see kernel.inc). BSAVE selects a bank directly
-; (it never runs through the kernel); KERN_LOAD has its own copy.
+; $8000-$BFFF (PA0-PA4, see kernel.inc). BSAVE, PEEK, POKE and SYS map the
+; BANK statement's bank (DATA_BANK, defines_clementina.s) directly, and
+; bank 0 back after; KERN_LOAD has its own copy.
 VIA_ORA           = $C001
 VIA_BANK_BITS     = %00011111 ; PA0-PA4; keep in sync with kernel.inc's
                               ; VIA_DDRA_BANK_BITS
@@ -648,16 +649,13 @@ BSAVE_BANK:
                                          ; mia_sd_* calls, not across
                                          ; FRMNUM/GETADR/GETBYT, so it is set
                                          ; only once parsing is done)
-BSAVE_SAVED_BANK:
-        .res    1                       ; bank mapped when BSAVE started, put
-                                         ; back on return or error
 BSAVE_ADDR:
         .res    2                       ; BASIC_BSAVE's parsed addr argument,
                                          ; held here (not INDEX - INDEX is
                                          ; general scratch to FRMNUM/GETBYT
                                          ; themselves, not safe to hold a live
                                          ; value across the *later* len/bank
-                                         ; arguments' own parsing) until all
+                                         ; argument's own parsing) until all
                                          ; parsing is done and it's copied
                                          ; into INDEX for the copy loop
 
@@ -4280,19 +4278,16 @@ BASIC_MIASAVE:
         jmp     mia_sd_save_trigger
 
 ; ----------------------------------------------------------------------------
-; BLOAD "path"[, run][, addr] : stream a file straight into CPU RAM, the way
-; a C64 loads a machine-code program - see docs/basic-file.md. `run` before
-; `addr` (not the more obvious load-then-run order) so the common case,
-; "load per the file's own header, then run", never needs to skip a blank
-; positional argument: `BLOAD"G",X` alone says run at X; only relocating a
-; program to somewhere other than its header's own address needs the third
-; argument too. `run` omitted or 0 means "don't run" ($0000 is never a valid
-; code entry point); `addr` omitted or 0 means "use the file's own 2-byte
-; header address" (never a valid destination either - it's zero page).
+; BLOAD "path"[, addr] : stream a file straight into CPU RAM at its header
+; address, or at `addr` (0 means the header's), then return to BASIC.
+; BRUN "path"[, run] : the same load at the header address, then jump to
+; `run`, or to the first byte loaded when `run` is left out (0 too); it never
+; returns. See docs/basic-file.md. Both load bytes from $8000 up into the
+; BANK statement's bank (DATA_BANK).
 ;
 ; Only this thin argument-parsing glue is BASIC-resident; everything from
-; here on (the actual file open/read/write and, for a `run` load, the final
-; jump) happens in kernel-resident code (KERN_LOAD, src/kernel/load.s) -
+; here on (the actual file open/read/write and, for BRUN, the final jump)
+; happens in kernel-resident code (KERN_LOAD, src/kernel/load.s) -
 ; required because a load whose destination reaches into BASIC's own
 ; resident region can end up overwriting the very code that would otherwise
 ; need to keep running to finish it. There is deliberately no BASIC-side
@@ -4302,11 +4297,32 @@ BASIC_BLOAD:
         jsr     mia_parse_path_expr    ; path -> MIA's own FS path buffer,
                                         ; not CPU RAM - safe regardless of
                                         ; what KERN_LOAD goes on to overwrite
-        stz     KTMP
-        stz     KTMP+1
         stz     KPTR
         stz     KPTR+1
+        jsr     CHRGOT                  ; peek: is a trailing ",addr" present?
+        cmp     #','
+        bne     @go
+        jsr     CHRGET
+        jsr     FRMNUM
+        jsr     GETADR                  ; LINNUM = destination override
+        cmp     #$C0
+        jcs     snd_iqerr               ; $C000 and up is not RAM
+        lda     LINNUM
+        sta     KPTR
+        lda     LINNUM+1
+        sta     KPTR+1
+@go:
+        jsr     need_end
+        lda     DATA_BANK
+        clc                             ; return when done
+        jmp     KERN_LOAD
 
+BASIC_BRUN:
+        jsr     mia_parse_path_expr
+        stz     KPTR                    ; always the header address
+        stz     KPTR+1
+        stz     KTMP                    ; 0: the first byte loaded
+        stz     KTMP+1
         jsr     CHRGOT                  ; peek: is a trailing ",run" present?
         cmp     #','
         bne     @go
@@ -4317,34 +4333,80 @@ BASIC_BLOAD:
         sta     KTMP
         lda     LINNUM+1
         sta     KTMP+1
-
-        jsr     CHRGOT                  ; peek: is a trailing ",addr" present?
-        cmp     #','
-        bne     @go
-        jsr     CHRGET
-        jsr     FRMNUM
-        jsr     GETADR                  ; LINNUM = destination override
-        lda     LINNUM
-        sta     KPTR
-        lda     LINNUM+1
-        sta     KPTR+1
 @go:
+        jsr     need_end
+        lda     DATA_BANK
+        sec                             ; jump when done
         jmp     KERN_LOAD
 
 ; ----------------------------------------------------------------------------
-; BSAVE "path", addr, len[, bank] : write `len` bytes of CPU RAM starting at
-; `addr` to a file, in the same format BLOAD reads - see docs/basic-file.md.
+; BANK n : pick the bank (0-31) that BLOAD, BRUN, BSAVE, PEEK, POKE and SYS
+; use at $8000-$BFFF. Nothing is mapped here: each of those maps it only
+; while it works in that range and maps bank 0 back, because bank 0 holds the
+; top of BASIC's memory (its strings). Warm start sets it back to 0.
+; ----------------------------------------------------------------------------
+BASIC_BANK:
+        jsr     GETBYT                  ; X = bank
+        cpx     #32
+        jcs     snd_iqerr               ; only 0-31 exist
+        stx     DATA_BANK
+        rts
+
+; need_end: SYNTAX ERROR unless the statement ends here. Commands that write
+; files or memory call it after their last argument, so an extra argument
+; (an old form, say) fails before anything is written.
+need_end:
+        jsr     CHRGOT
+        jne     SYNERR
+        rts
+
+; bank_map: if LINNUM is in $8000-$BFFF, maps the BANK bank and returns C=1;
+; otherwise returns C=0 with nothing changed. The caller maps bank 0 back
+; (stz VIA_ORA) after its access when C=1. Clobbers A.
+bank_map:
+        lda     LINNUM+1
+        cmp     #$80
+        bcc     @out                    ; below the window, C=0
+        cmp     #$C0
+        bcs     @no
+        lda     DATA_BANK
+        sta     VIA_ORA
+        sec
+        rts
+@no:    clc
+@out:   rts
+
+; bank_peek: A = the byte at LINNUM (Y=0), from the BANK bank in the window.
+bank_peek:
+        jsr     bank_map
+        lda     (LINNUM),y
+        bcc     @done
+        stz     VIA_ORA                 ; BASIC's bank 0 again
+@done:  rts
+
+; bank_poke: write A to LINNUM (Y=0), into the BANK bank in the window.
+bank_poke:
+        pha
+        jsr     bank_map
+        pla
+        sta     (LINNUM),y
+        bcc     @done
+        stz     VIA_ORA                 ; BASIC's bank 0 again
+@done:  rts
+
+; ----------------------------------------------------------------------------
+; BSAVE "path", addr, len : write `len` bytes of CPU RAM starting at `addr`
+; to a file, in the same format BLOAD reads - see docs/basic-file.md.
 ; Unlike BLOAD this is entirely BASIC-resident: reading memory to write a
 ; file never touches currently-executing code, so there's no self-overwrite
 ; hazard and no need for kernel residency.
 ;
-; For addr >= $8000 the file records a bank byte: `bank` (0-31) if given,
-; else the bank mapped now (2026-10-13: "pin it"), so a plain BLOAD puts the
-; bytes back in the bank they came from. `bank` is selected via VIA_ORA for
-; the read, and the bank mapped at entry is selected again on return or
-; error. A save that reaches $BFFF auto-advances into the next bank rather
-; than requiring the caller to split the call themselves, mirroring
-; KERN_LOAD's own auto-advance on the write side.
+; The header is the classic 2 bytes, addr only. Bytes from $8000 up come from
+; the BANK statement's bank (DATA_BANK), mapped for the whole save; bank 0,
+; BASIC's, is mapped again on return or error. A save that reaches $BFFF
+; auto-advances into the next bank rather than requiring the caller to split
+; the call themselves, mirroring KERN_LOAD's own auto-advance on the write
+; side.
 ; ----------------------------------------------------------------------------
 BASIC_BSAVE:
         jsr     FRMEVL                  ; evaluate the filename expression
@@ -4355,6 +4417,8 @@ BASIC_BSAVE:
         jsr     CHKCOM
         jsr     FRMNUM
         jsr     GETADR                  ; LINNUM = addr (16-bit)
+        cmp     #$C0
+        jcs     snd_iqerr               ; $C000 and up is not RAM
         lda     LINNUM
         sta     BSAVE_ADDR
         lda     LINNUM+1
@@ -4366,32 +4430,12 @@ BASIC_BSAVE:
         sta     VID_COUNT
         lda     LINNUM+1
         sta     VID_COUNT+1
+        jsr     need_end
 
-        lda     BSAVE_ADDR+1
-        cmp     #$80
-        bcc     @nobank                 ; addr < $8000 -> no bank argument
-
-        jsr     CHRGOT                  ; peek: is a trailing ",bank" present?
-        cmp     #','
-        bne     @nobank
-        jsr     CHRGET
-        jsr     GETBYT                  ; X = bank (0-255)
-        cpx     #32
-        jcs     snd_iqerr               ; only 0-31 exist (no bank mapped yet)
-        bra     @parsed
-@nobank:
-        ldx     #$FF                    ; none given: the mapped bank, below
-@parsed:
         ; All parsing is done - safe to set BSAVE_* and occupy INDEX now.
-        lda     VIA_ORA
-        and     #VIA_BANK_BITS
-        sta     BSAVE_SAVED_BANK        ; put back on return or error
-        cpx     #$FF
-        bne     @setbank
-        tax                             ; pin to the bank mapped now
-@setbank:
-        stx     BSAVE_BANK
-        stx     VIA_ORA
+        lda     DATA_BANK
+        sta     BSAVE_BANK
+        sta     VIA_ORA
 
         lda     BSAVE_ADDR
         sta     INDEX
@@ -4409,26 +4453,15 @@ BASIC_BSAVE:
         jsr     mia_sd_cmd
         jne     bs_fileerr
 
-        ; Header: addr_lo, addr_hi[, bank] - same shape BLOAD's file format
-        ; parses on the way in.
+        ; Header: addr_lo, addr_hi - the shape BLOAD parses on the way in.
         jsr     mia_sd_select_transfer
         lda     INDEX
         sta     IDXA_PORT
         lda     INDEX+1
         sta     IDXA_PORT
-        cmp     #$80
-        bcc     @hdr2                   ; addr < $8000 -> no bank byte
-        lda     BSAVE_BANK
-        sta     IDXA_PORT
-        lda     #3
-        bra     @hdrgo
-@hdr2:
-        lda     #2
-@hdrgo:
-        sta     TEMP1
         lda     #MIA_SD_CONTROL_REQUEST_LEN_L
         jsr     mia_sd_seek
-        lda     TEMP1
+        lda     #2
         sta     IDXA_PORT
         stz     IDXA_PORT
         lda     #MIA_CMD_FS_WRITE
@@ -4524,19 +4557,16 @@ BASIC_BSAVE:
         lda     #MIA_CMD_FS_CLOSE
         jsr     mia_sd_cmd
         jne     bs_fileerr
-        lda     BSAVE_SAVED_BANK        ; the bank mapped at entry (bank 0
-        sta     VIA_ORA                 ; for BASIC)
+        stz     VIA_ORA                 ; BASIC's bank 0 again
         rts
 
-; Both are reached only after parsing, so BSAVE_SAVED_BANK is set.
+; Both are reached only after parsing, with a save bank mapped.
 bs_bankerr:
-        lda     BSAVE_SAVED_BANK
-        sta     VIA_ORA
+        stz     VIA_ORA
         jmp     snd_iqerr
 
 bs_fileerr:
-        lda     BSAVE_SAVED_BANK
-        sta     VIA_ORA
+        stz     VIA_ORA
         jmp     mia_fileerr
 
 ; ----------------------------------------------------------------------------
@@ -4548,6 +4578,8 @@ bs_fileerr:
 ; trampoline (a permanently-resident "JSR $xxxx" instruction whose operand
 ; gets patched before each call, set up once at cold start - see init.s);
 ; SYS just reuses it directly rather than needing a trampoline of its own.
+; A target in $8000-$BFFF runs with the BANK statement's bank mapped, and
+; bank 0 is mapped back when it returns.
 ; ----------------------------------------------------------------------------
 BASIC_SYS:
         jsr     FRMNUM
@@ -4556,8 +4588,15 @@ BASIC_SYS:
         sta     JMPADRS+1
         lda     LINNUM+1
         sta     JMPADRS+2
+        jsr     bank_map                ; C=1: the BANK bank is mapped
+        lda     #0
+        rol     a
+        pha                             ; 1 = map bank 0 back afterwards
         jsr     JMPADRS
-        rts
+        pla
+        beq     @done
+        stz     VIA_ORA
+@done:  rts
 
 ; ----------------------------------------------------------------------------
 ; SEEK#n,pos : jump file n to byte offset pos (0-4294967295) - wraps FS_SEEK.

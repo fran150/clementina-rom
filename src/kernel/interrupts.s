@@ -10,10 +10,12 @@
 ; ----------------------------------------------------------------------------
 ; exram_select_basic_bank - restore the Extended RAM mapping BASIC relies on.
 ; BASIC's 16-bit workspace extends through bank 0 at $8000-$BFFF, so no other
-; bank may remain selected while the interpreter is active.
+; bank may remain selected while the interpreter is active. The BANK
+; statement's choice goes back to 0 too.
 ; ----------------------------------------------------------------------------
 exram_select_basic_bank:
         stz VIA_ORA             ; latch external RAM bank 0 first
+        stz DATA_BANK
         lda #VIA_DDRA_BANK_BITS
         sta VIA_DDRA            ; PA0-PA4 drive the SRAM bank address
         rts
