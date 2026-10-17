@@ -291,12 +291,9 @@ MATHTBL:
 ; docs/basic-file.md.
 ; ----------------------------------------------------------------------------
         init_ext2_token_tables
-        ; Video/audio asset family: *READ bulk-loads from DATA exactly as
-        ; CHRLOAD/PALLOAD/OAMLOAD/BGLOAD used to (BGLOAD itself is retired -
-        ; its interleaved nametable+attribute case is now NTREAD/NTLOAD +
-        ; ATRREAD/ATRLOAD). CHRLOAD/PALLOAD/OAMLOAD (still in the first
-        ; table, above) now mean "from an SD file" instead, matching LOAD's
-        ; real meaning; *SAVE is the reverse.
+        ; Video asset family (see docs/basic-video.md): *READ bulk-loads from
+        ; DATA, *LOAD loads a whole SD file and *SAVE writes one. CHRLOAD/
+        ; PALLOAD/OAMLOAD are in the first table, above.
         ext2_keyword_rts "NTREAD",   BASIC_NTREAD
         ext2_keyword_rts "NTLOAD",   BASIC_NTLOAD
         ext2_keyword_rts "NTSAVE",   BASIC_NTSAVE

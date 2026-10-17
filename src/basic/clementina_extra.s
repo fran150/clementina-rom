@@ -31,7 +31,7 @@ KERN_CHROUT_GLYPH = KERN_BASE + $21
 KERN_WOZMON       = KERN_BASE + $24
 KERN_SET_BACKDROP = KERN_BASE + $27
 
-; Kernel zero page ($F0-$FB, see kernel.inc) - BLOAD hands its parsed
+; Kernel zero page ($F0-$FB, see kernel.inc) - BLOAD and BRUN hand their parsed
 ; destination-override/run addresses to KERN_LOAD through these two.
 KPTR              = $F0
 KTMP              = $F2
@@ -212,9 +212,9 @@ BASIC_BCOLOR:
 ; Background/sprite/CHR/palette/video-mode control - Phase 1 (see
 ; docs/basic-video.md). These are all direct register wrappers, same shape as
 ; BCOLOR above: parse args (GETBYT/COMBYTE, IQERR on out-of-range), write the
-; MIA render-control page. Phase 2 (BGCHAR/BGLOAD/BGALOAD/OAMLOAD/CHRLOAD/
-; SPRITE and friends) needs a DATA-stream bulk-read primitive and mode-aware
-; cell addressing and lands separately.
+; MIA render-control page. Phase 2 (BGCHAR, the *READ/*LOAD/*SAVE asset
+; commands, SPRITE and friends) needs a DATA-stream bulk-read primitive and
+; mode-aware cell addressing and lands separately.
 ;
 ; Shared helpers:
 ;   vid_seek A=page offset  - bind window A to MIA_VIDEO_INDEX_RENDER_CONTROL and position
@@ -603,7 +603,7 @@ BASIC_PALETTE:
 ;     which index is selected as the anchor, and a write always lands at that
 ;     exact byte (limit/wrap only affects the *next* auto-step, which nothing
 ;     here relies on - every access re-seeks first). VID_ADDR2/vid_wr_abs2 is
-;     a second, independent stream for BGLOAD's two parallel writes
+;     a second, independent stream for BGCHAR's two parallel writes
 ;     (nametable + attribute).
 ;
 ;   vid_data_byte - pulls one value out of the current DATA position, exactly
@@ -623,7 +623,7 @@ BASIC_PALETTE:
 VID_ADDR:
         .res    3                       ; running 24-bit address
 VID_ADDR2:
-        .res    3                       ; second stream (BGLOAD's attribute half)
+        .res    3                       ; second stream (BGCHAR's attribute half)
 VID_COUNT:
         .res    2                       ; 16-bit down-counter, private to the
                                          ; bulk-load loops (LINNUM/TEMP1-3 are
@@ -632,11 +632,12 @@ VID_COUNT:
                                          ; them as their own scratch)
 VID_STRIDE:
         .res    1                       ; fields per item (1: CHRLOAD/PALLOAD;
-                                         ; 2: BGLOAD; 5: OAMLOAD)
+                                         ; 5: OAMREAD)
 VID_STREAM2:
         .res    1                       ; bitmask: field i of each item writes
                                          ; through vid_wr_abs2/VID_ADDR2 instead
-                                         ; of vid_wr_abs/VID_ADDR (BGLOAD only)
+                                         ; of vid_wr_abs/VID_ADDR (no *READ
+                                         ; uses it since BGLOAD was split)
 VID_FIELD:
         .res    1                       ; vid_bulk_run's field-within-item
                                          ; index (see vid_bulk_run - not Y,
@@ -947,8 +948,7 @@ vid_addr_add_small:
 @done:
         rts
 
-; vid_rmw_abs: read-modify-write one byte at VID_ADDR (stream 0 - not used by
-; BGLOAD). A = AND-mask (bits to clear), X = OR-value (already shifted into
+; vid_rmw_abs: read-modify-write one byte at VID_ADDR (stream 0). A = AND-mask (bits to clear), X = OR-value (already shifted into
 ; position) to combine in. VID_ADDR is left unchanged (no auto-advance) -
 ; callers position it themselves (oam_seek_n + vid_addr_add_small) first.
 vid_rmw_abs:
@@ -969,11 +969,12 @@ vid_rmw_abs:
         plp
         rts
 
-; vid_bulk_run: the loop shared by BGLOAD/CHRLOAD/PALLOAD/OAMLOAD. Callers set
-; VID_ADDR (+ VID_ADDR2 for BGLOAD), VID_COUNT (number of *items*, not fields),
-; VID_STRIDE (fields per item) and VID_STREAM2 (bitmask - bit i set means
-; field i of each item writes through vid_wr_abs2/VID_ADDR2 instead of
-; vid_wr_abs/VID_ADDR; only BGLOAD uses this), then tail-call this.
+; vid_bulk_run: the loop shared by the *READ commands (NTREAD, ATRREAD,
+; CHRREAD, PALREAD, OAMREAD). Callers set VID_ADDR, VID_COUNT (number of
+; *items*, not fields), VID_STRIDE (fields per item) and VID_STREAM2 (bitmask
+; - bit i set means field i of each item writes through vid_wr_abs2/VID_ADDR2
+; instead of vid_wr_abs/VID_ADDR; none sets it since BGLOAD was split), then
+; tail-call this.
 ; Saves/restores the real TXTPTR and Z9 (via vid_data_begin/vid_data_end)
 ; around the whole operation.
 vid_bulk_run:
@@ -1256,20 +1257,13 @@ bgc_check_row:
         jeq     snd_iqerr
         rts
 
-; BGLOAD table,cell,count : bulk-load `count` (tile,attr) pairs from the
-; current DATA position into raw BG table `table` (0-7), starting at cell
-; `cell` (0-999). Writes the nametable and attribute planes in lockstep -
-; author DATA as tile0,attr0,tile1,attr1,...
 ; ============================================================================
-; File-sourced asset I/O (see docs/basic-file.md): CHRREAD/PALREAD/OAMREAD/
-; NTREAD/ATRREAD bulk-load from the current DATA position, exactly as
-; CHRLOAD/PALLOAD/OAMLOAD/BGLOAD used to (BGLOAD itself is retired - its
-; interleaved nametable+attribute case is now two calls, NTREAD/NTLOAD +
-; ATRREAD/ATRLOAD). CHRLOAD/PALLOAD/OAMLOAD/NTLOAD/ATRLOAD now instead mean
-; "load from an SD file" (matching classic LOAD's real meaning - storage, not
-; DATA), with *SAVE siblings for the reverse. All ten share the exact address
-; computation their *READ twin already had, differing only in where the bytes
-; come from/go: vid_bulk_run for *READ, mia_sd_load_trigger/
+; Asset I/O (see docs/basic-video.md): NTREAD/ATRREAD/CHRREAD/PALREAD/OAMREAD
+; bulk-load from the current DATA position; NTLOAD/ATRLOAD/CHRLOAD/PALLOAD/
+; OAMLOAD load a whole SD file, and the *SAVE siblings write one. The file
+; commands take the path first, then where, then (saves only) how many. All
+; fifteen share the same address computation, differing only in where the
+; bytes come from/go: vid_bulk_run for *READ, mia_sd_load_trigger/
 ; mia_sd_save_trigger (this file, near BASIC_OPEN) for the rest.
 ; ============================================================================
 

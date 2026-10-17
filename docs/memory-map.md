@@ -58,7 +58,7 @@ from `$0400` through `$BFFF` — the fixed-low `KERNEL` region (jump table +
 kernel code + WozMon) excepted, which is permanently resident and never a
 load target — is *reclaimable*. A loaded machine-code program that no
 longer needs BASIC can overwrite BASIC's own resident region and heap
-simply by loading over it (`BLOAD`, §8), the same way a C64 game overwrites
+simply by loading over it (`BRUN`, §8), the same way a C64 game overwrites
 BASIC. Top-anchoring couldn't offer this: it put
 ~16 KiB of permanently-resident code (including the hottest routine in the
 system, `CHRGET`, and the jump table itself) inside the banked Extended RAM
@@ -100,11 +100,11 @@ except the `KERN_LOAD` scratch, which `src/kernel/load.s` names.
 | Addr | Name | Size | Description |
 | --- | --- | --- | --- |
 | `$F0` | `KPTR` | 2 | General 16-bit pointer. Used by `PRSTR` as the string source. Not touched by `cursor_to_idxa`, so it survives a `PRSTR → CHROUT` call chain. `KERN_LOAD` takes its destination override here. |
-| `$F2` | `KTMP` | 2 | Scratch. Holds the computed overlay offset `P = CURSOR_Y*40 + CURSOR_X`, then the 24-bit overlay address low/mid. `KERN_LOAD` takes its run address here. |
+| `$F2` | `KTMP` | 2 | Scratch. Holds the computed overlay offset `P = CURSOR_Y*40 + CURSOR_X`, then the 24-bit overlay address low/mid. `KERN_LOAD` takes its run address here (only when it jumps). |
 | `$F4` | `KCNT` | 2 | 16-bit loop counter for screen fills. |
 | `$F6` | `KCHR` | 1 | Scratch copy of the byte passed to `CHROUT`, so the routine can preserve A/X/Y while still repositioning MIA indexes. |
 | `$F7` | `KJIFFY` | 2 | Free-running 16-bit LE tick counter, `+1` per VIA Timer 1 IRQ, which is once per 6250 PHI2 cycles (PHI2 ÷ 6250: 192 Hz at the 1.2 MHz default). It follows the CPU clock, so it measures CPU work, not wall time; use `TI`/`TICKS` (MIA's timer) for wall time. Wraps silently (every 65,536 ticks, ≈5.7 min at 1.2 MHz) and stops while IRQs are masked or Timer 1's IRQ is off. Read it high, low, high, and retry if the high byte changed, since the IRQ can carry between the two bytes. Published in `kernel.inc`; read-only for clients. |
-| `$F9` | `KLOAD_BANK` | 1 | `KERN_LOAD`: current destination bank, 0 = unbanked. |
+| `$F9` | `KLOAD_BANK` | 1 | `KERN_LOAD`: the bank being written at `$8000-$BFFF`. |
 | `$FA` | `KLOAD_CHUNKLEN` | 1 | `KERN_LOAD`: bytes read this round. |
 | `$FB` | `KLOAD_SCRATCH` | 1 | `KERN_LOAD`: header and boundary scratch. |
 
@@ -176,7 +176,9 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 | `$0303` | `LAST_KEY` | 1 | Debug: last byte returned by `CHRIN`. Watch this in the emulator's memory window to confirm input before attaching a video client. |
 | `$0304` | `EDITOR_PEN` | 1 | Persistent editor pen. The pen the screen editor sets from the keyboard (ESC commands) and reasserts into `TEXT_ATTR` at each line edit, so the cursor and typed text keep their color across BASIC output (LIST, messages, styled `PRINT`). Was `KEY_COUNT` (a write-only debug counter). |
 | `$0305` | `KLOAD_SAVED_BANK` | 1 | `KERN_LOAD`: the bank mapped when it started, selected again when it returns or fails. |
-| `$0306–$0308` | — | 3 | Free. Were the unused `CINV`/`COUTV` vector stubs, removed 2026-10-11; the variables below kept their addresses. |
+| `$0306` | `DATA_BANK` | 1 | The bank BASIC's `BANK` statement picked for `BLOAD`, `BRUN`, `BSAVE`, `PEEK`, `POKE` and `SYS` at `$8000-$BFFF`. 0 at cold and warm start. |
+| `$0307` | `KLOAD_RUN_BANK` | 1 | `KERN_LOAD`: the bank it was asked to load into, mapped again before it jumps. |
+| `$0308` | `KLOAD_MODE` | 1 | `KERN_LOAD`: bit 7 set when it jumps instead of returning. |
 | `$0309` | `CURSOR_VISIBLE` | 1 | Nonzero when the software cursor glyph is currently drawn into the overlay. |
 | `$030A` | `CURSOR_SAVE_CHR` | 1 | Saved tile under the visible cursor. |
 | `$030B` | `CURSOR_SAVE_ATTR` | 1 | Saved attribute under the visible cursor. |
@@ -229,7 +231,7 @@ freely.
 | `$0412` | `KERN_PRHEX` | `A`=nibble | — | Print the low nibble of `A` as one hex digit via `CHROUT`. |
 | `$0415` | `KERN_PRBYTE` | `A`=byte | — | Print `A` as two hex digits. |
 | `$0418` | `KERN_PRSTR` | `KPTR`→str | — | Print the `$00`-terminated string at `KPTR` (max 255 bytes). |
-| `$041B` | `KERN_LOAD` | `KPTR`=dest override or 0, `KTMP`=run addr or 0 | — (or does not return, if run) | Stream a bank-aware PRG file straight into CPU RAM, entirely kernel-resident (see §8 and `docs/basic-file.md`) — the destination may overwrite BASIC's own resident code/heap, so it cannot call out to any BASIC-resident routine mid-copy. Any RAM below `$C000` is accepted; an override at `$8000-$BFFF` loads into the mapped bank, and a returning load selects the bank that was mapped before. BASIC's `BLOAD` statement stages the path (via MIA hardware state, not CPU RAM) and parses `run`/`addr` before handing off here. |
+| `$041B` | `KERN_LOAD` | `A`=bank for `$8000-$BFFF`; `C`=0 return, 1 jump; `KPTR`=dest override or 0; `KTMP`=run addr, or 0 for the first byte loaded (jump only) | — (or does not return, with `C`=1) | Stream a PRG file (2-byte address header) straight into CPU RAM, entirely kernel-resident (see §8 and `docs/basic-file.md`) — the destination may overwrite BASIC's own resident code/heap, so it cannot call out to any BASIC-resident routine mid-copy. Any RAM below `$C000` is accepted; bytes at `$8000-$BFFF` go to bank `A`, and a load past `$BFFF` continues in the next bank. A returning load selects the bank that was mapped before; a jump maps bank `A` and enables IRQs. BASIC's `BLOAD`/`BRUN` stage the path (via MIA hardware state, not CPU RAM) and pass `DATA_BANK` in `A`. |
 | `$041E` | `KERN_EDITKEY` | — | `A`=char | Full-screen line editor. Runs the interactive editor (cursor moves, overtype, gap-closing backspace `$08` / delete `$7F`, insert `$94`) on the overlay, harvests the logical line under the cursor on RETURN, and returns it one byte at a time followed by a synthetic final CR. BASIC's `GETLN` uses this for line input and treats bytes returned while `EDIT_STATE` is nonzero as raw source data; `GET` stays on `KERN_CHRIN`. |
 | `$0421` | `KERN_CHROUT_GLYPH` | `A`=tile | A/X/Y preserved | Write `A` to the console as a raw glyph at the cursor, bypassing control-code handling (so high tiles that collide with codes like `$0D` still draw). |
 | `$0424` | `KERN_WOZMON` | — | (does not return) | Enter the WOZ monitor (`src/monitor/wozmon-clementina.s`). Examine/deposit memory and run code; quit back to BASIC with `Q` (runs `KERN_WARMSTART`). Invoke from BASIC with `MON`; the older `USR` vector method still works. |
@@ -409,15 +411,16 @@ Bank 0 must remain selected while BASIC is active - the image itself
 the heap grows that far) lives in Extended RAM bank 0. Changing PA0-PA4 away
 from bank 0 while BASIC is still running would therefore replace part of the
 live heap out from under it; kernel warm start restores bank 0 before
-returning to the interpreter, and a `BLOAD` into a *different* bank never
-touches bank 0 at all (§9).
+returning to the interpreter. BASIC's `BANK` statement doesn't map a bank
+itself: `BLOAD`, `BRUN`, `BSAVE`, `PEEK`, `POKE` and `SYS` map the bank it
+picked only while they work at `$8000-$BFFF`, then map bank 0 back (§9).
 
 ### Where machine code can go
 
-`BLOAD` writes wherever its file or `addr` says (`docs/basic-file.md`); the
-choice of a safe place is the programmer's.
+`BLOAD` and `BRUN` write wherever the file or `addr` says
+(`docs/basic-file.md`); the choice of a safe place is the programmer's.
 
-- **Code that takes over the machine** (loaded with `BLOAD`'s `run`) may
+- **Code that takes over the machine** (started with `BRUN`) may
   overwrite BASIC: anywhere from `$1600` up. Below that is the kernel, which
   holds the loader itself, so a load there crashes mid-copy. `KERNEL`'s region
   ends at `$15FF` however the kernel grows. The SDK templates use `$1800`.
@@ -437,10 +440,10 @@ selected by VIA Port A bits PA0–PA4 (32 banks). Bank 0 holds the upper part
 of BASIC's heap (§8) whenever it grows past `$8000` — it is not ordinary
 free storage the way banks 1–31 are, and must be selected again before
 resuming BASIC after using any other bank. Banks 1–31 are entirely free for
-bank-aware access: `BLOAD`/`BSAVE`'s bank-aware PRG format (`docs/basic-file.md`)
-targets them directly, as do a RAM disk, paged data/assets, or large buffers.
-`BLOAD` and `BSAVE` also accept bank 0, which is safe above a lowered `MEMSIZ`
-(§8).
+bank-aware access: BASIC's `BANK n` picks one for `BLOAD`, `BRUN`, `BSAVE`,
+`PEEK`, `POKE` and `SYS` (`docs/basic-file.md`), and a RAM disk, paged
+data/assets, or large buffers can live there too. `BANK 0` is safe above a
+lowered `MEMSIZ` (§8).
 
 ---
 

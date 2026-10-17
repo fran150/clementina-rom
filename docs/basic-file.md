@@ -38,17 +38,19 @@ repo, `docs/sd.md` and `docs/sd-programmer-guide.md`.
 | `CD "path"` | — | Change the current directory. |
 | `DIR` | — | List the current directory. |
 | `DIR "path"` | — | List `path` without changing the current directory. |
-| `MIALOAD "path", addr[, len[, offset[, rows, filestride, ramstride]]]` | `addr`, `len`, `ramstride` 0–16777215; `offset`, `filestride` 0–4294967295; `rows` 0–65535 | Load a file straight into MIA RAM at a raw address, no CPU byte-touching. Omitted/zero `len` reads until EOF or the end of MIA RAM. `offset` starts that far into the file. `rows`, `filestride` and `ramstride` load a rectangle: `rows` rows of `len` bytes, each `filestride` bytes further into the file and `ramstride` bytes further on in MIA RAM. See [Partial loads](#partial-loads). |
-| `MIASAVE "path", addr, len` | | Save `len` bytes of MIA RAM starting at `addr` to a file. |
+| `MIALOAD "path", addr` | `addr` 0–16777215 | Load a whole file straight into MIA RAM at a raw address, no CPU byte-touching. It stops at the end of the file or of MIA RAM. MIA files are raw bytes with no header, so `addr` is required. |
+| `MIASAVE "path", addr, len` | `addr`, `len` 0–16777215 | Save `len` bytes of MIA RAM starting at `addr` to a file. |
 | `LOAD "path"` | — | Replace the current program with a saved one and clear variables. Ends at the `READY.` prompt, also when a program runs it (that program stops there). |
 | `SAVE "path"` | — | Save the current program. |
-| `BLOAD "path"[, run][, addr]` | `run`/`addr` 16-bit CPU addresses | Load a file straight into CPU RAM at the address its own header specifies (or `addr`, if given), the way a C64 loads a game. `run`, if given and nonzero, jumps there once loaded instead of returning. |
-| `BSAVE "path", addr, len[, bank]` | `addr`/`len` 16-bit, `bank` 0–31 | Save `len` bytes of CPU RAM starting at `addr` to a file, in the format `BLOAD` reads. For `addr >= $8000` the file records `bank`, or the bank mapped now if `bank` is omitted. |
+| `BANK n` | `n` 0–31 | Pick the bank that `BLOAD`, `BRUN`, `BSAVE`, `PEEK`, `POKE` and `SYS` use at `$8000-$BFFF`. 0 at power-on and warm start. |
+| `BLOAD "path"[, addr]` | `addr` below `$C000` | Load a file straight into CPU RAM at the address in its header (or `addr`, if given), then return to BASIC. |
+| `BRUN "path"[, run]` | `run` 0–65535 | Load a file at the address in its header and jump to `run`, or to the first byte loaded when `run` is left out. It never returns. |
+| `BSAVE "path", addr, len` | `addr` below `$C000`, `len` 0–65535 | Save `len` bytes of CPU RAM starting at `addr` to a file, in the format `BLOAD` reads. |
 | `SYS addr` | `addr` 16-bit CPU address | Call a machine-code routine at `addr` (`JSR`) and continue with the next statement once it returns (`RTS`). |
 
 `OPEN`, `CLOSE`, `BGET#`, `BPUT#`, `SEEK#`, `EOF`, `KILL`, `MKDIR`, `RMDIR`,
-`NAME`, `CD`, `DIR`, `LOAD`, `SAVE`, `BLOAD`, `BSAVE`, and `SYS` are reserved
-words. `BGET#`, `BPUT#` and `SEEK#` are single keywords that include the `#`,
+`NAME`, `CD`, `DIR`, `LOAD`, `SAVE`, `BANK`, `BLOAD`, `BRUN`, `BSAVE`, and
+`SYS` are reserved words. `BGET#`, `BPUT#` and `SEEK#` are single keywords that include the `#`,
 so write them with no space before it: `BGET#1,V` works, `BGET #1,V` raises
 `SYNTAX ERROR`. `CLOSE #n`, `FLUSH #n` and `OPEN ... AS #n` take a space.
 
@@ -109,9 +111,9 @@ current program survives.
 same file I/O this whole page describes — close it first if a program has it
 open when calling either.
 
-## Loading and running machine code (BLOAD/BSAVE/SYS)
+## Loading and running machine code (BANK/BLOAD/BRUN/BSAVE/SYS)
 
-`BLOAD`/`BSAVE` load and save raw CPU-RAM byte ranges — not BASIC's
+`BLOAD`/`BRUN`/`BSAVE` load and save raw CPU-RAM byte ranges — not BASIC's
 tokenized text (that's `LOAD`/`SAVE` above), and not MIA RAM (that's
 `MIALOAD`/`MIASAVE`) — the way a C64 loads a game or a sprite/font asset.
 `SYS` then transfers control into loaded code and, unlike `USR()` (an
@@ -121,114 +123,114 @@ against any address at any time as a plain statement.
 ### File format (PRG)
 
 ```text
-[addr_lo][addr_hi]                 addr < $8000  -> plain CPU RAM, unbanked
-[addr_lo][addr_hi][bank]           addr in $8000-$BFFF -> bank byte 0-31
-                                    (bank 0 holds the top of BASIC's heap,
-                                    §8/§9 of docs/memory-map.md)
+[addr_lo][addr_hi] then the data
 ```
 
-The address itself signals which shape follows, so a plain unbanked file is
-byte-identical to the classic 2-byte-header format. `BSAVE` writes exactly
-the header shape `BLOAD` expects back.
+The classic 2-byte header: the load address, then the bytes. `BSAVE` writes
+exactly the format `BLOAD` and `BRUN` read. A file doesn't record a bank;
+`BANK` picks it when the file is loaded.
 
-### `BLOAD "path"[, run][, addr]`
+### `BANK n`
 
-Loads `path` into CPU RAM at the address its own 2-or-3-byte header
-specifies, or at `addr` instead if given (`addr` omitted or `0` means "use
-the file's own header address" — `0` is never a valid destination anyway,
-it's zero page). `run`, given before `addr` so the common case ("load per
-the file's own header, then run") never needs a blank placeholder argument,
-jumps to that address once loaded instead of returning to BASIC — `run`
-omitted or `0` means "don't run" (`0` is never a valid code entry point).
+`$8000-$BFFF` is the banked window: 32 banks of 16 KiB (0–31). While BASIC
+runs, bank 0 is always mapped there, because the top of BASIC's memory, where
+its strings live, is in bank 0 (§8/§9 of docs/memory-map.md). `BANK n` doesn't
+map anything itself; it picks the bank that `BLOAD`, `BRUN`, `BSAVE`, `PEEK`,
+`POKE` and `SYS` use at `$8000-$BFFF`. Each of them maps it only while it
+works there, then maps bank 0 back, so strings keep working in between. It is
+0 at power-on and warm start. `BANK 32` and up raise `ILLEGAL QUANTITY`.
 
-**Where the bytes go is the programmer's choice.** `BLOAD` writes to any
-CPU RAM below `$C000` (only I/O and the MIA registers, `$C000` and up, are
-refused) and does not check what lives there. A load that returns to BASIC
-must leave the kernel and BASIC intact; `docs/memory-map.md` §8 ("Where
-machine code can go") lists the safe places: `$0280-$02F7`, banks 1-31, and
-bank 0 above a lowered `MEMSIZ`. A program that takes over with `run` may
-overwrite BASIC, from `$1600` up.
+```basic
+10 BANK 3:POKE 32768,42:PRINT PEEK(32768)   ' bank 3's first byte
+20 A$="STILL"+" FINE":BANK 0                ' strings are in bank 0
+```
 
-An `addr` override replaces the file's address and, for a banked file, its
-bank: an override in `$8000-$BFFF` loads into the bank that is mapped (bank 0
-while BASIC runs). A load without `run` selects the previously mapped bank
-again before returning. A load with `run` masks interrupts while it copies,
-since it may overwrite an IRQ handler, and enables them before jumping.
+Don't switch banks yourself with `POKE 49153,n`: that hides BASIC's strings
+until bank 0 is mapped again.
+
+### `BLOAD "path"[, addr]`
+
+Loads `path` into CPU RAM at the address in its header, or at `addr` instead
+if given (`addr` omitted or `0` means the header's address), then returns to
+BASIC. Bytes from `$8000` up go to the `BANK` bank.
+
+### `BRUN "path"[, run]`
+
+Loads `path` at the address in its header (into the `BANK` bank from `$8000`
+up), then jumps to `run`, or to the first byte loaded when `run` is left out
+(or `0`), with the `BANK` bank mapped. It never returns, so the program may
+overwrite BASIC. To load somewhere other than the header's address, use
+`BLOAD`. It masks interrupts while it copies, since the file may overwrite an
+IRQ handler, and enables them before jumping.
+
+**Where the bytes go is the programmer's choice.** `BLOAD` and `BRUN` write
+to any CPU RAM below `$C000` (only I/O and the MIA region, `$C000` and up,
+are refused, with `FILE I/O ERROR` for a header address and `ILLEGAL
+QUANTITY` for an `addr`) and don't check what lives there. A `BLOAD` must
+leave the kernel and BASIC intact; `docs/memory-map.md` §8 ("Where machine
+code can go") lists the safe places: `$0280-$02F7`, banks 1-31, and bank 0
+above a lowered `MEMSIZ`. A program started with `BRUN` may overwrite BASIC,
+from `$1600` up.
 
 A payload that reaches the top of a bank (`$BFFF`) auto-advances into the
 next bank rather than requiring the caller to split the load across bank
 boundaries themselves — the same reason a payload can start a few bytes
 before `$C000` and still land correctly. A payload that runs past `$7FFF`
-from base RAM continues into the mapped bank. Loading is entirely kernel-resident
-(`KERN_LOAD`, `src/kernel/load.s`): the destination may overwrite BASIC's
-own code as it copies, so it cannot call out to any BASIC-resident routine
-mid-copy.
+from base RAM continues into the `BANK` bank. Loading is entirely
+kernel-resident (`KERN_LOAD`, `src/kernel/load.s`): the destination may
+overwrite BASIC's own code as it copies, so it cannot call out to any
+BASIC-resident routine mid-copy.
 
-### `BSAVE "path", addr, len[, bank]`
+### `BSAVE "path", addr, len`
 
 Saves `len` bytes of CPU RAM starting at `addr` to a file, in exactly the
 format `BLOAD` reads back. Unlike `BLOAD`, `len` is mandatory (there's no
 "file's own length" to fall back on) — the same asymmetry classic BASIC's
-`BLOAD`/`BSAVE` have. For `addr >= $8000` the file records a bank byte:
-`bank` (0–31) if given, else the bank mapped when `BSAVE` runs, so a plain
-`BLOAD` puts the bytes back in the bank they came from whatever is mapped
-then (an address override still loads into the mapped bank). `BSAVE` maps
-`bank` only while it reads and maps back the previous bank afterwards. From
-BASIC, name the bank: switching banks yourself with `POKE 49153,n` hides the
-top of BASIC's heap, where its strings live, until bank 0 is mapped again. A
-length that reaches the top of a bank auto-advances into the next bank,
-mirroring `BLOAD`'s own auto-advance, so a payload that spans a bank boundary
-round-trips through `BLOAD`/`BSAVE` unchanged; a save that starts below
-`$8000` reads on through the mapped bank the same way. Reading memory to write a
-file never touches currently-executing code, so `BSAVE` (unlike `BLOAD`) is
-entirely BASIC-resident — no self-overwrite hazard to guard against.
+`BLOAD`/`BSAVE` have. Bytes from `$8000` up come from the `BANK` bank, which
+`BSAVE` maps only while it reads. A length that reaches the top of a bank
+auto-advances into the next bank, mirroring `BLOAD`'s own auto-advance, so a
+payload that spans a bank boundary round-trips through `BLOAD`/`BSAVE`
+unchanged; a save that starts below `$8000` reads on through the `BANK` bank
+the same way. Reading memory to write a file never touches currently-executing
+code, so `BSAVE` (unlike `BLOAD`) is entirely BASIC-resident — no
+self-overwrite hazard to guard against.
 
 ### `SYS addr`
 
 Calls the machine-code routine at `addr` (`JSR`) and, once it returns
 (`RTS`), continues with the next statement — a plain, repeatable control
-transfer, not a bound expression vector like `USR()`. A routine meant to
-take over the machine permanently (the way `BLOAD ,run` loads a whole game)
-should be entered through `BLOAD`'s own `run` argument instead; `SYS` is for
-calling a subroutine and getting control back.
+transfer, not a bound expression vector like `USR()`. A routine at
+`$8000-$BFFF` runs with the `BANK` bank mapped, and bank 0 is mapped back
+when it returns. A program meant to take over the machine permanently should
+be started with `BRUN` instead; `SYS` is for calling a subroutine and getting
+control back.
 
 ### Example
 
 ```basic
-10 BLOAD "SPRITES.PRG"           ' load per its own header address
-20 BLOAD "GAME.PRG", 24576       ' run at $6000 once loaded (relocated)
+10 BANK 1:BLOAD "LEVELS.PRG"     ' bank 1 from $8000 up
+20 BANK 2:BLOAD "MUSIC.PRG"      ' bank 2
+30 BANK 0:BRUN "GAME.PRG"        ' load per its header, run its first byte
 ```
 
 ```basic
 10 FOR I=0 TO 15: POKE 24576+I,I+1: NEXT I
-20 BSAVE "DATA.PRG", 24576, 16   ' unbanked, no bank argument needed
-30 BSAVE "BANKED.PRG", 32768, 16384, 1   ' whole bank 1
+20 BSAVE "DATA.PRG", 24576, 16
+30 BANK 1:BSAVE "BANK1.PRG", 32768, 16384   ' the whole of bank 1
 ```
 
 ```basic
-10 BLOAD "ROUTINE.PRG"           ' loaded somewhere that doesn't need `run`
-20 SYS 24576                     ' call it
+10 BLOAD "ROUTINE.PRG", 640      ' a short routine at $0280
+20 SYS 640                       ' call it
 30 PRINT "back in BASIC"         ' SYS returned - this line still runs
 ```
 
-## Partial loads
+## Loading part of a file
 
-`MIALOAD` with an `offset` or a `rows` argument loads part of a file with MIA's
-`FS_LOAD_PART` command (SD protocol 7). The plain forms use `FS_LOAD_TO_MIA_RAM`
-as before, except that a `len` over 65535 now works too.
-
-```basic
-10 REM bytes 256-295 of the file, to MIA RAM 98304
-20 MIALOAD "LEVEL1.BG",98304,40,256
-30 REM the same 40 columns from each of 25 rows of a 1024-wide map, packed
-40 MIALOAD "LEVEL1.BG",98304,40,256,25,1024,40
-```
-
-- A `len` of 0 with an `offset` loads to the end of the file, or to the end of
-  MIA RAM.
-- A load that runs into the end of the file stops there without an error.
-- A rectangle whose last row would run past the top of MIA RAM fails with a file
-  error before anything is written. So does one with a `len` of 0.
+`MIALOAD` always loads the whole file. To use part of one, load it into free
+MIA RAM and copy the part with `MCOPY`, which also copies rectangles
+(docs/basic-memory.md). Assembly programs can load part of a file directly
+with MIA's `FS_LOAD_PART` command (SD protocol 7).
 
 ## Video/audio asset family
 
@@ -238,9 +240,10 @@ straight from/to a file — the file-sourced forms share this same SD/FS layer
 and use the same error handling as the statements above. See
 `docs/basic-video.md` for the full statement list (`NTREAD`/`NTLOAD`/
 `NTSAVE`, `ATRREAD`/`ATRLOAD`/`ATRSAVE`, `CHRREAD`/`CHRLOAD`/`CHRSAVE`,
-`PALREAD`/`PALLOAD`/`PALSAVE`, `OAMREAD`/`OAMLOAD`/`OAMSAVE`); the `*LOAD`/
-`*SAVE` forms take a trailing `"file"` argument, `*READ` instead continues
-reading from the current `DATA` position.
+`PALREAD`/`PALLOAD`/`PALSAVE`, `OAMREAD`/`OAMLOAD`/`OAMSAVE`). The `*LOAD`/
+`*SAVE` forms take the `"file"` first, then where: `CHRLOAD "FONT.CHR",1`.
+Loads take the whole file; `*READ` instead continues reading from the current
+`DATA` position.
 
 ## Notes and limits
 
