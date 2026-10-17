@@ -59,7 +59,7 @@ same as `COLOR`), write MIA's render-control page or palette RAM.
 | `SPRCOUNT n` | `n` 0-255 | Highest OAM index the renderer scans each frame. |
 | `CHRMODE bank,flag` | `bank` 0-7, `flag` 0/non-zero | Mark a CHR bank as 1bpp (`flag<>0`) or 3bpp (`flag=0`). |
 | `CHRPLANE bg,spr,ovl` | each 0-3 | Which of a 1bpp bank's 3 planes each layer decodes (only matters for banks `CHRMODE` marked 1bpp). |
-| `PALETTE bank,index,r,g,b` | `bank` 0-15, `index` 0-7, `r`/`b` 0-31, `g` 0-63 | Write one palette RGB565 entry directly (palette fades/cycling at runtime - nothing else can change palette RAM after boot). |
+| `PALETTE bank,index,r,g,b` | `bank` 0-15, `index` 0-7, `r`/`b` 0-31, `g` 0-63 | Write one palette RGB565 entry directly (palette fades/cycling at runtime). `PALREAD` and `PALLOAD` write palette RAM too, many bytes at a time. |
 
 Boot state (`video_init`, `src/kernel/video.s`): overlay layer on, background
 and sprites off; CHR banks 0/1 both 1bpp (overlay plane 0); primary/alternate overlay banks
@@ -97,7 +97,7 @@ real `?OUT OF DATA` error when the program runs out), then re-evaluate `Z9` via
 `GETBYT` to get it as a byte. `Z9`'s value is saved and restored around the
 whole bulk command, so nothing user-visible changes except that a variable
 named `Z9` exists afterward - avoid using it in a program that also calls one
-of the `*LOAD` statements below.
+of the `*READ` statements below.
 
 `vid_data_byte` calls into the interpreter's own `READ`/`GETBYT`, which use `Y`
 freely as working state - **`Y` does not survive a call to it** (nor to
@@ -127,14 +127,41 @@ fresh right before the one instruction that needs it.
 | `SPRFLIP n,fx,fy` | each 0/non-zero | Change one sprite's flip-X/flip-Y only. |
 | `SPRPRI n,p` | 0/non-zero | Change one sprite's priority only. |
 
-**Renamed in the file-I/O work (2026-09):** these five were originally named
-`BGLOAD`/`CHRLOAD`/`PALLOAD`/`OAMLOAD` (`BGLOAD` doing both halves of a BG
-table in one interleaved call). The bare names now mean "load from an SD
-file" instead - matching `LOAD`'s real meaning - with `NTLOAD`/`CHRLOAD`/
-`PALLOAD`/`OAMLOAD` and their `*SAVE` counterparts documented in
-[docs/basic-file.md](basic-file.md) alongside the rest of Clementina's file
-I/O. The table above is current; `BGLOAD`/the old `CHRLOAD` etc. no longer
-exist as such.
+### From files
+
+These take the path first, then where, then (saves only) how many. Loads take
+the whole file, and a long file runs on into the next table or bank. A cell,
+offset or index left out is 0. A save's count left out means the rest of the
+table, bank or sprite list from that point. An argument out of range raises
+`ILLEGAL QUANTITY`, and an extra one `SYNTAX ERROR`, before any file is read
+or written. File errors raise `FILE I/O ERROR` (docs/basic-file.md).
+
+| Statement | Arguments | Effect |
+| --- | --- | --- |
+| `NTLOAD "file",table[,cell]` | `table` 0-7, `cell` 0-999 | Load a file into raw BG table `table`'s nametable (tile bytes) from `cell` on. |
+| `ATRLOAD "file",table[,cell]` | same | Load a file into a table's attribute plane. |
+| `CHRLOAD "file",bank[,offset]` | `bank` 0-7, `offset` 0-6143 | Load a file into CHR bank `bank` from byte `offset` on. |
+| `PALLOAD "file",bank[,offset]` | `bank` 0-15, `offset` 0-15 | Load raw RGB565 bytes into palette RAM, palette bank `bank` from byte `offset` on. |
+| `OAMLOAD "file"[,n]` | `n` 0-255 | Load 5-byte sprite records (`tile,xlo,ylo,attr,ext`) into OAM from sprite `n` on. |
+| `NTSAVE "file",table[,cell[,count]]` | as `NTLOAD`, `count` 0-65535 bytes | Save `count` tile bytes, or the rest of the 1000-cell table. |
+| `ATRSAVE "file",table[,cell[,count]]` | same | Save `count` attribute bytes, or the rest of the table. |
+| `CHRSAVE "file",bank[,offset[,count]]` | as `CHRLOAD`, `count` 0-65535 bytes | Save `count` bytes, or the rest of the 6144-byte bank. |
+| `PALSAVE "file",bank[,offset[,count]]` | as `PALLOAD`, `count` 0-65535 bytes | Save `count` palette bytes, or the rest of the 16-byte bank. |
+| `OAMSAVE "file"[,n[,count]]` | as `OAMLOAD`, `count` 0-255 sprites | Save `count` sprite records, or the rest of the 256. |
+
+```basic
+10 CHRLOAD "TILES.CHR",2          ' the whole file into CHR bank 2 and on
+20 PALLOAD "GAME.PAL",0           ' palette banks 0 and up
+30 NTLOAD "LEVEL1.NT",0           ' table 0, from cell 0
+40 CHRSAVE "BANK2.CHR",2          ' all 6144 bytes of bank 2
+50 OAMSAVE "SPR.OAM",0,8          ' sprites 0-7, 40 bytes
+```
+
+**Renamed in the file-I/O work (2026-09):** the `*READ` statements were
+originally named `BGLOAD`/`CHRLOAD`/`PALLOAD`/`OAMLOAD` (`BGLOAD` doing both
+halves of a BG table in one interleaved call). The bare names now mean "load
+from an SD file" instead - matching `LOAD`'s real meaning. `BGLOAD` no longer
+exists.
 
 ### `BGCHAR`'s mode math
 
@@ -261,8 +288,13 @@ layout):
   design: both docs and the `; as OAMREAD` comments already promised
   matching units. Fixed by multiplying `count` by 5 (new `oam_count_x5`
   helper, shared by `OAMLOAD`/`OAMSAVE`) before it reaches
-  `mia_sd_load_trigger`/`mia_sd_save_trigger`, so `OAMLOAD 0,4,"S.OAM"` now
-  loads 4 sprites (20 bytes), matching `OAMREAD 0,4`.
+  `mia_sd_load_trigger`/`mia_sd_save_trigger`, so `OAMLOAD 0,4,"S.OAM"` (the
+  path-last form of the time) loaded 4 sprites (20 bytes), matching
+  `OAMREAD 0,4`.
+- **Path first - IMPLEMENTED (2026-10-17, G12).** The ten file commands take
+  the path first, loads take the whole file, and a save's count is optional
+  (the rest of the table). They used to take the path last with a required
+  count (`CHRLOAD 1,100,3,"FONT.BIN"`). See "From files" above.
 
 ## Overlay regression tests
 

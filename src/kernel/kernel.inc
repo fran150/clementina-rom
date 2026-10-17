@@ -207,8 +207,12 @@ EDITOR_PEN         = KVARS + $04   ; persistent editor pen: the pen the screen
                                    ; (Was KEY_COUNT, a write-only debug counter.)
 KLOAD_SAVED_BANK   = KVARS + $05   ; KERN_LOAD: bank mapped at entry, put back
                                    ; on return or error
-                                   ; KVARS + $06..$08 free (were the unused CINV/COUTV
-                                   ; vector stubs, removed 2026-10-11).
+DATA_BANK          = KVARS + $06   ; the bank BASIC's BANK statement picked for
+                                   ; BLOAD, BRUN, BSAVE, PEEK, POKE and SYS at
+                                   ; $8000-$BFFF; 0 at cold and warm start
+KLOAD_RUN_BANK     = KVARS + $07   ; KERN_LOAD: the bank it was asked to load
+                                   ; into, mapped again for the jump
+KLOAD_MODE         = KVARS + $08   ; KERN_LOAD: bit 7 set = jump when done
 CURSOR_VISIBLE     = KVARS + $09   ; nonzero when cursor glyph is drawn
 CURSOR_SAVE_CHR    = KVARS + $0A   ; character under visible cursor
 CURSOR_SAVE_ATTR   = KVARS + $0B   ; attribute under visible cursor

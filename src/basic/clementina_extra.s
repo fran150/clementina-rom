@@ -31,7 +31,7 @@ KERN_CHROUT_GLYPH = KERN_BASE + $21
 KERN_WOZMON       = KERN_BASE + $24
 KERN_SET_BACKDROP = KERN_BASE + $27
 
-; Kernel zero page ($F0-$FB, see kernel.inc) - BLOAD hands its parsed
+; Kernel zero page ($F0-$FB, see kernel.inc) - BLOAD and BRUN hand their parsed
 ; destination-override/run addresses to KERN_LOAD through these two.
 KPTR              = $F0
 KTMP              = $F2
@@ -44,8 +44,9 @@ ZP_FREE_START     = $98    ; keep in sync with src/kernel/kernel.inc
 .assert Z14 < TEMPPT, error, "Z14 shares a byte with TEMPPT"
 
 ; VIA Port A output register - selects the Extended RAM bank mapped at
-; $8000-$BFFF (PA0-PA4, see kernel.inc). BSAVE selects a bank directly
-; (it never runs through the kernel); KERN_LOAD has its own copy.
+; $8000-$BFFF (PA0-PA4, see kernel.inc). BSAVE, PEEK, POKE and SYS map the
+; BANK statement's bank (DATA_BANK, defines_clementina.s) directly, and
+; bank 0 back after; KERN_LOAD has its own copy.
 VIA_ORA           = $C001
 VIA_BANK_BITS     = %00011111 ; PA0-PA4; keep in sync with kernel.inc's
                               ; VIA_DDRA_BANK_BITS
@@ -211,9 +212,9 @@ BASIC_BCOLOR:
 ; Background/sprite/CHR/palette/video-mode control - Phase 1 (see
 ; docs/basic-video.md). These are all direct register wrappers, same shape as
 ; BCOLOR above: parse args (GETBYT/COMBYTE, IQERR on out-of-range), write the
-; MIA render-control page. Phase 2 (BGCHAR/BGLOAD/BGALOAD/OAMLOAD/CHRLOAD/
-; SPRITE and friends) needs a DATA-stream bulk-read primitive and mode-aware
-; cell addressing and lands separately.
+; MIA render-control page. Phase 2 (BGCHAR, the *READ/*LOAD/*SAVE asset
+; commands, SPRITE and friends) needs a DATA-stream bulk-read primitive and
+; mode-aware cell addressing and lands separately.
 ;
 ; Shared helpers:
 ;   vid_seek A=page offset  - bind window A to MIA_VIDEO_INDEX_RENDER_CONTROL and position
@@ -602,7 +603,7 @@ BASIC_PALETTE:
 ;     which index is selected as the anchor, and a write always lands at that
 ;     exact byte (limit/wrap only affects the *next* auto-step, which nothing
 ;     here relies on - every access re-seeks first). VID_ADDR2/vid_wr_abs2 is
-;     a second, independent stream for BGLOAD's two parallel writes
+;     a second, independent stream for BGCHAR's two parallel writes
 ;     (nametable + attribute).
 ;
 ;   vid_data_byte - pulls one value out of the current DATA position, exactly
@@ -622,7 +623,7 @@ BASIC_PALETTE:
 VID_ADDR:
         .res    3                       ; running 24-bit address
 VID_ADDR2:
-        .res    3                       ; second stream (BGLOAD's attribute half)
+        .res    3                       ; second stream (BGCHAR's attribute half)
 VID_COUNT:
         .res    2                       ; 16-bit down-counter, private to the
                                          ; bulk-load loops (LINNUM/TEMP1-3 are
@@ -631,11 +632,12 @@ VID_COUNT:
                                          ; them as their own scratch)
 VID_STRIDE:
         .res    1                       ; fields per item (1: CHRLOAD/PALLOAD;
-                                         ; 2: BGLOAD; 5: OAMLOAD)
+                                         ; 5: OAMREAD)
 VID_STREAM2:
         .res    1                       ; bitmask: field i of each item writes
                                          ; through vid_wr_abs2/VID_ADDR2 instead
-                                         ; of vid_wr_abs/VID_ADDR (BGLOAD only)
+                                         ; of vid_wr_abs/VID_ADDR (no *READ
+                                         ; uses it since BGLOAD was split)
 VID_FIELD:
         .res    1                       ; vid_bulk_run's field-within-item
                                          ; index (see vid_bulk_run - not Y,
@@ -648,16 +650,13 @@ BSAVE_BANK:
                                          ; mia_sd_* calls, not across
                                          ; FRMNUM/GETADR/GETBYT, so it is set
                                          ; only once parsing is done)
-BSAVE_SAVED_BANK:
-        .res    1                       ; bank mapped when BSAVE started, put
-                                         ; back on return or error
 BSAVE_ADDR:
         .res    2                       ; BASIC_BSAVE's parsed addr argument,
                                          ; held here (not INDEX - INDEX is
                                          ; general scratch to FRMNUM/GETBYT
                                          ; themselves, not safe to hold a live
                                          ; value across the *later* len/bank
-                                         ; arguments' own parsing) until all
+                                         ; argument's own parsing) until all
                                          ; parsing is done and it's copied
                                          ; into INDEX for the copy loop
 
@@ -949,8 +948,7 @@ vid_addr_add_small:
 @done:
         rts
 
-; vid_rmw_abs: read-modify-write one byte at VID_ADDR (stream 0 - not used by
-; BGLOAD). A = AND-mask (bits to clear), X = OR-value (already shifted into
+; vid_rmw_abs: read-modify-write one byte at VID_ADDR (stream 0). A = AND-mask (bits to clear), X = OR-value (already shifted into
 ; position) to combine in. VID_ADDR is left unchanged (no auto-advance) -
 ; callers position it themselves (oam_seek_n + vid_addr_add_small) first.
 vid_rmw_abs:
@@ -971,11 +969,12 @@ vid_rmw_abs:
         plp
         rts
 
-; vid_bulk_run: the loop shared by BGLOAD/CHRLOAD/PALLOAD/OAMLOAD. Callers set
-; VID_ADDR (+ VID_ADDR2 for BGLOAD), VID_COUNT (number of *items*, not fields),
-; VID_STRIDE (fields per item) and VID_STREAM2 (bitmask - bit i set means
-; field i of each item writes through vid_wr_abs2/VID_ADDR2 instead of
-; vid_wr_abs/VID_ADDR; only BGLOAD uses this), then tail-call this.
+; vid_bulk_run: the loop shared by the *READ commands (NTREAD, ATRREAD,
+; CHRREAD, PALREAD, OAMREAD). Callers set VID_ADDR, VID_COUNT (number of
+; *items*, not fields), VID_STRIDE (fields per item) and VID_STREAM2 (bitmask
+; - bit i set means field i of each item writes through vid_wr_abs2/VID_ADDR2
+; instead of vid_wr_abs/VID_ADDR; none sets it since BGLOAD was split), then
+; tail-call this.
 ; Saves/restores the real TXTPTR and Z9 (via vid_data_begin/vid_data_end)
 ; around the whole operation.
 vid_bulk_run:
@@ -1258,20 +1257,13 @@ bgc_check_row:
         jeq     snd_iqerr
         rts
 
-; BGLOAD table,cell,count : bulk-load `count` (tile,attr) pairs from the
-; current DATA position into raw BG table `table` (0-7), starting at cell
-; `cell` (0-999). Writes the nametable and attribute planes in lockstep -
-; author DATA as tile0,attr0,tile1,attr1,...
 ; ============================================================================
-; File-sourced asset I/O (see docs/basic-file.md): CHRREAD/PALREAD/OAMREAD/
-; NTREAD/ATRREAD bulk-load from the current DATA position, exactly as
-; CHRLOAD/PALLOAD/OAMLOAD/BGLOAD used to (BGLOAD itself is retired - its
-; interleaved nametable+attribute case is now two calls, NTREAD/NTLOAD +
-; ATRREAD/ATRLOAD). CHRLOAD/PALLOAD/OAMLOAD/NTLOAD/ATRLOAD now instead mean
-; "load from an SD file" (matching classic LOAD's real meaning - storage, not
-; DATA), with *SAVE siblings for the reverse. All ten share the exact address
-; computation their *READ twin already had, differing only in where the bytes
-; come from/go: vid_bulk_run for *READ, mia_sd_load_trigger/
+; Asset I/O (see docs/basic-video.md): NTREAD/ATRREAD/CHRREAD/PALREAD/OAMREAD
+; bulk-load from the current DATA position; NTLOAD/ATRLOAD/CHRLOAD/PALLOAD/
+; OAMLOAD load a whole SD file, and the *SAVE siblings write one. The file
+; commands take the path first, then where, then (saves only) how many. All
+; fifteen share the same address computation, differing only in where the
+; bytes come from/go: vid_bulk_run for *READ, mia_sd_load_trigger/
 ; mia_sd_save_trigger (this file, near BASIC_OPEN) for the rest.
 ; ============================================================================
 
@@ -1308,61 +1300,31 @@ BASIC_NTREAD:
         sta     VID_STREAM2
         jmp     vid_bulk_run
 
-; NTLOAD table,cell,count,"file" : as NTREAD, but reads from a file.
+; NTLOAD "file",table[,cell] : load a whole file into raw BG table `table`
+; (0-7) from `cell` (0-999, default 0) on; a long file runs on into the next
+; table. NTSAVE "file",table[,cell[,count]] : the reverse, `count` bytes or
+; the rest of the 1000-cell table.
 BASIC_NTLOAD:
-        jsr     GETBYT
-        cpx     #$08
-        jcs     snd_iqerr
-        txa
-        pha
-        jsr     CHKCOM
-        jsr     FRMNUM
-        jsr     GETADR
-        lda     LINNUM
-        cmp     #<1000
-        lda     LINNUM+1
-        sbc     #>1000
-        jcs     snd_iqerr
-        pla
-        jsr     bg_seek_nt
-        jsr     vid_addr_add16
-        jsr     CHKCOM
-        jsr     FRMNUM
-        jsr     GETADR                  ; count -> LINNUM/LINNUM+1
-        lda     LINNUM
-        sta     VID_COUNT
-        lda     LINNUM+1
-        sta     VID_COUNT+1
-        jsr     mia_parse_path_arg
-        jmp     mia_sd_load_trigger
-
-; NTSAVE table,cell,count,"file" : as NTLOAD, in reverse (nametable -> file).
+        jsr     nt_where
+        jmp     asset_load
 BASIC_NTSAVE:
-        jsr     GETBYT
-        cpx     #$08
-        jcs     snd_iqerr
-        txa
-        pha
-        jsr     CHKCOM
-        jsr     FRMNUM
-        jsr     GETADR
-        lda     LINNUM
-        cmp     #<1000
-        lda     LINNUM+1
-        sbc     #>1000
-        jcs     snd_iqerr
-        pla
-        jsr     bg_seek_nt
-        jsr     vid_addr_add16
-        jsr     CHKCOM
-        jsr     FRMNUM
-        jsr     GETADR
-        lda     LINNUM
+        jsr     nt_where
+        jmp     asset_save
+
+nt_where:
+        jsr     bg_where                ; A = table, LINNUM = cell
+        jsr     bg_seek_nt              ; VID_ADDR = nametable base + table*1000
+        jmp     vid_addr_add16          ; + cell
+
+; bg_where: path, then table[,cell] for NT/ATR; VID_COUNT = 1000 - cell.
+bg_where:
+        jsr     asset_path
+        lda     #<1000
         sta     VID_COUNT
-        lda     LINNUM+1
+        lda     #>1000
         sta     VID_COUNT+1
-        jsr     mia_parse_path_arg
-        jmp     mia_sd_save_trigger
+        ldx     #8
+        jmp     idx_and_offset
 
 ; ATRREAD table,cell,count : as NTREAD, but the attribute half of the table.
 BASIC_ATRREAD:
@@ -1401,56 +1363,17 @@ BASIC_ATRREAD:
         sta     VID_STREAM2
         jmp     vid_bulk_run
 
-; ATRLOAD table,cell,count,"file" : as ATRREAD, but reads from a file.
+; ATRLOAD "file",table[,cell] / ATRSAVE "file",table[,cell[,count]] : as
+; NTLOAD/NTSAVE, but the attribute half of the table.
 BASIC_ATRLOAD:
-        jsr     GETBYT
-        cpx     #$08
-        jcs     snd_iqerr
-        txa
-        pha
-        jsr     CHKCOM
-        jsr     FRMNUM
-        jsr     GETADR
-        lda     LINNUM
-        cmp     #<1000
-        lda     LINNUM+1
-        sbc     #>1000
-        jcs     snd_iqerr
-        pla
-        jsr     bg_seek_attr            ; VID_ADDR2 = attr base + table*1000
-        lda     VID_ADDR2               ; copy to VID_ADDR - see ATRREAD above
-        sta     VID_ADDR
-        lda     VID_ADDR2+1
-        sta     VID_ADDR+1
-        lda     VID_ADDR2+2
-        sta     VID_ADDR+2
-        jsr     vid_addr_add16          ; + cell
-        jsr     CHKCOM
-        jsr     FRMNUM
-        jsr     GETADR
-        lda     LINNUM
-        sta     VID_COUNT
-        lda     LINNUM+1
-        sta     VID_COUNT+1
-        jsr     mia_parse_path_arg
-        jmp     mia_sd_load_trigger
-
-; ATRSAVE table,cell,count,"file" : as ATRLOAD, in reverse (attrs -> file).
+        jsr     atr_where
+        jmp     asset_load
 BASIC_ATRSAVE:
-        jsr     GETBYT
-        cpx     #$08
-        jcs     snd_iqerr
-        txa
-        pha
-        jsr     CHKCOM
-        jsr     FRMNUM
-        jsr     GETADR
-        lda     LINNUM
-        cmp     #<1000
-        lda     LINNUM+1
-        sbc     #>1000
-        jcs     snd_iqerr
-        pla
+        jsr     atr_where
+        jmp     asset_save
+
+atr_where:
+        jsr     bg_where                ; A = table, LINNUM = cell
         jsr     bg_seek_attr            ; VID_ADDR2 = attr base + table*1000
         lda     VID_ADDR2               ; copy to VID_ADDR - see ATRREAD above
         sta     VID_ADDR
@@ -1458,16 +1381,7 @@ BASIC_ATRSAVE:
         sta     VID_ADDR+1
         lda     VID_ADDR2+2
         sta     VID_ADDR+2
-        jsr     vid_addr_add16          ; + cell
-        jsr     CHKCOM
-        jsr     FRMNUM
-        jsr     GETADR
-        lda     LINNUM
-        sta     VID_COUNT
-        lda     LINNUM+1
-        sta     VID_COUNT+1
-        jsr     mia_parse_path_arg
-        jmp     mia_sd_save_trigger
+        jmp     vid_addr_add16          ; + cell
 
 ; CHRREAD bank,offset,count : bulk-load `count` raw tile/graphics bytes from
 ; the current DATA position into CHR bank `bank` (0-7), starting at byte
@@ -1502,61 +1416,27 @@ BASIC_CHRREAD:
         sta     VID_STREAM2
         jmp     vid_bulk_run
 
-; CHRLOAD bank,offset,count,"file" : as CHRREAD, but reads from a file.
+; CHRLOAD "file",bank[,offset] : load a whole file into CHR bank `bank`
+; (0-7) from byte `offset` (0-6143, default 0) on; a long file runs on into
+; the next bank. CHRSAVE "file",bank[,offset[,count]] : the reverse, `count`
+; bytes or the rest of the 6144-byte bank.
 BASIC_CHRLOAD:
-        jsr     GETBYT
-        cpx     #$08
-        jcs     snd_iqerr
-        txa
-        pha
-        jsr     CHKCOM
-        jsr     FRMNUM
-        jsr     GETADR
-        lda     LINNUM
-        cmp     #<6144
-        lda     LINNUM+1
-        sbc     #>6144
-        jcs     snd_iqerr
-        pla
-        jsr     chr_seek
-        jsr     vid_addr_add16
-        jsr     CHKCOM
-        jsr     FRMNUM
-        jsr     GETADR                  ; count -> LINNUM/LINNUM+1
-        lda     LINNUM
-        sta     VID_COUNT
-        lda     LINNUM+1
-        sta     VID_COUNT+1
-        jsr     mia_parse_path_arg
-        jmp     mia_sd_load_trigger
-
-; CHRSAVE bank,offset,count,"file" : as CHRLOAD, in reverse (CHR -> file).
+        jsr     chr_where
+        jmp     asset_load
 BASIC_CHRSAVE:
-        jsr     GETBYT
-        cpx     #$08
-        jcs     snd_iqerr
-        txa
-        pha
-        jsr     CHKCOM
-        jsr     FRMNUM
-        jsr     GETADR
-        lda     LINNUM
-        cmp     #<6144
-        lda     LINNUM+1
-        sbc     #>6144
-        jcs     snd_iqerr
-        pla
-        jsr     chr_seek
-        jsr     vid_addr_add16
-        jsr     CHKCOM
-        jsr     FRMNUM
-        jsr     GETADR
-        lda     LINNUM
+        jsr     chr_where
+        jmp     asset_save
+
+chr_where:
+        jsr     asset_path
+        lda     #<6144
         sta     VID_COUNT
-        lda     LINNUM+1
+        lda     #>6144
         sta     VID_COUNT+1
-        jsr     mia_parse_path_arg
-        jmp     mia_sd_save_trigger
+        ldx     #8
+        jsr     idx_and_offset          ; A = bank, LINNUM = offset
+        jsr     chr_seek
+        jmp     vid_addr_add16
 
 ; PALREAD bank,offset,count : bulk-load `count` raw palette bytes from the
 ; current DATA position, starting `offset` bytes into palette bank `bank`
@@ -1592,63 +1472,35 @@ BASIC_PALREAD:
         sta     VID_STREAM2
         jmp     vid_bulk_run
 
-; PALLOAD bank,offset,count,"file" : as PALREAD, but reads from a file.
+; PALLOAD "file",bank[,offset] : load raw RGB565 bytes from a whole file into
+; palette RAM, palette bank `bank` (0-15) from byte `offset` (0-15, default
+; 0) on. PALSAVE "file",bank[,offset[,count]] : the reverse, `count` bytes or
+; the rest of the 16-byte bank.
 BASIC_PALLOAD:
-        jsr     GETBYT
-        cpx     #$10
-        jcs     snd_iqerr
-        txa
-        asl     a
-        asl     a
-        asl     a
-        asl     a
-        sta     TEMP2
-        jsr     COMBYTE                 ; X = offset 0-15
-        cpx     #$10
-        jcs     snd_iqerr
-        txa
-        clc
-        adc     TEMP2
-        sta     VID_ADDR
-        lda     #$01
-        sta     VID_ADDR+1
-        lda     #$00
-        sta     VID_ADDR+2
-        jsr     COMBYTE                 ; X = count
-        stx     VID_COUNT
-        lda     #$00
-        sta     VID_COUNT+1
-        jsr     mia_parse_path_arg
-        jmp     mia_sd_load_trigger
-
-; PALSAVE bank,offset,count,"file" : as PALLOAD, in reverse (palette -> file).
+        jsr     pal_where
+        jmp     asset_load
 BASIC_PALSAVE:
-        jsr     GETBYT
-        cpx     #$10
-        jcs     snd_iqerr
-        txa
+        jsr     pal_where
+        jmp     asset_save
+
+pal_where:
+        jsr     asset_path
+        lda     #16
+        sta     VID_COUNT
+        stz     VID_COUNT+1
+        ldx     #16
+        jsr     idx_and_offset          ; A = bank, LINNUM = offset
         asl     a
         asl     a
         asl     a
-        asl     a
-        sta     TEMP2
-        jsr     COMBYTE
-        cpx     #$10
-        jcs     snd_iqerr
-        txa
+        asl     a                       ; bank << 4
         clc
-        adc     TEMP2
+        adc     LINNUM                  ; bank*16 + offset (max 255, fits a byte)
         sta     VID_ADDR
-        lda     #$01
-        sta     VID_ADDR+1
-        lda     #$00
-        sta     VID_ADDR+2
-        jsr     COMBYTE                 ; X = count
-        stx     VID_COUNT
-        lda     #$00
-        sta     VID_COUNT+1
-        jsr     mia_parse_path_arg
-        jmp     mia_sd_save_trigger
+        lda     #$01                    ; palette base $00100: mid byte always
+        sta     VID_ADDR+1              ; $01 (see BASIC_PALETTE above), high $00
+        stz     VID_ADDR+2
+        rts
 
 ; OAMREAD n,count : bulk-load `count` sprites' raw 5-byte OAM records
 ; (tile,xlo,ylo,attr,ext - see docs/basic-video.md for the attr/ext bit
@@ -1667,24 +1519,105 @@ BASIC_OAMREAD:
         sta     VID_STREAM2
         jmp     vid_bulk_run
 
-; OAMLOAD n,count,"file" : as OAMREAD, but reads from a file.
+; OAMLOAD "file"[,n] : load 5-byte sprite records from a whole file into OAM
+; from index `n` (0-255, default 0) on. OAMSAVE "file"[,n[,count]] : the
+; reverse, `count` sprites or the rest of the 256.
 BASIC_OAMLOAD:
-        jsr     GETBYT                  ; X = n
-        txa
-        jsr     oam_seek_n
+        jsr     oam_where
+        jmp     asset_load
+BASIC_OAMSAVE:
+        jsr     oam_where
+        jsr     CHRGOT                  ; peek: is a trailing ",count" present?
+        cmp     #','
+        jne     asset_save_end
         jsr     COMBYTE                 ; X = count (of sprites), 0-255
         jsr     oam_count_x5            ; VID_COUNT = count*5 bytes
-        jsr     mia_parse_path_arg
+        jmp     asset_save_end
+
+oam_where:
+        jsr     mia_parse_path_expr
+        jsr     CHRGOT                  ; peek: is a trailing ",n" present?
+        ldx     #0
+        cmp     #','
+        bne     @have
+        jsr     COMBYTE                 ; X = n
+@have:  txa
+        pha
+        jsr     oam_seek_n
+        pla
+        eor     #$FF                    ; 255 - n
+        tax
+        jsr     oam_count_x5            ; VID_COUNT = (255 - n)*5
+        clc
+        lda     VID_COUNT               ; + one sprite: the rest of the 256
+        adc     #5
+        sta     VID_COUNT
+        bcc     @done
+        inc     VID_COUNT+1
+@done:  rts
+
+; asset_path: the path that starts every asset load and save, then its comma.
+asset_path:
+        jsr     mia_parse_path_expr
+        jmp     CHKCOM
+
+; idx_and_offset: X = how many tables/banks exist, VID_COUNT = the size of
+; one. Parses the table/bank (GETBYT, below X) and an optional ",offset"
+; below the size (0 when left out). Returns A = table/bank, LINNUM = offset
+; and VID_COUNT = size - offset, a save's default count. VID_FIELD is free
+; scratch outside vid_bulk_run.
+idx_and_offset:
+        stx     VID_FIELD
+        jsr     GETBYT                  ; X = table/bank
+        cpx     VID_FIELD
+        jcs     snd_iqerr
+        txa
+        pha
+        stz     LINNUM
+        stz     LINNUM+1
+        jsr     CHRGOT                  ; peek: is a trailing ",offset" present?
+        cmp     #','
+        bne     @have
+        jsr     CHRGET
+        jsr     FRMNUM
+        jsr     GETADR                  ; LINNUM = offset
+        lda     LINNUM
+        cmp     VID_COUNT
+        lda     LINNUM+1
+        sbc     VID_COUNT+1
+        jcs     snd_iqerr               ; offset must be below the size
+@have:  sec
+        lda     VID_COUNT
+        sbc     LINNUM
+        sta     VID_COUNT
+        lda     VID_COUNT+1
+        sbc     LINNUM+1
+        sta     VID_COUNT+1
+        pla
+        rts
+
+; asset_load: no more arguments; load the whole file at VID_ADDR.
+asset_load:
+        jsr     need_end
+        stz     VID_COUNT               ; 0: to the end of the file
+        stz     VID_COUNT+1
         jmp     mia_sd_load_trigger
 
-; OAMSAVE n,count,"file" : as OAMLOAD, in reverse (OAM -> file).
-BASIC_OAMSAVE:
-        jsr     GETBYT                  ; X = n
-        txa
-        jsr     oam_seek_n
-        jsr     COMBYTE                 ; X = count (of sprites), 0-255
-        jsr     oam_count_x5            ; VID_COUNT = count*5 bytes
-        jsr     mia_parse_path_arg
+; asset_save: an optional ",count" (16-bit) replaces the default in
+; VID_COUNT; then save VID_COUNT bytes from VID_ADDR.
+asset_save:
+        jsr     CHRGOT                  ; peek: is a trailing ",count" present?
+        cmp     #','
+        bne     asset_save_end
+        jsr     CHRGET
+        jsr     FRMNUM
+        jsr     GETADR                  ; LINNUM = count
+        lda     LINNUM
+        sta     VID_COUNT
+        lda     LINNUM+1
+        sta     VID_COUNT+1
+asset_save_end:
+        jsr     need_end
         jmp     mia_sd_save_trigger
 
 ; SPRITE n,tile,x,y,pal,flags : full OAM entry setup in one call. n 0-255
@@ -3586,20 +3519,6 @@ mia_sd_put_fac32:
         bpl     @byte
         rts
 
-; mia_parse_path_arg: expects ",\"file\"" next in the source text - consumes
-; the comma, evaluates the string expression, and writes it as the SD/FS
-; path. Used by every asset command whose filename is its LAST argument
-; (CHRLOAD/PALLOAD/OAMLOAD/NTLOAD/ATRLOAD and their *SAVE siblings; MIALOAD/
-; MIASAVE take their filename first instead, so they call FRMEVL/FREFAC/
-; mia_sd_write_path directly). Tail-calls mia_sd_write_path.
-mia_parse_path_arg:
-        jsr     CHKCOM
-        jsr     FRMEVL
-        bit     VALTYP
-        jpl     mia_typerr
-        jsr     FREFAC
-        jmp     mia_sd_write_path
-
 ; mia_sd_load_trigger: VID_ADDR (24-bit destination) and VID_COUNT (16-bit
 ; max length, 0 = load until EOF or the end of MIA RAM) must already be set,
 ; and the path already written. Triggers FS_LOAD_TO_MIA_RAM - a whole-file
@@ -3621,8 +3540,12 @@ mia_sd_load_trigger:
 ; mia_sd_save_trigger: same preconditions as mia_sd_load_trigger, in reverse -
 ; triggers FS_SAVE_FROM_MIA_RAM (create/truncate; use OPEN+BPUT# instead if
 ; appending is ever needed). VID_COUNT is zero-extended into the 32-bit
-; SD_TRANSFER_LEN field. Clobbers A,X.
+; SD_TRANSFER_LEN field; mia_sd_save_trigger24 takes bits 16-23 in A
+; instead. Clobbers A,X.
 mia_sd_save_trigger:
+        lda     #$00
+mia_sd_save_trigger24:
+        pha
         jsr     mia_sd_set_dest
         lda     #MIA_SD_CONTROL_OPEN_MODE
         jsr     mia_sd_seek
@@ -3634,20 +3557,10 @@ mia_sd_save_trigger:
         sta     IDXA_PORT
         lda     VID_COUNT+1
         sta     IDXA_PORT
-        lda     #$00
+        pla
         sta     IDXA_PORT
-        sta     IDXA_PORT
+        stz     IDXA_PORT
         lda     #MIA_CMD_FS_SAVE_FROM_MIA_RAM
-        jsr     mia_sd_cmd
-        jne     mia_fileerr
-        rts
-
-; mia_sd_part_trigger: same preconditions as mia_sd_load_trigger, with
-; SD_TRANSFER_LEN and the SD_PART_* fields already written. Triggers
-; FS_LOAD_PART: a run of the file from an offset, or a rectangle of rows.
-mia_sd_part_trigger:
-        jsr     mia_sd_set_dest
-        lda     #MIA_CMD_FS_LOAD_PART
         jsr     mia_sd_cmd
         jne     mia_fileerr
         rts
@@ -4140,159 +4053,60 @@ BASIC_LOAD:
         jmp     RESTART
 
 ; ----------------------------------------------------------------------------
-; MIALOAD "path", addr[, len[, offset[, rows, filestride, ramstride]]] : load
-; a file straight into MIA RAM at a raw address (0-16777215, well past MIA's
-; 256KB) - zero CPU byte-touching. This is the generic counterpart to
-; CHRLOAD/PALLOAD/etc.: those wrap the same underlying job with a safe,
-; bank/offset-checked address; MIALOAD exposes the raw address directly, for
-; anything without its own convenience wrapper (audio registers, or any other
-; MIA RAM region).
-;   len omitted or 0: load until EOF or the end of MIA RAM.
-;   offset: start that far into the file (FS_LOAD_PART) instead of at 0.
-;   rows, filestride, ramstride: load a rectangle - rows of len bytes, each
-;   filestride further into the file and ramstride further on in MIA RAM.
-; Up to 65535 bytes with no offset use FS_LOAD_TO_MIA_RAM, exactly as before;
-; everything else is FS_LOAD_PART. Each field goes into the SD/FS control block
-; as soon as it's parsed, since later argument expressions may clobber FAC,
-; LINNUM and TEMP scratch (VID_ADDR/VID_ADDR2 are statement-only).
+; MIALOAD "path", addr : load a whole file straight into MIA RAM at a raw
+; address (0-16777215, well past MIA's 256KB) - zero CPU byte-touching. This
+; is the generic counterpart to CHRLOAD/PALLOAD/etc.: those wrap the same
+; underlying job with a safe, bank/offset-checked address; MIALOAD exposes
+; the raw address directly, for anything without its own convenience wrapper
+; (audio registers, or any other MIA RAM region). It stops at the end of the
+; file or of MIA RAM. Loading part of a file is left to assembly
+; (FS_LOAD_PART), and moving a rectangle to MCOPY.
 ; ----------------------------------------------------------------------------
 BASIC_MIALOAD:
-        jsr     FRMEVL                  ; evaluate the path expression
-        bit     VALTYP
-        jpl     mia_typerr              ; must be a string
-        jsr     FREFAC                  ; A = length, INDEX = pointer
-        jsr     mia_sd_write_path
+        jsr     mia_parse_path_expr
         jsr     CHKCOM
         jsr     FRMNUM
         jsr     mia_getadr24            ; VID_ADDR = 24-bit address
-        stz     VID_COUNT
+        jsr     need_end
+        stz     VID_COUNT               ; 0: the whole file
         stz     VID_COUNT+1
-        jsr     CHRGOT                  ; peek: is a trailing ",len" present?
-        cmp     #','
-        jne     mia_sd_load_trigger     ; no: the whole file
-        jsr     CHRGET
-        jsr     FRMNUM
-        jsr     mia_getint24            ; FAC = len
-        lda     #MIA_SD_CONTROL_TRANSFER_LEN0
-        jsr     mia_sd_seek
-        jsr     mia_sd_put_fac32        ; FS_LOAD_PART's bytes per row
-        ldx     #2
-@len:   lda     FAC_LAST-2,x            ; VID_ADDR2 = len, high byte first
-        sta     VID_ADDR2,x
-        dex
-        bpl     @len
-        lda     FAC_LAST
-        sta     VID_COUNT               ; FS_LOAD_TO_MIA_RAM's 16-bit maxlen
-        lda     FAC_LAST-1
-        sta     VID_COUNT+1
-        jsr     CHRGOT                  ; peek: is a trailing ",offset" present?
-        cmp     #','
-        beq     @offset
-        lda     VID_ADDR2               ; no offset: up to 65535 bytes is the
-        jeq     mia_sd_load_trigger     ; whole-file job, as it always was
-        lda     #MIA_SD_CONTROL_PART_OFFSET0        ; longer: FS_LOAD_PART from the start
-        jsr     mia_sd_seek
-        ldx     #4
-@zero:  stz     IDXA_PORT
-        dex
-        bne     @zero
-        bra     @run
-@offset:
-        jsr     CHRGET
-        jsr     FRMNUM
-        jsr     fs_integer32
-        lda     #MIA_SD_CONTROL_PART_OFFSET0
-        jsr     mia_sd_seek
-        jsr     mia_sd_put_fac32
-        lda     VID_ADDR2
-        ora     VID_ADDR2+1
-        ora     VID_ADDR2+2
-        bne     @rows
-        lda     #MIA_SD_CONTROL_TRANSFER_LEN0       ; len 0: up to EOF or the end of MIA RAM,
-        jsr     mia_sd_seek             ; $40000 - (addr mod $40000) bytes
-        sec
-        lda     #$00
-        sbc     VID_ADDR
-        sta     IDXA_PORT
-        lda     #$00
-        sbc     VID_ADDR+1
-        sta     IDXA_PORT
-        lda     VID_ADDR+2              ; lda/and/sta keep the borrow in C
-        and     #$03
-        sta     VID_ADDR2               ; (len was 0, so its copy is free)
-        lda     #$04
-        sbc     VID_ADDR2
-        sta     IDXA_PORT
-        stz     IDXA_PORT
-@rows:  jsr     CHRGOT                  ; peek: is a trailing ",rows" present?
-        cmp     #','
-        beq     @rect
-@run:   lda     #MIA_SD_CONTROL_PART_ROWS_L         ; rows 0: one contiguous run
-        jsr     mia_sd_seek
-        stz     IDXA_PORT
-        stz     IDXA_PORT
-        jmp     mia_sd_part_trigger
-@rect:  jsr     CHRGET
-        jsr     FRMNUM
-        jsr     GETADR                  ; LINNUM = rows (0-65535)
-        lda     #MIA_SD_CONTROL_PART_ROWS_L
-        jsr     mia_sd_seek
-        lda     LINNUM
-        sta     IDXA_PORT
-        lda     LINNUM+1
-        sta     IDXA_PORT
-        jsr     CHKCOM
-        jsr     FRMNUM
-        jsr     fs_integer32            ; bytes between rows in the file
-        lda     #MIA_SD_CONTROL_PART_FILE_STRIDE0
-        jsr     mia_sd_seek
-        jsr     mia_sd_put_fac32
-        jsr     CHKCOM
-        jsr     FRMNUM
-        jsr     mia_getint24            ; bytes between rows in MIA RAM
-        lda     #MIA_SD_CONTROL_PART_RAM_STRIDE_L
-        jsr     mia_sd_seek
-        jsr     mia_sd_put_fac32        ; 24-bit field; the fourth byte lands in
-        jmp     mia_sd_part_trigger     ; reserved $3D as the zero it must be
+        jmp     mia_sd_load_trigger
 
 ; ----------------------------------------------------------------------------
-; MIASAVE "path", addr, len : save `len` bytes of MIA RAM starting at `addr`
-; to a file. len is mandatory here (unlike MIALOAD's optional maxlen): MIA
-; RAM has no "file size" of its own until told how much to write, the same
-; asymmetry GW-BASIC's own BLOAD/BSAVE have.
+; MIASAVE "path", addr, len : save `len` bytes (24-bit, so all of MIA RAM
+; fits) of MIA RAM starting at `addr` to a file. len is mandatory here
+; (unlike MIALOAD): MIA RAM has no "file size" of its own until told how
+; much to write, the same asymmetry GW-BASIC's own BLOAD/BSAVE have.
 ; ----------------------------------------------------------------------------
 BASIC_MIASAVE:
-        jsr     FRMEVL
-        bit     VALTYP
-        jpl     mia_typerr
-        jsr     FREFAC
-        jsr     mia_sd_write_path
+        jsr     mia_parse_path_expr
         jsr     CHKCOM
         jsr     FRMNUM
         jsr     mia_getadr24            ; VID_ADDR = 24-bit address
         jsr     CHKCOM
         jsr     FRMNUM
-        jsr     GETADR                  ; LINNUM = len (16-bit)
-        lda     LINNUM
+        jsr     mia_getint24            ; FAC_LAST-2..FAC_LAST = len
+        lda     FAC_LAST
         sta     VID_COUNT
-        lda     LINNUM+1
+        lda     FAC_LAST-1
         sta     VID_COUNT+1
-        jmp     mia_sd_save_trigger
+        lda     FAC_LAST-2
+        sta     VID_ADDR2               ; len bits 16-23 (VID_ADDR2 is free here)
+        jsr     need_end
+        lda     VID_ADDR2
+        jmp     mia_sd_save_trigger24
 
 ; ----------------------------------------------------------------------------
-; BLOAD "path"[, run][, addr] : stream a file straight into CPU RAM, the way
-; a C64 loads a machine-code program - see docs/basic-file.md. `run` before
-; `addr` (not the more obvious load-then-run order) so the common case,
-; "load per the file's own header, then run", never needs to skip a blank
-; positional argument: `BLOAD"G",X` alone says run at X; only relocating a
-; program to somewhere other than its header's own address needs the third
-; argument too. `run` omitted or 0 means "don't run" ($0000 is never a valid
-; code entry point); `addr` omitted or 0 means "use the file's own 2-byte
-; header address" (never a valid destination either - it's zero page).
+; BLOAD "path"[, addr] : stream a file straight into CPU RAM at its header
+; address, or at `addr` (0 means the header's), then return to BASIC.
+; BRUN "path"[, run] : the same load at the header address, then jump to
+; `run`, or to the first byte loaded when `run` is left out (0 too); it never
+; returns. See docs/basic-file.md. Both load bytes from $8000 up into the
+; BANK statement's bank (DATA_BANK).
 ;
 ; Only this thin argument-parsing glue is BASIC-resident; everything from
-; here on (the actual file open/read/write and, for a `run` load, the final
-; jump) happens in kernel-resident code (KERN_LOAD, src/kernel/load.s) -
+; here on (the actual file open/read/write and, for BRUN, the final jump)
+; happens in kernel-resident code (KERN_LOAD, src/kernel/load.s) -
 ; required because a load whose destination reaches into BASIC's own
 ; resident region can end up overwriting the very code that would otherwise
 ; need to keep running to finish it. There is deliberately no BASIC-side
@@ -4302,11 +4116,32 @@ BASIC_BLOAD:
         jsr     mia_parse_path_expr    ; path -> MIA's own FS path buffer,
                                         ; not CPU RAM - safe regardless of
                                         ; what KERN_LOAD goes on to overwrite
-        stz     KTMP
-        stz     KTMP+1
         stz     KPTR
         stz     KPTR+1
+        jsr     CHRGOT                  ; peek: is a trailing ",addr" present?
+        cmp     #','
+        bne     @go
+        jsr     CHRGET
+        jsr     FRMNUM
+        jsr     GETADR                  ; LINNUM = destination override
+        cmp     #$C0
+        jcs     snd_iqerr               ; $C000 and up is not RAM
+        lda     LINNUM
+        sta     KPTR
+        lda     LINNUM+1
+        sta     KPTR+1
+@go:
+        jsr     need_end
+        lda     DATA_BANK
+        clc                             ; return when done
+        jmp     KERN_LOAD
 
+BASIC_BRUN:
+        jsr     mia_parse_path_expr
+        stz     KPTR                    ; always the header address
+        stz     KPTR+1
+        stz     KTMP                    ; 0: the first byte loaded
+        stz     KTMP+1
         jsr     CHRGOT                  ; peek: is a trailing ",run" present?
         cmp     #','
         bne     @go
@@ -4317,34 +4152,80 @@ BASIC_BLOAD:
         sta     KTMP
         lda     LINNUM+1
         sta     KTMP+1
-
-        jsr     CHRGOT                  ; peek: is a trailing ",addr" present?
-        cmp     #','
-        bne     @go
-        jsr     CHRGET
-        jsr     FRMNUM
-        jsr     GETADR                  ; LINNUM = destination override
-        lda     LINNUM
-        sta     KPTR
-        lda     LINNUM+1
-        sta     KPTR+1
 @go:
+        jsr     need_end
+        lda     DATA_BANK
+        sec                             ; jump when done
         jmp     KERN_LOAD
 
 ; ----------------------------------------------------------------------------
-; BSAVE "path", addr, len[, bank] : write `len` bytes of CPU RAM starting at
-; `addr` to a file, in the same format BLOAD reads - see docs/basic-file.md.
+; BANK n : pick the bank (0-31) that BLOAD, BRUN, BSAVE, PEEK, POKE and SYS
+; use at $8000-$BFFF. Nothing is mapped here: each of those maps it only
+; while it works in that range and maps bank 0 back, because bank 0 holds the
+; top of BASIC's memory (its strings). Warm start sets it back to 0.
+; ----------------------------------------------------------------------------
+BASIC_BANK:
+        jsr     GETBYT                  ; X = bank
+        cpx     #32
+        jcs     snd_iqerr               ; only 0-31 exist
+        stx     DATA_BANK
+        rts
+
+; need_end: SYNTAX ERROR unless the statement ends here. Commands that write
+; files or memory call it after their last argument, so an extra argument
+; (an old form, say) fails before anything is written.
+need_end:
+        jsr     CHRGOT
+        jne     SYNERR
+        rts
+
+; bank_map: if LINNUM is in $8000-$BFFF, maps the BANK bank and returns C=1;
+; otherwise returns C=0 with nothing changed. The caller maps bank 0 back
+; (stz VIA_ORA) after its access when C=1. Clobbers A.
+bank_map:
+        lda     LINNUM+1
+        cmp     #$80
+        bcc     @out                    ; below the window, C=0
+        cmp     #$C0
+        bcs     @no
+        lda     DATA_BANK
+        sta     VIA_ORA
+        sec
+        rts
+@no:    clc
+@out:   rts
+
+; bank_peek: A = the byte at LINNUM (Y=0), from the BANK bank in the window.
+bank_peek:
+        jsr     bank_map
+        lda     (LINNUM),y
+        bcc     @done
+        stz     VIA_ORA                 ; BASIC's bank 0 again
+@done:  rts
+
+; bank_poke: write A to LINNUM (Y=0), into the BANK bank in the window.
+bank_poke:
+        pha
+        jsr     bank_map
+        pla
+        sta     (LINNUM),y
+        bcc     @done
+        stz     VIA_ORA                 ; BASIC's bank 0 again
+@done:  rts
+
+; ----------------------------------------------------------------------------
+; BSAVE "path", addr, len : write `len` bytes of CPU RAM starting at `addr`
+; to a file, in the same format BLOAD reads - see docs/basic-file.md.
 ; Unlike BLOAD this is entirely BASIC-resident: reading memory to write a
 ; file never touches currently-executing code, so there's no self-overwrite
 ; hazard and no need for kernel residency.
 ;
-; For addr >= $8000 the file records a bank byte: `bank` (0-31) if given,
-; else the bank mapped now (2026-10-13: "pin it"), so a plain BLOAD puts the
-; bytes back in the bank they came from. `bank` is selected via VIA_ORA for
-; the read, and the bank mapped at entry is selected again on return or
-; error. A save that reaches $BFFF auto-advances into the next bank rather
-; than requiring the caller to split the call themselves, mirroring
-; KERN_LOAD's own auto-advance on the write side.
+; The header is the classic 2 bytes, addr only. Bytes from $8000 up come from
+; the BANK statement's bank (DATA_BANK), mapped for the whole save; bank 0,
+; BASIC's, is mapped again on return or error. A save that reaches $BFFF
+; auto-advances into the next bank rather than requiring the caller to split
+; the call themselves, mirroring KERN_LOAD's own auto-advance on the write
+; side.
 ; ----------------------------------------------------------------------------
 BASIC_BSAVE:
         jsr     FRMEVL                  ; evaluate the filename expression
@@ -4355,6 +4236,8 @@ BASIC_BSAVE:
         jsr     CHKCOM
         jsr     FRMNUM
         jsr     GETADR                  ; LINNUM = addr (16-bit)
+        cmp     #$C0
+        jcs     snd_iqerr               ; $C000 and up is not RAM
         lda     LINNUM
         sta     BSAVE_ADDR
         lda     LINNUM+1
@@ -4366,32 +4249,12 @@ BASIC_BSAVE:
         sta     VID_COUNT
         lda     LINNUM+1
         sta     VID_COUNT+1
+        jsr     need_end
 
-        lda     BSAVE_ADDR+1
-        cmp     #$80
-        bcc     @nobank                 ; addr < $8000 -> no bank argument
-
-        jsr     CHRGOT                  ; peek: is a trailing ",bank" present?
-        cmp     #','
-        bne     @nobank
-        jsr     CHRGET
-        jsr     GETBYT                  ; X = bank (0-255)
-        cpx     #32
-        jcs     snd_iqerr               ; only 0-31 exist (no bank mapped yet)
-        bra     @parsed
-@nobank:
-        ldx     #$FF                    ; none given: the mapped bank, below
-@parsed:
         ; All parsing is done - safe to set BSAVE_* and occupy INDEX now.
-        lda     VIA_ORA
-        and     #VIA_BANK_BITS
-        sta     BSAVE_SAVED_BANK        ; put back on return or error
-        cpx     #$FF
-        bne     @setbank
-        tax                             ; pin to the bank mapped now
-@setbank:
-        stx     BSAVE_BANK
-        stx     VIA_ORA
+        lda     DATA_BANK
+        sta     BSAVE_BANK
+        sta     VIA_ORA
 
         lda     BSAVE_ADDR
         sta     INDEX
@@ -4409,26 +4272,15 @@ BASIC_BSAVE:
         jsr     mia_sd_cmd
         jne     bs_fileerr
 
-        ; Header: addr_lo, addr_hi[, bank] - same shape BLOAD's file format
-        ; parses on the way in.
+        ; Header: addr_lo, addr_hi - the shape BLOAD parses on the way in.
         jsr     mia_sd_select_transfer
         lda     INDEX
         sta     IDXA_PORT
         lda     INDEX+1
         sta     IDXA_PORT
-        cmp     #$80
-        bcc     @hdr2                   ; addr < $8000 -> no bank byte
-        lda     BSAVE_BANK
-        sta     IDXA_PORT
-        lda     #3
-        bra     @hdrgo
-@hdr2:
-        lda     #2
-@hdrgo:
-        sta     TEMP1
         lda     #MIA_SD_CONTROL_REQUEST_LEN_L
         jsr     mia_sd_seek
-        lda     TEMP1
+        lda     #2
         sta     IDXA_PORT
         stz     IDXA_PORT
         lda     #MIA_CMD_FS_WRITE
@@ -4524,19 +4376,16 @@ BASIC_BSAVE:
         lda     #MIA_CMD_FS_CLOSE
         jsr     mia_sd_cmd
         jne     bs_fileerr
-        lda     BSAVE_SAVED_BANK        ; the bank mapped at entry (bank 0
-        sta     VIA_ORA                 ; for BASIC)
+        stz     VIA_ORA                 ; BASIC's bank 0 again
         rts
 
-; Both are reached only after parsing, so BSAVE_SAVED_BANK is set.
+; Both are reached only after parsing, with a save bank mapped.
 bs_bankerr:
-        lda     BSAVE_SAVED_BANK
-        sta     VIA_ORA
+        stz     VIA_ORA
         jmp     snd_iqerr
 
 bs_fileerr:
-        lda     BSAVE_SAVED_BANK
-        sta     VIA_ORA
+        stz     VIA_ORA
         jmp     mia_fileerr
 
 ; ----------------------------------------------------------------------------
@@ -4548,6 +4397,8 @@ bs_fileerr:
 ; trampoline (a permanently-resident "JSR $xxxx" instruction whose operand
 ; gets patched before each call, set up once at cold start - see init.s);
 ; SYS just reuses it directly rather than needing a trampoline of its own.
+; A target in $8000-$BFFF runs with the BANK statement's bank mapped, and
+; bank 0 is mapped back when it returns.
 ; ----------------------------------------------------------------------------
 BASIC_SYS:
         jsr     FRMNUM
@@ -4556,8 +4407,15 @@ BASIC_SYS:
         sta     JMPADRS+1
         lda     LINNUM+1
         sta     JMPADRS+2
+        jsr     bank_map                ; C=1: the BANK bank is mapped
+        lda     #0
+        rol     a
+        pha                             ; 1 = map bank 0 back afterwards
         jsr     JMPADRS
-        rts
+        pla
+        beq     @done
+        stz     VIA_ORA
+@done:  rts
 
 ; ----------------------------------------------------------------------------
 ; SEEK#n,pos : jump file n to byte offset pos (0-4294967295) - wraps FS_SEEK.

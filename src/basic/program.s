@@ -743,6 +743,8 @@ LC49E:
         bne     L24AC
   L2484:
 .ifdef CLEMENTINA
+        jsr     TOKENIZE_HEX    ; $ and the hex digits after it, as typed
+        jcs     L246C           ; matched: TOKENIZE_HEX already stored them
         jsr     TOKENIZE_MON
         bcs     L24AC
         jsr     TOKENIZE_EXTFN  ; extension functions -> TOKEN_EXTFN + subtoken
@@ -889,6 +891,58 @@ TOKEN_UPPER:
         sbc     #$1F            ; carry is clear here, so this subtracts $20
 @done:
         cmp     #$00
+        rts
+
+; ----------------------------------------------------------------------------
+; TOKENIZE_HEX - A = the character at INPUTBUFFERX,x. A '$' right after a
+; stored letter or digit ends a string variable name (A$, B1$) and goes
+; through the normal search. Any other '$' starts a hex number: it and the hex digits after it
+; are stored as typed (lowercase folded), so the CD and DEF inside $CD00 or
+; $1DEF0 never crunch into keywords. C=1: stored, X at the next input char,
+; Y at the last byte stored; C=0: not a hex number, A unchanged.
+; ----------------------------------------------------------------------------
+TOKENIZE_HEX:
+        cmp     #'$'
+        bne     @no
+        cpy     #$04
+        beq     @hex            ; nothing stored yet
+        lda     INPUTBUFFER-5,y ; the byte stored last
+        jsr     IS_NAME_CHAR
+        bcs     @name           ; A$ or B1$: a string variable
+@hex:   lda     #'$'
+@store: iny
+        sta     INPUTBUFFER-5,y
+        inx
+        lda     INPUTBUFFERX,x
+        jsr     TOKEN_UPPER
+        cmp     #'0'
+        bcc     @end
+        cmp     #'9'+1
+        bcc     @store
+        cmp     #'A'
+        bcc     @end
+        cmp     #'F'+1
+        bcc     @store
+@end:   sec
+        rts
+@name:  lda     #'$'
+@no:    clc
+        rts
+
+; IS_NAME_CHAR - C=1 if A is 'A'-'Z' or '0'-'9' (a variable name character
+; as the tokenizer stores it), else C=0. A unchanged.
+IS_NAME_CHAR:
+        cmp     #'0'
+        bcc     @no
+        cmp     #'9'+1
+        bcc     @yes
+        cmp     #'A'
+        bcc     @no
+        cmp     #'Z'+1
+        bcs     @no
+@yes:   sec
+        rts
+@no:    clc
         rts
 
 ; ----------------------------------------------------------------------------
