@@ -219,7 +219,7 @@ machine code" below).
 | Addr | Symbol | In | Out | Description |
 | --- | --- | --- | --- | --- |
 | `$0400` | `KERN_COLDSTART` | — | — | Reset entry. MIA points RESET here. Sets up the machine, console, prints the banner, then enters BASIC. |
-| `$0403` | `KERN_WARMSTART` | — | — | Re-enter BASIC at the READY prompt, **preserving** the current program and variables. Resets the stack, puts the kernel's handler back in `IRQ_VEC`, and re-enables interrupts first, so it is safe to reach mid-statement (used by WozMon's `Q` quit command; `BFD3R`-style manual re-entry still works). |
+| `$0403` | `KERN_WARMSTART` | — | — | Re-enter BASIC at the READY prompt, **preserving** the current program and variables. Resets the stack, puts the kernel's handler back in `IRQ_VEC`, sets the VIA up as reset does (§10), and re-enables interrupts first, so it is safe to reach mid-statement (used by WozMon's `Q` quit command; `BFD3R`-style manual re-entry still works). |
 | `$0406` | `KERN_CHROUT` | `A`=char | A/X/Y preserved | Write one character to the console at the cursor. Handles CR (`$0D`, newline), LF (`$0A`, ignored), BS (`$08`), FF (`$0C`, clear), the cursor moves (`$11`/`$91`/`$1D`/`$9D`) and HOME (`$13`), printable bytes. |
 | `$0409` | `KERN_CHRIN` | — | `A`=char | Blocking read of one raw text byte from the MIA FIFO (single key; used by BASIC `GET`). Shows the cursor while waiting and updates `LAST_KEY`. |
 | `$040C` | `KERN_GETKEY_NB` | — | `C`=1 & `A`=char, or `C`=0 | Non-blocking read. |
@@ -299,6 +299,9 @@ A program has four options:
   they come from MIA.
 - **Stop it.** Write `$40` to `VIA_IER` (`$C00E`) to turn off only the Timer 1
   IRQ, or `SEI` to mask every IRQ. `KJIFFY` and the cursor blink stop with it.
+
+Reset and warm start (`KERN_WARMSTART`, WozMon's `Q`) start Timer 1 again at
+6250 with its IRQ on, whatever the program changed (§10).
 - **Chain to it.** Point `IRQ_VEC` at the program's own handler (with IRQs
   masked while writing the two bytes). The handler does its work, restores A,
   X and Y to their values at entry, and ends with `JMP KERN_IRQ`, which saves
@@ -362,8 +365,8 @@ one (§8). Notable internal routines:
 - `edit_line` / `harvest_line` (`editor.s`) — the screen editor behind
   `KERN_EDITKEY`: ESC commands, glyph modes, Paint mode, and the harvest of the
   logical line under the cursor into `EDIT_BUF`/`EDIT_ATTR_BUF`.
-- `via_init` / `exram_select_basic_bank` (`interrupts.s`) — set up the VIA at
-  reset, and map Extended RAM bank 0 at reset and warm start (§10).
+- `via_init` / `exram_select_basic_bank` (`interrupts.s`) — set up the VIA,
+  Extended RAM bank 0 included, at reset and warm start (§10).
 - `irq_handler` / `nmi_handler` — `irq_handler` (also `KERN_IRQ`, §6)
   read-clears MIA `IRQ_STATUS_L`, counts VIA Timer 1 ticks in `KJIFFY`, and
   toggles the cursor only while `CHRIN` is
@@ -510,14 +513,15 @@ and, while `CHRIN` waits for a key, counts down the cursor blink (a toggle
 every 80 ticks). Both follow PHI2, not wall time. "Taking over the IRQ" (§6)
 shows how to change its rate, stop it, or chain a handler in front of it.
 
-**What reset and warm start set.** At reset `via_init` maps bank 0
-(`ORA = 0`, then `DDRA = %00011111`), turns every interrupt source off and
-clears its flag, sets `ACR` bits 7-6 for Timer 1 (bits 5-0 stay as reset left
-them, 0), loads and starts Timer 1, and enables its interrupt. Warm start
-(`KERN_WARMSTART`, and WozMon's `Q`) only maps bank 0 again (`ORA` and `DDRA`
-as at reset) and resets `DATA_BANK` to 0. It leaves Port B, `PCR`, `ACR`,
-Timer 1 and `IER` as the program left them, so a stopped or retimed Timer 1
-stays that way until the next reset.
+**What reset and warm start set.** Reset and warm start (`KERN_WARMSTART`,
+and WozMon's `Q`) both run `via_init`. It maps bank 0 (`ORA = 0`, then
+`DDRA = %00011111`) and resets `DATA_BANK` to 0, turns every interrupt source
+off and clears its flag, sets `ACR` bits 7-6 for Timer 1 (bits 5-0 are kept:
+0 after reset), loads Timer 1's latch and counter with 6250, and enables its
+interrupt. Port B, `DDRB`, `PCR` and Timer 2's count stay as they were. A
+program that returns to BASIC with `RTS` from `SYS` keeps everything it set,
+so an interrupt source it left on keeps firing into its own handler, if
+`IRQ_VEC` still points at one.
 
 #### Switching banks
 
@@ -553,10 +557,10 @@ it the rising edge):
    its own flag, by writing that bit back to `IFR`, before it chains.
 2. Enable the source by writing `IER` with bit 7 set and the source's bit set.
    Writing it with bit 7 clear turns the source off again.
-3. Turn the source off before returning to BASIC. Warm start puts the kernel's
-   handler back in `IRQ_VEC` but leaves `IER` alone, and a source that fires
-   with no one to clear it holds `IRQB` low, so BASIC hangs in an endless
-   interrupt.
+3. Turn the source off before returning to BASIC with `RTS`, or the kernel's
+   handler alone is left to take it: a source that fires with no one to clear
+   it holds `IRQB` low, so BASIC hangs in an endless interrupt. Warm start
+   turns it off for you.
 
 ```asm
 VIA_IFR  = $C00D
