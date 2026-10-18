@@ -154,8 +154,9 @@ coldstart:
 ; warmstart - re-enter BASIC preserving the current program (READY prompt).
 ; Reachable from the jump table and used as WozMon's "quit" target: the user may
 ; arrive here mid-statement (e.g. after `403R` from the monitor), so reset the
-; stack, reinstall the kernel's IRQ handler, restore BASIC's Extended RAM bank,
-; and re-enable interrupts before handing control back to BASIC.
+; stack, reinstall the kernel's IRQ handler, set the VIA up as reset does
+; (BASIC's Extended RAM bank, only Timer 1's interrupt, Timer 1 at its default
+; rate), and re-enable interrupts before handing control back to BASIC.
 ; ----------------------------------------------------------------------------
 warmstart:
         sei
@@ -167,7 +168,10 @@ warmstart:
         sta IRQ_VEC
         lda #>irq_handler
         sta IRQ_VEC+1
-        jsr exram_select_basic_bank
+        ; The kernel's handler clears only Timer 1, so a VIA source the program
+        ; left on would hold IRQB low; a stopped Timer 1 would stop KJIFFY and
+        ; the cursor blink.
+        jsr via_init
         cli
         jmp BASIC_WARM_START
 

@@ -21,9 +21,10 @@ exram_select_basic_bank:
         rts
 
 ; ----------------------------------------------------------------------------
-; via_init - initialize the 65C22 for deterministic bank 0 and Timer 1 IRQs.
-; Timer 1 runs in free-run mode with PB7 output disabled; the IRQ handler clears
-; the T1 flag and uses it as a cursor blink tick only while CHRIN is polling.
+; via_init - initialize the 65C22 for deterministic bank 0 and Timer 1 IRQs, at
+; reset and at warm start. Timer 1 runs in free-run mode with PB7 output
+; disabled; the IRQ handler clears the T1 flag and uses it as a cursor blink
+; tick only while CHRIN is polling.
 ; ----------------------------------------------------------------------------
 via_init:
         jsr exram_select_basic_bank
