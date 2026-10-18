@@ -47,8 +47,8 @@ CPU: **65C02S** (the `STZ`, `BRA`, `PHX/PLX`, etc. extensions are available).
 | `$0100–$01FF` | CPU stack (§3) |
 | `$0200–$02FF` | Line input buffers, BASIC's and WozMon's, free bytes for programs, and the clock snapshot (§4) |
 | `$0300–$03FF` | Kernel variables and vectors (§5) |
-| `$0400–$0435` | Kernel jump table (§6), the first bytes of the loaded image |
-| `$0436–…` | Rest of the image: `DIR_NAME_BUF` (§7.5), kernel+WozMon (§7), then BASIC (§8) |
+| `$0400–$044D` | Kernel jump table, with BASIC's entry points at the end (§6), the first bytes of the loaded image |
+| `$044E–…` | Rest of the image: `DIR_NAME_BUF` (§7.5), kernel+WozMon (§7), then BASIC (§8) |
 | `…–$BFFF` | BASIC's free workspace / heap (§8), filling everything above the image |
 
 The image is anchored at `$0400` and grows upward: the jump table,
@@ -204,14 +204,16 @@ as `KVARS` in [`src/kernel/kernel.inc`](../src/kernel/kernel.inc).
 
 ---
 
-## 6. Kernel jump table (`$0400–$0435`)
+## 6. Kernel jump table (`$0400–$044D`)
 
 The **stable ABI**. Each entry is a 3-byte `JMP`. Callers (BASIC, WozMon, user
 programs) bind to these fixed addresses; the routines behind them may move
 freely.
 
 The jump table is the first segment in `clementina.cfg`, so it is always the
-bottom 54 bytes of the image, `$0400-$0435`, however large the rest grows.
+bottom 78 bytes of the image, `$0400-$044D`, however large the rest grows.
+The last eight entries, `BAS_*`, lead into BASIC (see "Calling BASIC from
+machine code" below).
 `KERN_BASE` (`kernel.inc`) is the constant `$0400`.
 
 | Addr | Symbol | In | Out | Description |
@@ -234,6 +236,14 @@ bottom 54 bytes of the image, `$0400-$0435`, however large the rest grows.
 | `$042D` | `KERN_PLOT` | `C`=1: — / `C`=0: `X`=row, `Y`=column | `C`=1: `X`=row, `Y`=column / `C`=0: `C`=0, or `C`=1 if out of range | Read or move the text cursor, with the C64's `PLOT` registers. With `C`=0 it moves the cursor to row `0..24`, column `0..39`; an out-of-range position returns `C`=1 and moves nothing. `A` is preserved. BASIC's `POS`/`TAB` column is not updated. |
 | `$0430` | `KERN_RDTIM` | — | `C`=1 if valid; `A`/`X`/`Y` clobbered | Copy MIA's clock to `CLOCK_SNAPSHOT` (`$02F8–$02FF`, §4). `C`=0 means the MIA firmware has no clock. Foreground only. |
 | `$0433` | `KERN_SETTIM` | `A`/`X`/`Y` = low/middle/high byte | `A`/`X`/`Y` clobbered | Set MIA's 60 Hz count (what BASIC reads as `TI`). MIA ignores values of 5,184,000 or more. Also leaves the value in `CLOCK_60HZ`. Foreground only. |
+| `$0436` | `BAS_CHKCOM` | `TXTPTR` at a comma | `TXTPTR` past it, `A` = next character | Skip the comma at `TXTPTR`; anything else raises `SYNTAX ERROR`. |
+| `$0439` | `BAS_FRMNUM` | `TXTPTR` at an expression | `FAC` = value, `TXTPTR` past it | Evaluate a numeric expression; a string raises `TYPE MISMATCH`. |
+| `$043C` | `BAS_FRMEVL` | `TXTPTR` at an expression | `FAC`, `VALTYP` (`$17`), `TXTPTR` past it | Evaluate any expression. `VALTYP` is `$FF` for a string, whose descriptor address is then in `FAC+3`/`FAC+4`. |
+| `$043F` | `BAS_GETADR` | `FAC` = 0-65535 | `LINNUM` (`$11`), `A` = high, `Y` = low | Convert `FAC` to a 16-bit unsigned value; outside 0-65535 raises `ILLEGAL QUANTITY`. |
+| `$0442` | `BAS_GETBYT` | `TXTPTR` at an expression | `X` = value, `A` = next character | Evaluate a numeric expression 0-255; outside it raises `ILLEGAL QUANTITY`. |
+| `$0445` | `BAS_PTRGET` | `TXTPTR` at a variable name | `VARPNT` (`$4F`), `A` = low, `Y` = high | Find the variable, or create it, and return the address of its value. |
+| `$0448` | `BAS_ERROR` | `X` = error code | (does not return) | Raise a BASIC error: print `?`, its message and ` ERROR` (and ` IN` with the line number in a program), then return to `READY`. The codes are the offsets `ERR_*` in `src/basic/error.s`. |
+| `$044B` | `BAS_LINPRT` | `A` = high, `X` = low | `A`/`X`/`Y` clobbered | Print the 16-bit value as an unsigned decimal, with `PRINT`'s leading space. |
 
 > When you add a kernel call, append a new `JMP` to the table in
 > `src/kernel/kernel.s`, add the `KERN_*` equate in `kernel.inc`, bump
@@ -243,6 +253,29 @@ bottom 54 bytes of the image, `$0400-$0435`, however large the rest grows.
 > BASIC and WozMon don't `.include kernel.inc`: they take the table's base
 > from the linker (`__KERNEL_START__`) and add the entry's offset, so they
 > need an equate only for an entry they call.
+
+### Calling BASIC from machine code
+
+Machine code that BASIC calls with `SYS` or `USR` can use BASIC's own routines
+to read its arguments, print a number or raise an error, through the `BAS_*`
+entries. They stay at the same address whatever the build, like the rest of
+the table. The routines behind them live in BASIC, so the entries work only
+while BASIC is in memory, not in a program that has loaded over it.
+
+`SYS` leaves `TXTPTR` just past the address, so a routine reads arguments
+written after it. For `SYS 49152,10,4660`, the routine calls `BAS_CHKCOM`
+then `BAS_GETBYT` for the 10 (in `X`), then `BAS_CHKCOM`, `BAS_FRMNUM` and
+`BAS_GETADR` for the 4660 (in `Y`/`A` and `LINNUM`), and returns with `RTS`;
+BASIC goes on with whatever follows on the line. An error raised on the way,
+by these routines or by `BAS_ERROR`, maps bank 0 back first, so a routine
+running in another bank can raise one safely.
+
+`USR(x)` hands its argument over in `FAC`. Zero page holds four older vectors
+that also stay put: `GOSTROUT` (`$03`, `JMP` to the routine that prints the
+string at `A`/`Y`), `GOAYINT` (`$06`, address of the routine that converts
+`FAC` to a 16-bit integer in `FAC+3`/`FAC+4`), `GOGIVEAYF` (`$08`, address of
+the routine that converts the integer in `A`/`Y` to `FAC`) and `USR` (`$0A`,
+the `JMP` that `USR()` calls).
 
 ---
 
@@ -291,11 +324,11 @@ the segments sit as below; `build/kernel.map` lists them for any build.
 
 | Segment | Range | Holds |
 | --- | --- | --- |
-| `JUMPTAB` | `$0400–$0435` | The jump table (§6) |
-| `DIRBUF` | `$0436–$045D` | `DIR_NAME_BUF` (§7.5) |
-| `KERNCODE` | `$045E–$1467` | Kernel code, one translation unit (`kernel.s` includes the other files) |
-| `RODATA` | `$1468–$14B0` | The startup banner text |
-| `WOZCODE` | `$14B1–$15A6` | WozMon |
+| `JUMPTAB` | `$0400–$044D` | The jump table (§6) |
+| `DIRBUF` | `$044E–$0475` | `DIR_NAME_BUF` (§7.5) |
+| `KERNCODE` | `$0476–$147F` | Kernel code, one translation unit (`kernel.s` includes the other files) |
+| `RODATA` | `$1480–$14C8` | The startup banner text |
+| `WOZCODE` | `$14C9–$15BE` | WozMon |
 
 All of these sit in the `KERNEL` region of `clementina.cfg`, `$0400–$15FF`;
 `ld65` fails the build if they outgrow it. BASIC starts right after the last
@@ -346,7 +379,7 @@ one (§8). Notable internal routines:
 
 ## 7.5. `DIR_NAME_BUF` (right after the jump table)
 
-`DIR_NAME_BUF` (40 bytes, `$0436–$045D`) is a transient scratch buffer `DIR`
+`DIR_NAME_BUF` (40 bytes, `$044E–$0475`) is a transient scratch buffer `DIR`
 (`docs/basic-file.md`) reads one directory entry's name into before printing
 any of it. BASIC declares it in `src/basic/clementina_extra.s`, in the
 `DIRBUF` segment, which `clementina.cfg` places right after the jump table so
@@ -376,10 +409,10 @@ moves `TXTTAB` up. Run `make` to see the current split; it prints a line like
 the one for the current build:
 
 ```text
-Built build/kernel.bin (24399 bytes): kernel+wozmon $0400-0x15A6, basic 0x15A7-0x634E, heap 0x634F-$BFFF
+Built build/kernel.bin (24428 bytes): kernel+wozmon $0400-0x15BE, basic 0x15BF-0x636B, heap 0x636C-$BFFF
 ```
 
-That leaves the heap 23,729 bytes (`$634F–$BFFF`).
+That leaves the heap 23,700 bytes (`$636C–$BFFF`).
 
 > **Known issue: avoid `TXTTAB` in about `$39FE–$3AC0`.** `INPUT` misreads its
 > buffer and prompts `??` again when the program text begins in that window.
@@ -391,7 +424,7 @@ Bank 0 must stay selected while BASIC is active. The image fits below `$8000`,
 but the heap does not: its upper 16 KiB (program text, variables, arrays and
 strings, once they grow that far) is Extended RAM bank 0. Mapping another bank
 while BASIC runs would swap part of the live heap out from under it; warm start
-maps bank 0 again before returning to the interpreter. BASIC's `BANK`
+and any BASIC error map bank 0 again before returning to the interpreter. BASIC's `BANK`
 statement doesn't map a bank itself: `BLOAD`, `BRUN`, `BSAVE`, `PEEK`, `POKE`
 and `SYS` map the bank it picked only while they work at `$8000-$BFFF`, then
 map bank 0 back (§9).

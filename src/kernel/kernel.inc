@@ -131,7 +131,7 @@ CHR_INSERT          = $94      ; editor: open a gap at the cursor (insert space)
 ; resident code becomes a well-bounded, reclaimable region a loaded program
 ; can overwrite once it no longer needs BASIC. See docs/memory-map.md.
 ; ----------------------------------------------------------------------------
-KERN_JUMPTAB_SIZE  = $36       ; 18 entries x 3 bytes - keep in sync with kernel.s
+KERN_JUMPTAB_SIZE  = $4E       ; 26 entries x 3 bytes - keep in sync with kernel.s
 KERN_BASE          = $0400
 KERN_COLDSTART     = KERN_BASE + $00   ; reset entry (MIA points RESET here)
 KERN_WARMSTART     = KERN_BASE + $03   ; re-enter the system
@@ -153,6 +153,21 @@ KERN_PLOT          = KERN_BASE + $2D   ; C=1: read cursor -> X=row, Y=column;
                                        ; C=0: move it to X=row, Y=column
 KERN_RDTIM         = KERN_BASE + $30   ; latch MIA's clock into CLOCK_SNAPSHOT
 KERN_SETTIM        = KERN_BASE + $33   ; A/X/Y (low/mid/high) -> MIA's 60 Hz clock
+
+; BASIC entry points, for machine code that BASIC calls (SYS, USR) and that
+; reads its arguments or raises errors the way BASIC's own statements do. The
+; routines live in BASIC, so these entries work only while BASIC is in memory,
+; not in a program that has loaded over it. They keep msbasic's registers; see
+; docs/memory-map.md section 6.
+BAS_CHKCOM         = KERN_BASE + $36   ; skip the comma at TXTPTR, else SYNTAX ERROR
+BAS_FRMNUM         = KERN_BASE + $39   ; numeric expression at TXTPTR -> FAC
+BAS_FRMEVL         = KERN_BASE + $3C   ; any expression at TXTPTR -> FAC, VALTYP
+BAS_GETADR         = KERN_BASE + $3F   ; FAC 0-65535 -> LINNUM, A=high, Y=low
+BAS_GETBYT         = KERN_BASE + $42   ; numeric expression 0-255 at TXTPTR -> X
+BAS_PTRGET         = KERN_BASE + $45   ; variable named at TXTPTR -> its value's
+                                       ; address in VARPNT, A=low, Y=high
+BAS_ERROR          = KERN_BASE + $48   ; X = error code: print it, back to READY
+BAS_LINPRT         = KERN_BASE + $4B   ; print A=high, X=low as unsigned decimal
 
 ; ----------------------------------------------------------------------------
 ; MIA clock snapshot ($02F8-$02FF, top of the line-buffer page; see

@@ -19,6 +19,9 @@
                         ; error detected before it writes a destination byte -
                         ; safe, since BASIC's own code (this routine included)
                         ; is still guaranteed intact at that point.
+.export CHKCOM, FRMNUM, FRMEVL, GETADR, GETBYT, PTRGET, ERROR, LINPRT
+                        ; the kernel jump table's BAS_* entries, so machine
+                        ; code can call them at fixed addresses (kernel.inc)
 
 KERN_CHROUT       = KERN_BASE + $06
 KERN_CHRIN        = KERN_BASE + $09
