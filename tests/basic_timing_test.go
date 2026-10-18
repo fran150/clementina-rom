@@ -63,14 +63,14 @@ func TestBasicTimingBackgroundMusic(t *testing.T) {
 	// PLAY is retired: background music is a TRACK on MIA's sequencer. The
 	// emulator only renders audio - and so only advances the sequencer - when
 	// a test drives it, so render samples explicitly (see track_band_test.go).
-	typeLine(c, step, `10 TRACK 0,"T80 L4 C D E F":BAND 0,1`)
+	typeLine(c, step, `10 TRACK 0,"T120 L4 C D E F":BAND 0,1`)
 	typeLine(c, step, "20 DELAY 60000")
 	injectKeys(c, []byte("RUN")...)
 	injectKeys(c, keyCR)
 	editorTickN(c, step, 300_000)
 	audio := c.chips.mia.(audioAdvancer)
 	audio.DebugSetAudioActive(true)
-	// A T80 quarter note is 80 kernel ticks x 150 = 12000 sequencer ticks. MIA
+	// A T120 quarter note is 24000*60/120 = 12000 sequencer ticks. MIA
 	// renders 48 kHz frames on a 24 kHz sequencer tick, so a tick is two frames.
 	const framesPerTick = 2
 	audio.DebugAudioReadPCM(2000 * framesPerTick) // tick 2000: inside the first note

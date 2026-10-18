@@ -93,26 +93,28 @@ timing a string itself.
 
 ```basic
 10 SNDON : WAVE 0,1 : ADSR 0,0,8,12,7
-20 TRACK 0,"T80 L8 O4 C D E F G4 G4 A A A A G2 F F F F E2"
+20 TRACK 0,"T120 L8 O4 C D E F G4 G4 A A A A G2 F F F F E2"
 30 BAND 1
 ```
 
 Set the voice up first (`SNDON`, `WAVE`, `ADSR`, `PAN`, `VOL`) — `TRACK`'s
-string only ever drives pitch, gate, and (via `W n`) waveform.
+string only ever drives pitch, gate, and (via `W n` and `V n`) waveform and
+volume.
 
-`TRACK`'s string is the same mini-language as before, minus voice-switching
-(each `TRACK` call is already scoped to one voice), plus `|` for a loop
-point and `&` for ties (letters are case‑insensitive; spaces and commas are
-just separators):
+`TRACK`'s string is MML, the music language of MSX BASIC's `PLAY`, for one
+voice, plus `W` for the waveform, `|` for a loop point and `&` for ties
+(letters are case‑insensitive; spaces and commas are just separators):
 
 | | Meaning |
 | --- | --- |
-| `A`–`G` | A note in the current octave. May be followed by `#` or `+` (sharp), `-` (flat), then length digits, then `.` (dotted = ×1.5). |
-| `R`, `P` | Rest (silence) for one length. |
-| `O n` | Set octave, `0`–`7`. |
+| `A`–`G` | A note in the current octave. May be followed by `#` or `+` (sharp), `-` (flat), then a length, then dots. |
+| `R`, `P` | Rest (silence), with an optional length and dots like a note. |
+| `O n` | Set octave, `0`–`7`. `O4` holds middle C and A 440, as in MSX MML. |
 | `<` `>` | Octave down / up (clamped to 0–7). |
-| `L n` | Default note length: `1 2 4 8 16 32` = whole, half, quarter, eighth, 16th, 32nd. |
-| `T n` | Tempo: **ticks per quarter note**, `1`–`255`. A tick is a fixed 1/160 s (`T80`, the default, ≈ 120 BPM) — resolved once when `TRACK` compiles the string, so playback speed never depends on the CPU's clock speed, unlike the old foreground/background `PLAY`. |
+| `L n` | Default note length, `1`–`64`: `n` notes make a whole note, so `4` is a quarter, `8` an eighth, `64` a 64th, and `3`, `6` or `12` a triplet. A length after a note or rest applies to that one only. |
+| `.` | After a length, a dot adds half of it; each further dot adds half of what the one before added (`C4..` lasts a quarter, an eighth and a 16th). |
+| `T n` | Tempo, `1`–`255` quarter notes a minute. |
+| `V n` | Voice volume, `0`–`15`, from here on. It writes `VOL v,n×17`, so `V15` is `255`, unity. Without `V`, a track leaves the voice's `VOL v,n` alone. |
 | `W n` | Set the current voice's waveform (`0`–`4`). |
 | `&` | Tie: the next note continues the one before `&` instead of starting a new one. With the same pitch it makes one longer note (`C4&C8` lasts a quarter and an eighth); with another pitch it moves there without a new attack (legato, `C8&D8&E8`). With no note before it, or a rest or `\|` before the next note, `&` does nothing. |
 | `\|` | Mark the loop point: everything before it plays once (an intro); everything from it to the end of the string repeats forever once `BAND` starts this voice. No `\|` means the whole string plays once and stops. |
@@ -120,7 +122,22 @@ just separators):
 Every note starts with its own attack, so `A A A A` plays four separate
 notes even with no rest between them; `&` joins notes instead.
 
-Defaults at the start of every `TRACK` string: octave 4, `T80`, `L4`.
+Defaults at the start of every `TRACK` string: octave 4, `T120`, `L4`.
+
+Tempo and lengths are resolved once, when `TRACK` compiles the string, into
+MIA's 24 kHz sequencer ticks, so playback speed never depends on the CPU's
+clock speed. A length that doesn't land on a whole tick keeps the leftover for
+the next one: at one tempo, every note ends within a tick (1/24000 s) of its
+exact time, so voices stay in step. A loop replays the ticks of its first
+pass, so where a loop's length isn't a whole number of ticks, voices whose
+loops differ in length can drift apart by under a tick each pass. Lengths that
+don't halve evenly down to a 64th, like `5` or `7`, are a hair short (under
+1/1536 of a whole note).
+
+Compared with MSX BASIC, octaves are `0`–`7` instead of `1`–`8` (the same
+pitches: `O4` is `O4` in both), `T` goes below 32, `W` is Clementina's own,
+and there is no `N`, `S`, `M` or `X`: `NOTE` plays a note by number, `ADSR`
+shapes it, and each voice gets its own `TRACK`.
 
 An unknown token raises `SYNTAX ERROR`; a bad number raises `ILLEGAL
 QUANTITY`. Either way nothing is silenced — `TRACK` only ever writes into
@@ -150,8 +167,8 @@ a moment:
 
 ```basic
 10 SNDON
-20 WAVE 0,1 : ADSR 0,0,8,12,7 : TRACK 0,"T80 L8 O4 C D E F | G4 G4 A A A A G2 F F F F E2"
-30 WAVE 1,2 : ADSR 1,0,6,10,6 : TRACK 1,"T80 L4 O2 C G | C G C G C G"
+20 WAVE 0,1 : ADSR 0,0,8,12,7 : TRACK 0,"T120 L8 O4 C D E F | G4 G4 A A A A G2 F F F F E2"
+30 WAVE 1,2 : ADSR 1,0,6,10,6 : TRACK 1,"T120 L4 O2 C G | C G C G C G"
 40 BAND 1
 50 REM ... game loop runs here while both voices loop forever ...
 100 VTAKE 1
@@ -171,10 +188,10 @@ a running total, not "position within this pass." That's exactly what a
 one-time wait for a specific transition wants:
 
 ```basic
-10 SNDON : WAVE 0,1 : ADSR 0,0,6,10,6 : TRACK 0,"T80 L4 O4 C D E F | G A B > C"
+10 SNDON : WAVE 0,1 : ADSR 0,0,6,10,6 : TRACK 0,"T120 L4 O4 C D E F | G A B > C"
 20 BAND 0,1
 30 IF CUE(0) <> 5 THEN 30      : REM wait for the start of the loop body
-40 WAVE 1,1 : ADSR 1,0,6,10,6 : TRACK 1,"T80 L4 O3 C G"
+40 WAVE 1,1 : ADSR 1,0,6,10,6 : TRACK 1,"T120 L4 O3 C G"
 50 BAND 1,1
 ```
 
