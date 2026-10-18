@@ -2295,29 +2295,34 @@ note_freq_tbl:
         .word   370, 392, 415, 440, 466, 494
 
 ; ============================================================================
-; Shared MML parsing helpers (TRACK, below, and originally PLAY - PLAY itself
-; is retired, see docs/basic-sound.md and clementina-mia's
-; docs/audio-sequencer.md; TRACK reuses this note/length arithmetic unchanged,
-; only what happens with the result differs).
+; MML parsing helpers for TRACK, below (they began as the retired PLAY's).
 ;
 ; Parser state lives in STYLE_SIDE_BUF ($03D3+), which the line tokenizer only
 ; touches while a line is being typed - never during RUN. The moving string
 ; pointer is INDEX; note_freq scratch is LINNUM.
 ; ============================================================================
-PLAY_TEMPO_DEF  = 80            ; ticks per quarter note (~120 BPM at 1 MHz PHI2)
+PLAY_TEMPO_DEF  = 120           ; quarter notes per minute
 PLAY_OCT_DEF    = 4
 PLAY_LDEF_DEF   = 4             ; quarter notes
 
+; A length is counted in 1/1536 of a whole note, so every length that halves
+; down to a 64th (1 2 3 4 6 8 12 16 24 32 48 64) is exact, and so are up to
+; three dots on a 64th; lengths like 5 or 7 round down.
+TRK_WHOLE       = 1536
+; A whole note at T quarter notes per minute is 4 * 60 * 24000 / T sequencer
+; ticks (24 kHz), so one 1/1536 of it is TRK_TICKS_PER_UNIT / T ticks.
+TRK_TICKS_PER_UNIT = 4 * 60 * 24000 / TRK_WHOLE
+
 PLAY_LEN        = STYLE_SIDE_BUF + 0    ; chars left in the string
 PLAY_OCT        = STYLE_SIDE_BUF + 2    ; current octave 0-7
-PLAY_TEMPO      = STYLE_SIDE_BUF + 3    ; ticks per quarter note
-PLAY_LDEF       = STYLE_SIDE_BUF + 4    ; default length code
-PLAY_DUR        = STYLE_SIDE_BUF + 5    ; note duration in ticks (16-bit) [5..6]
+PLAY_TEMPO      = STYLE_SIDE_BUF + 3    ; quarter notes per minute, 1-255
+PLAY_LDEF       = STYLE_SIDE_BUF + 4    ; default length, 1-64
+PLAY_DUR        = STYLE_SIDE_BUF + 5    ; note length in 1/TRK_WHOLE notes (16-bit) [5..6]
 PLAY_SEMI       = STYLE_SIDE_BUF + 9    ; scratch: semitone in octave (signed -1..12)
 PLAY_TMP        = STYLE_SIDE_BUF + 10   ; general 16-bit scratch [10..11]
 
 ; TRACK's encoder state and BAND/VTAKE/VGIVE's mask scratch share the same
-; time-shared buffer, offsets 12-37 (PLAY_* above use 0-11; never concurrent -
+; time-shared buffer, offsets 12-38 (PLAY_* above use 0-11; never concurrent -
 ; see the header comment on PLAY_LEN).
 TRK_VOICE       = STYLE_SIDE_BUF + 12   ; voice being defined, 0-3
 TRK_BASE        = STYLE_SIDE_BUF + 13   ; this voice's track base, 24-bit [13..15]
@@ -2333,62 +2338,38 @@ SEQ_MASK        = STYLE_SIDE_BUF + 36   ; BAND/VTAKE/VGIVE voice-mask scratch
 TRK_TIE         = STYLE_SIDE_BUF + 37   ; & state: 0, TRK_TIE_NOTE or TRK_TIE_NEXT
 TRK_TIE_NOTE    = $01                   ; the last timed event was a note
 TRK_TIE_NEXT    = $02                   ; & seen: the next note emits TIE
+TRK_REM         = STYLE_SIDE_BUF + 38   ; trk_dur_to_samples remainder, carried to the next event
 
-; play_len_to_dur: X = valid length code -> PLAY_DUR (16-bit) ticks, from
-; PLAY_TEMPO (ticks per quarter). k=1 -> T<<2, k=2 -> T<<1, k=4 -> T,
-; k=8 -> T>>1, k=16 -> T>>2, k=32 -> T>>3. Minimum 1 tick.
+; play_len_to_dur: X = length 1-64 -> PLAY_DUR = TRK_WHOLE / X.
 play_len_to_dur:
-        lda     PLAY_TEMPO
+        stx     PLAY_TMP
+        lda     #<TRK_WHOLE
+        sta     TRK_SAMPLES
+        lda     #>TRK_WHOLE
+        sta     TRK_SAMPLES+1
+        stz     TRK_SAMPLES+2
+        jsr     trk_div
+        lda     TRK_SAMPLES
         sta     PLAY_DUR
-        lda     #$00
+        lda     TRK_SAMPLES+1
         sta     PLAY_DUR+1
-        cpx     #4
-        beq     @min
-        bcs     @right
-        cpx     #1
-        bne     @one
-        jsr     @shl                   ; k=1: two left shifts
-@one:
-        jsr     @shl                   ; k=1 or k=2: one more
-        jmp     @min
-@right:
-        jsr     @shr
-        cpx     #8
-        beq     @min
-        jsr     @shr
-        cpx     #16
-        beq     @min
-        jsr     @shr
-@min:
-        lda     PLAY_DUR
-        ora     PLAY_DUR+1
-        bne     @ret
-        lda     #$01
-        sta     PLAY_DUR
-@ret:
-        rts
-@shl:
-        asl     PLAY_DUR
-        rol     PLAY_DUR+1
-        rts
-@shr:
-        lsr     PLAY_DUR+1
-        ror     PLAY_DUR
         rts
 
-; play_maybe_dot: if the next char is '.', consume it and PLAY_DUR += PLAY_DUR/2.
+; play_maybe_dot: each '.' that follows adds half of what the one before it
+; added, so PLAY_DUR becomes 1.5, 1.75, 1.875... times the length.
 play_maybe_dot:
+        lda     PLAY_DUR
+        sta     PLAY_TMP
+        lda     PLAY_DUR+1
+        sta     PLAY_TMP+1
+@dot:
         jsr     play_peek
         bcc     @no
         cmp     #'.'
         bne     @no
         jsr     play_adv
-        lda     PLAY_DUR+1
-        lsr     a
-        sta     PLAY_TMP+1
-        lda     PLAY_DUR
-        ror     a
-        sta     PLAY_TMP
+        lsr     PLAY_TMP+1
+        ror     PLAY_TMP
         lda     PLAY_DUR
         clc
         adc     PLAY_TMP
@@ -2396,6 +2377,7 @@ play_maybe_dot:
         lda     PLAY_DUR+1
         adc     PLAY_TMP+1
         sta     PLAY_DUR+1
+        bra     @dot
 @no:
         rts
 
@@ -2495,13 +2477,14 @@ play_oct12:                             ; octave 0..7 -> base semitone
 ; as that voice's track_base via AUDIO_SEQ_SET_BASE<voice>, so a track can
 ; live anywhere in MIA RAM - there is no per-track size limit to outgrow.
 ;
-; The mini-language is PLAY's, minus V n (each TRACK call is already scoped to
-; one voice, so there is no voice to switch to), plus | for the loop point and
-; & for ties:
-;   A-G   note, optional #/+ (sharp) or - (flat), optional length, optional .
-;   R P   rest for one length.                   O n   set octave 0-7.
-;   < >   octave down/up.                         L n   default length.
-;   T n   tempo, ticks per quarter note.          W n   waveform 0-4.
+; The language is MSX BASIC's PLAY MML for one voice, plus W for the waveform,
+; | for the loop point and & for ties:
+;   A-G   note, optional #/+ (sharp) or - (flat), optional length 1-64,
+;         any number of dots (each adds half the one before).
+;   R P   rest, same length and dots.            O n   set octave 0-7.
+;   < >   octave down/up.                         L n   default length 1-64.
+;   T n   tempo, quarter notes a minute 1-255.    W n   waveform 0-4.
+;   V n   voice volume 0-15, written as n*17 (15 is VOL v,255, unity).
 ;   &     tie: the next note continues the one before & instead of starting
 ;         a new one (same pitch: a longer note; another pitch: legato).
 ;         Compiles that next note to TIE instead of NOTE. With no note
@@ -2512,20 +2495,14 @@ play_oct12:                             ; octave 0..7 -> base semitone
 ;         Compiles to a single JUMP back to the marked point, emitted after
 ;         the last event instead of an END.
 ;
-; This reuses PLAY's pure computation (play_num/play_len_ok/play_len_to_dur/
-; play_maybe_dot/note_freq/the note/octave tables) unchanged, but never calls
-; play_iq/play_syn/play_num_req/play_all_off - those silence live voices on
-; error, which would be a surprising side effect here (TRACK never touches a
-; live register; it only writes bytes into MIA RAM). trk_iq/trk_syn/
-; trk_num_req/trk_len_ok are plain error jumps instead.
+; An error is a plain jump (trk_iq/trk_syn/trk_num_req/trk_len_ok): TRACK
+; never touches a live register, it only writes bytes into MIA RAM, so there
+; is no voice to silence.
 ;
-; Tempo/length are resolved here, at encode time, into a count of MIA
-; sequencer ticks (see trk_dur_to_samples) - MIA's sequencer only ever sees
-; "hold for N", never kernel ticks, tempo, or note names. This also means a TRACK's tempo is fixed
-; at whatever PHI2 speed happened to be live when it was encoded is NOT a
-; factor at all: unlike the retired background PLAY (timed off the live
-; PHI2-relative KJIFFY tick), the encoding fixes 1 tick = 1/160 s outright, so
-; playback speed never depends on the CPU's clock speed, then or later.
+; Tempo and length are resolved here, at encode time, into MIA sequencer
+; ticks (see trk_dur_to_samples): the sequencer only ever sees "hold for N",
+; never tempo or note names, so playback speed never depends on the CPU's
+; clock speed.
 ; ============================================================================
 BASIC_TRACK:
         jsr     GETBYT                  ; X = voice
@@ -2590,6 +2567,7 @@ BASIC_TRACK:
         stz     TRK_COUNT+1
         stz     TRK_HAS_LOOP            ; default: no loop
         stz     TRK_TIE                 ; no note yet for & to tie to
+        stz     TRK_REM
         lda     #PLAY_OCT_DEF
         sta     PLAY_OCT
         lda     #PLAY_TEMPO_DEF
@@ -2629,6 +2607,8 @@ BASIC_TRACK:
         jeq     @tempo
         cmp     #'W'
         jeq     @wave
+        cmp     #'V'
+        jeq     @vol
         cmp     #'&'
         jeq     @tie
         jmp     SYNERR
@@ -2676,6 +2656,7 @@ BASIC_TRACK:
         cpx     #$00
         jeq     trk_iq                  ; T is 1-255
         stx     PLAY_TEMPO
+        stz     TRK_REM                 ; a remainder of the old tempo means nothing in the new one
         jmp     @loop
 @wave:
         jsr     trk_num_req
@@ -2684,6 +2665,23 @@ BASIC_TRACK:
         txa
         pha
         lda     #MIA_SEQ_OP_SET_WAVE
+        jsr     trk_emit
+        pla
+        jsr     trk_emit
+        jmp     @loop
+@vol:
+        jsr     trk_num_req
+        cpx     #16
+        jcs     snd_iqerr
+        stx     PLAY_TMP
+        txa
+        asl     a
+        asl     a
+        asl     a
+        asl     a                       ; V*16, C clear (V < 16)
+        adc     PLAY_TMP                ; V*17: V15 is 255, unity
+        pha
+        lda     #MIA_SEQ_OP_SET_VOL
         jsr     trk_emit
         pla
         jsr     trk_emit
@@ -2754,18 +2752,11 @@ trk_num_req:
         jcc     trk_syn
         rts
 trk_len_ok:
-        cpx     #1
-        beq     @ok
-        cpx     #2
-        beq     @ok
-        cpx     #4
-        beq     @ok
-        cpx     #8
-        beq     @ok
-        cpx     #16
-        beq     @ok
-        cpx     #32
-        beq     @ok
+        cpx     #$00
+        beq     @bad
+        cpx     #65
+        bcc     @ok                     ; lengths are 1-64
+@bad:
         jmp     trk_iq
 @ok:
         rts
@@ -2791,8 +2782,7 @@ trk_emit:
         inc     TRK_COUNT+1
 :       rts
 
-; trk_do_note: A = 'A'..'G'. Computes pitch/duration exactly like PLAY's
-; play_do_note, then emits a NOTE event instead of writing live registers, or
+; trk_do_note: A = 'A'..'G'. Emits a NOTE event with its pitch and length, or
 ; a TIE when & came before it.
 trk_do_note:
         sec
@@ -2824,7 +2814,7 @@ trk_do_note:
         jsr     trk_len_ok
         jsr     play_len_to_dur
         jsr     play_maybe_dot
-        jsr     trk_dur_to_samples      ; PLAY_DUR ticks -> TRK_SAMPLES
+        jsr     trk_dur_to_samples      ; PLAY_DUR -> TRK_SAMPLES
         ldx     PLAY_OCT
         lda     play_oct12,x
         clc
@@ -2880,32 +2870,33 @@ trk_do_rest:
         lda     TRK_SAMPLES+2
         jmp     trk_emit                ; tail
 
-; trk_dur_to_samples: PLAY_DUR (16-bit, in ticks) -> TRK_SAMPLES (24-bit, in
-; MIA sequencer ticks). A tick is fixed at exactly 1/160 s (matching PLAY's own
-; documented "a tick is ~1/160 s at 1 MHz PHI2" definition) and MIA's
-; sequencer counts a fixed 24000 ticks/s (the header's AUDIO_TICK_RATE, which
-; stays 24 kHz whatever MIA's output sample rate), so samples = ticks * 150 - by
-; design independent of whatever PHI2 speed is live right now, unlike the
-; retired background player's live-KJIFFY timing.
+; trk_dur_to_samples: PLAY_DUR (1/TRK_WHOLE notes) -> TRK_SAMPLES (24-bit,
+; MIA sequencer ticks, a fixed 24000 a second: the header's AUDIO_TICK_RATE),
+; = PLAY_DUR * TRK_TICKS_PER_UNIT / PLAY_TEMPO. The division's remainder
+; carries into the next event (TRK_REM), so at one tempo each event ends on
+; the tick at or just before its exact time and voices stay in step (a loop
+; replays its first pass, which can be under a tick off its exact length).
+; The product fits 24 bits: a whole note with any number of dots is under
+; 2 * TRK_WHOLE, and 2 * 1536 * 3750 is 11,520,000.
 ;
-; Standard LSB-first shift-and-add multiply: TRK_SAMPLES accumulates a copy of
-; the (24-bit-extended) ticks value, doubled once per bit, whenever the next
-; bit of the constant 150 ($96 = %10010110) is 1.
+; LSB-first shift-and-add multiply by the constant, then trk_div.
 trk_dur_to_samples:
         lda     PLAY_DUR
         sta     MPCAND
         lda     PLAY_DUR+1
         sta     MPCAND+1
         stz     MPCAND+2
-        stz     TRK_SAMPLES
+        lda     TRK_REM
+        sta     TRK_SAMPLES
         stz     TRK_SAMPLES+1
         stz     TRK_SAMPLES+2
-        ldx     #$00
-        ldy     #150
+        lda     #<TRK_TICKS_PER_UNIT
+        sta     PLAY_TMP
+        lda     #>TRK_TICKS_PER_UNIT
+        sta     PLAY_TMP+1
 @bit:
-        tya
-        lsr     a
-        tay
+        lsr     PLAY_TMP+1
+        ror     PLAY_TMP
         bcc     @noadd
         lda     TRK_SAMPLES
         clc
@@ -2921,8 +2912,33 @@ trk_dur_to_samples:
         asl     MPCAND
         rol     MPCAND+1
         rol     MPCAND+2
-        inx
-        cpx     #$08
+        lda     PLAY_TMP
+        ora     PLAY_TMP+1
+        bne     @bit
+        lda     PLAY_TEMPO
+        sta     PLAY_TMP
+        jsr     trk_div
+        sta     TRK_REM
+        rts
+
+; trk_div: TRK_SAMPLES (24-bit) / PLAY_TMP (8-bit, nonzero) -> quotient in
+; TRK_SAMPLES, remainder in A.
+trk_div:
+        lda     #$00
+        ldx     #24
+@bit:
+        asl     TRK_SAMPLES
+        rol     TRK_SAMPLES+1
+        rol     TRK_SAMPLES+2
+        rol     a
+        bcs     @sub                    ; 9 bits: more than any divisor
+        cmp     PLAY_TMP
+        bcc     @next
+@sub:
+        sbc     PLAY_TMP                ; C is set on both ways in
+        inc     TRK_SAMPLES             ; the quotient bit the shift left clear
+@next:
+        dex
         bne     @bit
         rts
 
