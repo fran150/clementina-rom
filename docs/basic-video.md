@@ -70,7 +70,7 @@ same as `COLOR`), write MIA's render-control page or palette RAM.
 | `SPRBANK n` | `n` 0-7 | CHR bank sprites draw from. |
 | `SPRCOUNT n` | `n` 0-255 | Highest OAM index the renderer scans each frame. |
 | `CHRMODE bank,flag` | `bank` 0-7, `flag` 0/non-zero | Mark a CHR bank as 1bpp (`flag<>0`) or 3bpp (`flag=0`). |
-| `CHRPLANE bg,spr,ovl` | each 0-3 | Which of a 1bpp bank's 3 planes (0-2) each layer decodes; only matters for banks `CHRMODE` marked 1bpp. `3` is accepted, and the renderer reads it as plane 0. |
+| `CHRPLANE bg,spr,ovl` | each 0-2 | Which of a 1bpp bank's 3 planes each layer decodes; only matters for banks `CHRMODE` marked 1bpp. |
 | `PALETTE bank,index,r,g,b` | `bank` 0-15, `index` 0-7, `r`/`b` 0-31, `g` 0-63 | Write one palette RGB565 entry directly (palette fades/cycling at runtime). `PALREAD` and `PALLOAD` write palette RAM too, many bytes at a time. |
 
 Boot state (`video_init`, `src/kernel/video.s`): overlay layer on, background

@@ -472,16 +472,17 @@ BASIC_CHRMODE:
         rts
 
 ; CHRPLANE bg,spr,ovl : which of a 1bpp CHR bank's 3 planes each layer decodes
-; (0-3 each; only matters for banks CHRMODE marked 1bpp). Packs bg | (spr<<2) |
-; (ovl<<4) and overwrites the whole CHR_1BPP_PLANES byte in one shot.
+; (0-2 each; only matters for banks CHRMODE marked 1bpp). A bank has no plane 3,
+; so 3 is an illegal quantity although its 2-bit field could hold it. Packs
+; bg | (spr<<2) | (ovl<<4) and overwrites the whole CHR_1BPP_PLANES byte in one shot.
 BASIC_CHRPLANE:
-        jsr     GETBYT                  ; X = bg plane 0-3
-        cpx     #$04
+        jsr     GETBYT                  ; X = bg plane 0-2
+        cpx     #$03
         jcs     snd_iqerr
         txa
         pha
-        jsr     COMBYTE                 ; X = sprite plane 0-3
-        cpx     #$04
+        jsr     COMBYTE                 ; X = sprite plane 0-2
+        cpx     #$03
         jcs     snd_iqerr
         txa
         asl     a
@@ -490,8 +491,8 @@ BASIC_CHRPLANE:
         pla                             ; A = bg plane
         ora     TEMP1
         pha
-        jsr     COMBYTE                 ; X = overlay plane 0-3
-        cpx     #$04
+        jsr     COMBYTE                 ; X = overlay plane 0-2
+        cpx     #$03
         jcs     snd_iqerr
         txa
         asl     a
