@@ -166,3 +166,26 @@ func TestBasicAssetArgumentErrors(t *testing.T) {
 		})
 	}
 }
+
+// TestBasicBulkReadKeepsZ9 checks that the *READ commands put back the value
+// of Z9, the variable they borrow to pull DATA. The save/restore once went
+// through (TEMP1),y, but TEMP1 and TEMP2 are not adjacent in zero page, so it
+// copied 5 bytes to and from a leftover address instead (on the board,
+// MIA's registers at $FFF2-$FFF6, which popped MIA_CTX).
+func TestBasicBulkReadKeepsZ9(t *testing.T) {
+	c, step := bootClementinaToPrompt(t)
+	for _, l := range []string{
+		"10 Z9=123",
+		"20 CHRREAD 2,8,3",
+		"30 POKE 640,Z9:POKE 641,PEEK(640)+1",
+		"40 GOTO 40",
+		"50 DATA 5,6,7",
+	} {
+		typeLine(c, step, l)
+	}
+	typeLine(c, step, "RUN")
+	editorTickN(c, step, 3_000_000)
+
+	require_eq(t, 124, peek(c, 641), "program ran")
+	require_eq(t, 123, peek(c, 640), "Z9 restored after CHRREAD")
+}
