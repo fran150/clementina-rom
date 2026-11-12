@@ -436,6 +436,12 @@ L4192:
         lda     TXTTAB
         ldy     TXTTAB+1
         jsr     REASON
+.ifdef CLEMENTINA
+; Clementina: the kernel banner is the whole start-up screen and already
+; credits Microsoft BASIC, so skip the "BYTES FREE" line and the Microsoft
+; notice that QT_BYTES_FREE runs into (both strings stay in the image).
+; PRINT FRE(0) shows the free memory.
+.else
 .ifdef CBM2
         lda     #<QT_BASIC
         ldy     #>QT_BASIC
@@ -453,6 +459,7 @@ L4192:
         lda     #<QT_BYTES_FREE
         ldy     #>QT_BYTES_FREE
         jsr     STROUT
+.endif
 .if CONFIG_SCRTCH_ORDER = 2
         jsr     SCRTCH
 .endif

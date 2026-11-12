@@ -47,23 +47,53 @@ prstr:
         rts
 
 ; ----------------------------------------------------------------------------
-; print_banner - draw the cold-start banner.
+; print_banner - draw the cold-start banner: the logo (a slanted sky blue,
+; white and sky blue flag) with the title and copyright lines beside it. The
+; banner is a $00-terminated string; bytes $01-$04 switch the TEXT_ATTR pen
+; (banner_pens) and every other byte goes to chrout. Each flag row is reverse
+; spaces (CHR_ALT: a solid cell, without using the cursor tiles at $F8-$FF)
+; ending in an upper-left triangle.
 ; ----------------------------------------------------------------------------
+PEN_WHITE    = $01              ; banner pen codes, index into banner_pens
+PEN_WHITE_R  = $02
+PEN_CYAN     = $03
+PEN_CYAN_R   = $04
+GLYPH_SLANT  = $A1              ; upper-left triangle: the flag's slanted end
+GLYPH_COPY   = $9E              ; copyright sign
+
 print_banner:
-        lda #ATTR_WHITE
+        ldy #$00
+@loop:
+        lda banner,y
+        beq @done
+        cmp #PEN_CYAN_R+1
+        bcs @put
+        tax
+        lda banner_pens-1,x
         sta TEXT_ATTR
-        lda #<banner
-        sta KPTR
-        lda #>banner
-        sta KPTR+1
-        jmp prstr
+        bra @next
+@put:
+        jsr chrout
+@next:
+        iny
+        bne @loop               ; banner under 256 bytes
+@done:
+        rts
 
 ; ----------------------------------------------------------------------------
 ; Read-only data
 ; ----------------------------------------------------------------------------
 .segment "RODATA"
+banner_pens:
+        .byte ATTR_WHITE, ATTR_WHITE | MIA_VIDEO_ATTR_CHR_ALT
+        .byte ATTR_CYAN,  ATTR_CYAN | MIA_VIDEO_ATTR_CHR_ALT
 banner:
         .byte $0D
-        .byte "**** CLEMENTINA V1.0 BASIC V2 ****", $0D
-        .byte "(C) 2026 PACHISOFT, 1977 MICROSOFT", $0D
-        .byte $0D, $00
+        .byte " ", PEN_CYAN_R, "       ", PEN_CYAN, GLYPH_SLANT
+        .byte PEN_WHITE, "  CLEMENTINA V1.0 BASIC V2", $0D
+        .byte " ", PEN_WHITE_R, "      ", PEN_WHITE, GLYPH_SLANT
+        .byte "   ", GLYPH_COPY, " 2026 PACHISOFT", $0D
+        .byte " ", PEN_CYAN_R, "     ", PEN_CYAN, GLYPH_SLANT
+        .byte PEN_WHITE, "    ", GLYPH_COPY, " 1977 MICROSOFT BASIC"
+        .byte $00               ; no CR: BASIC's cold start CRDO ends the line,
+                                ; and the pen is back to white

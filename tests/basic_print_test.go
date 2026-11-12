@@ -55,3 +55,44 @@ func TestBasicPrintTabAndZones(t *testing.T) {
 		}
 	}
 }
+
+// TestBasicBootBanner checks the cold-start screen: the slanted flag logo (sky
+// blue, white, sky blue rows of reverse spaces ending in a triangle) with the
+// title and copyright lines beside it, then a blank line and READY. No BYTES
+// FREE line and no second Microsoft notice.
+func TestBasicBootBanner(t *testing.T) {
+	c, _ := bootClementinaToPrompt(t)
+	vr := c.chips.mia.(videoReader)
+	attr := func(row, col int) int { return int(vr.DebugReadVideo(uint32(0x10468 + row*40 + col))) }
+
+	flag := func(cells int) string { return " " + strings.Repeat(" ", cells) + "\xa1" }
+	want := []string{
+		"",
+		flag(7) + "  CLEMENTINA V1.0 BASIC V2",
+		flag(6) + "   \x9e 2026 PACHISOFT",
+		flag(5) + "    \x9e 1977 MICROSOFT BASIC",
+		"",
+		"READY.",
+	}
+	for row, line := range want {
+		got := strings.TrimRight(printScreenRow(c, row), " \x00")
+		if got != line {
+			t.Fatalf("row %d = %q, want %q", row, got, line)
+		}
+	}
+	const alt = 0x80 // CHR_ALT: the reversed bank, so a space is a solid cell
+	bands := []struct{ row, cells, pen int }{{1, 7, 0x05}, {2, 6, 0x00}, {3, 5, 0x05}}
+	for _, b := range bands {
+		for col := 1; col <= b.cells; col++ {
+			if got := attr(b.row, col); got != b.pen|alt {
+				t.Fatalf("flag cell (%d,%d) attr = $%02X, want $%02X", b.row, col, got, b.pen|alt)
+			}
+		}
+		if got := attr(b.row, b.cells+1); got != b.pen {
+			t.Fatalf("slant cell (%d,%d) attr = $%02X, want $%02X", b.row, b.cells+1, got, b.pen)
+		}
+		if got := attr(b.row, 12); got != 0 {
+			t.Fatalf("text cell (%d,12) attr = $%02X, want $00", b.row, got)
+		}
+	}
+}
