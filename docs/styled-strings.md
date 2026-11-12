@@ -331,8 +331,9 @@ with stock behavior.
 `STRPRT_STYLED` calls a string a heap string when its data pointer is
 `>= FRETOP`; anything below is program text or the input buffer.
 
-- `STREND` can't be the boundary: with `CONFIG_SCRTCH_ORDER = 2`, the cold-start
-  "BYTES FREE" message prints *before* `SCRTCH` sets `STREND`
+- `STREND` can't be the boundary: with `CONFIG_SCRTCH_ORDER = 2`, upstream's
+  cold-start "BYTES FREE" message prints *before* `SCRTCH` sets `STREND`
+  (Clementina skips that message, but the order is the same)
   ([init.s](../src/basic/init.s)). `FRETOP` is set to `MEMSIZ` much earlier,
   so it is always valid.
 - **Classify before the free.** `STRPRT` calls `FREFAC`, which frees a printed

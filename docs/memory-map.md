@@ -329,9 +329,9 @@ the segments sit as below; `build/kernel.map` lists them for any build.
 | --- | --- | --- |
 | `JUMPTAB` | `$0400–$044D` | The jump table (§6) |
 | `DIRBUF` | `$044E–$0475` | `DIR_NAME_BUF` (§7.5) |
-| `KERNCODE` | `$0476–$147F` | Kernel code, one translation unit (`kernel.s` includes the other files) |
-| `RODATA` | `$1480–$14C8` | The startup banner text |
-| `WOZCODE` | `$14C9–$15BE` | WozMon |
+| `KERNCODE` | `$0476–$148A` | Kernel code, one translation unit (`kernel.s` includes the other files) |
+| `RODATA` | `$148B–$14F9` | The startup banner: its pen table and text |
+| `WOZCODE` | `$14FA–$15EF` | WozMon |
 
 All of these sit in the `KERNEL` region of `clementina.cfg`, `$0400–$15FF`;
 `ld65` fails the build if they outgrow it. BASIC starts right after the last
@@ -412,10 +412,10 @@ moves `TXTTAB` up. Run `make` to see the current split; it prints a line like
 the one for the current build:
 
 ```text
-Built build/kernel.bin (24428 bytes): kernel+wozmon $0400-0x15BE, basic 0x15BF-0x636B, heap 0x636C-$BFFF
+Built build/kernel.bin (24546 bytes): kernel+wozmon $0400-0x15EF, basic 0x15F0-0x63E1, heap 0x63E2-$BFFF
 ```
 
-That leaves the heap 23,700 bytes (`$636C–$BFFF`).
+That leaves the heap 23,582 bytes (`$63E2–$BFFF`).
 
 > **Known issue: avoid `TXTTAB` in about `$39FE–$3AC0`.** `INPUT` misreads its
 > buffer and prompts `??` again when the program text begins in that window.
