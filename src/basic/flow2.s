@@ -50,9 +50,18 @@ GOTO:
         sec
         adc     TXTPTR
         ldx     TXTPTR+1
+.ifdef STYLED_STRINGS
+        ; A/X is the byte after this line's $00. A line with string literals
+        ; has a style sidecar there, so step past it to the next line.
+        bcc     :+
+        inx
+:       jsr     GOTO_SKIP_SIDECAR
+        jmp     L280D
+.else
         bcc     L280D
         inx
         bcs     L280D
+.endif
 L2809:
         lda     TXTTAB
         ldx     TXTTAB+1
@@ -72,6 +81,37 @@ L280D:
         sta     TXTPTR+1
 L281E:
         rts
+
+.ifdef STYLED_STRINGS
+; ----------------------------------------------------------------------------
+; A/X = the address just past a stored line's $00 terminator. If a style
+; sidecar starts there ($CE,$FF,sidecar_len,...; docs/styled-strings.md 3.5),
+; return A/X past it, at the next line's header; otherwise A/X unchanged.
+; Uses LOWTR as scratch (FL1 overwrites it next). Clobbers Y.
+; ----------------------------------------------------------------------------
+GOTO_SKIP_SIDECAR:
+        sta     LOWTR
+        stx     LOWTR+1
+        ldy     #$00
+        lda     (LOWTR),y
+        cmp     #STYLE_SIDE_MAGIC0
+        bne     @done
+        iny
+        lda     (LOWTR),y
+        cmp     #STYLE_SIDE_MAGIC1
+        bne     @done
+        iny
+        lda     (LOWTR),y               ; sidecar_len counts the whole sidecar
+        clc
+        adc     LOWTR
+        sta     LOWTR
+        bcc     @done
+        inc     LOWTR+1
+@done:
+        lda     LOWTR
+        ldx     LOWTR+1
+        rts
+.endif
 
 ; ----------------------------------------------------------------------------
 ; "POP" AND "RETURN" STATEMENTS

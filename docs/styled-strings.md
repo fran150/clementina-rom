@@ -180,8 +180,10 @@ prints a newline.
 
 Code that walks from one program line to the next skips the sidecar:
 `FIX_LINKS`, sequential execution, `LIST` (which follows the next-line links
-and never prints sidecar bytes) and the `DATA`/`READ` scan
-(`style_skip_sidecar_at_index_y`). `LIST` shows quoted literals in their stored
+and never prints sidecar bytes), the `DATA`/`READ` scan
+(`style_skip_sidecar_at_index_y`) and `GOTO`/`GOSUB`, which searches forward
+from the byte after the current line when the target is in a higher 256-line
+block (`GOTO_SKIP_SIDECAR`). `LIST` shows quoted literals in their stored
 attrs, so listing a program and re-entering the lines keeps their style through
 the screen harvest, and it treats high bytes inside quotes as glyphs, not
 tokens.
