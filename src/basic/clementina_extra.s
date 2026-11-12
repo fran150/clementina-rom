@@ -766,20 +766,21 @@ vid_data_swap:
         sta     TXTPTR
         sty     TXTPTR+1
         jsr     PTRGET                  ; A,Y -> pointer to Z9's value bytes
-        sta     TEMP1
-        sty     TEMP2
+        sta     FORPNT                  ; a real adjacent pointer pair: TEMP1
+        sty     FORPNT+1                ; and TEMP2 are not, so (TEMP1),y would
+                                         ; take its high byte from HIGHDS
         ldy     #BYTES_FP-1
         lda     TEMP3
         bne     @restore
 @save:
-        lda     (TEMP1),y
+        lda     (FORPNT),y
         sta     VID_DATA_SAVE,y
         dey
         bpl     @save
         rts
 @restore:
         lda     VID_DATA_SAVE,y
-        sta     (TEMP1),y
+        sta     (FORPNT),y
         dey
         bpl     @restore
         rts
