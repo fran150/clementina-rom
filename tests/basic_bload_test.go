@@ -248,6 +248,8 @@ func TestBasicBANKOutOfRange(t *testing.T) {
 
 // TestBasicBSAVEUnbankedRoundTrip writes a small unbanked blob with BSAVE and
 // confirms the file on disk carries the matching 2-byte header and payload.
+// It uses $7000, above the BASIC image ($6000 is inside it, and POKEs there
+// would overwrite live BASIC code).
 func TestBasicBSAVEUnbankedRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	c, step := bootClementinaToPrompt(t)
@@ -255,9 +257,9 @@ func TestBasicBSAVEUnbankedRoundTrip(t *testing.T) {
 
 	for _, l := range []string{
 		"10 FOR I=0 TO 15",
-		"20 POKE 24576+I,I+1",
+		"20 POKE 28672+I,I+1",
 		"30 NEXT I",
-		`40 BSAVE "S.PRG",24576,16`,
+		`40 BSAVE "S.PRG",28672,16`,
 		"50 POKE 700,42",
 		"60 GOTO 60",
 	} {
@@ -272,7 +274,7 @@ func TestBasicBSAVEUnbankedRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []byte{0x00, 0x60, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
+	want := []byte{0x00, 0x70, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}
 	if string(data) != string(want) {
 		t.Fatalf("S.PRG = % X, want % X", data, want)
 	}

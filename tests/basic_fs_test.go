@@ -316,3 +316,80 @@ func TestBasicBgetPastEndReadsZero(t *testing.T) {
 		require_eq(t, v, peek(c, uint32(640+i)), fmt.Sprint("checkpoint ", i))
 	}
 }
+
+// TestBasicRunFileDirect checks RUN "path" typed at the prompt loads and runs
+// a program, a plain RUN line-number still works, and a missing file gives a
+// FILE I/O error and leaves the current program alone.
+func TestBasicRunFileDirect(t *testing.T) {
+	c, step := bootClementinaToPrompt(t)
+	c.SetMiaSDFolder(t.TempDir())
+	typeLine(c, step, `10 PRINT "ONE"`)
+	typeLine(c, step, `20 PRINT "TWO"`)
+	typeLine(c, step, `SAVE "P.BAS"`)
+	typeLine(c, step, "NEW")
+	typeLine(c, step, `10 PRINT "OLD"`)
+	typeLine(c, step, "CLS")
+	typeLine(c, step, `RUN "P.BAS"`)
+	editorTickN(c, step, 800_000)
+	fsRowAfter(t, c, `RUN "P.BAS"`, "ONE")
+	fsRowAfter(t, c, "ONE", "TWO")
+	fsRowAfter(t, c, "TWO", "READY.")
+
+	typeLine(c, step, "CLS")
+	typeLine(c, step, "RUN 20")
+	editorTickN(c, step, 400_000)
+	fsRowAfter(t, c, "RUN 20", "TWO")
+
+	typeLine(c, step, "CLS")
+	typeLine(c, step, `RUN "NOPE.BAS"`)
+	editorTickN(c, step, 800_000)
+	if _, ok := screenContainsRow(c.chips.mia.(videoReader), "FILE I/O"); !ok {
+		dumpScreen(t, c.chips.mia.(videoReader))
+		t.Fatal("expected RUN of a missing file to raise a FILE I/O error")
+	}
+	typeLine(c, step, "CLS")
+	typeLine(c, step, "RUN")
+	editorTickN(c, step, 400_000)
+	fsRowAfter(t, c, "RUN", "ONE")
+}
+
+// TestBasicRunFileChainKeepsMemsiz runs a BOOT.BAS that lowers MEMSIZ,
+// BLOADs a routine above it and then, from inside a GOSUB and a FOR loop,
+// runs GAME.BAS by a string variable. GAME.BAS starts by itself, sees MEMSIZ
+// still lowered, calls the routine, and starts with its variables cleared.
+func TestBasicRunFileChainKeepsMemsiz(t *testing.T) {
+	dir := t.TempDir()
+	// LDA #$2A / STA $0280 / RTS, loaded at $B000.
+	writePRG(t, dir, "R.PRG", 0xB000, []byte{0xA9, 0x2A, 0x8D, 0x80, 0x02, 0x60})
+
+	c, step := bootClementinaToPrompt(t)
+	c.SetMiaSDFolder(dir)
+	for _, l := range []string{
+		"10 POKE 641,PEEK(64):POKE 642,X:SYS 45056",
+		`20 A$="OK"+"!":POKE 643,LEN(A$)`,
+		"30 POKE 644,42",
+		"40 GOTO 40",
+		`SAVE "GAME.BAS"`,
+		"NEW",
+		"10 POKE 63,0:POKE 64,176:CLEAR", // MEMSIZ = $B000
+		`20 BLOAD "R.PRG"`,
+		`30 X=5:F$="GAME.BAS"`,
+		"40 GOSUB 50",
+		"50 FOR I=1 TO 2:RUN F$",
+		`SAVE "BOOT.BAS"`,
+		"NEW",
+		`RUN "BOOT.BAS"`,
+	} {
+		typeLine(c, step, l)
+	}
+	editorTickN(c, step, 2_000_000)
+
+	if peek(c, 644) != 42 {
+		dumpScreen(t, c.chips.mia.(videoReader))
+	}
+	require_eq(t, 42, peek(c, 644), "GAME.BAS ran to its end")
+	require_eq(t, 0xB0, peek(c, 641), "MEMSIZ stayed lowered")
+	require_eq(t, 0, peek(c, 642), "variables were cleared")
+	require_eq(t, 0x2A, peek(c, 0x0280), "the routine BLOADed above MEMSIZ survived")
+	require_eq(t, 3, peek(c, 643), "strings work in GAME.BAS")
+}

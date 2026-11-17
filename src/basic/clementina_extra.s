@@ -103,9 +103,25 @@ BASIC_WARM_START:
 MONCOUT:
         jmp KERN_CHROUT
 
-; Blocking read; returns the character in A.
+; Blocking read for GET; returns the character in A. It polls the non-blocking
+; read instead of KERN_CHRIN so a running program's "press a key" screen shows
+; no cursor (KERN_CHRIN draws the blinking cursor while it waits).
+; Ctrl-C breaks the program here, as ISCNTC does between statements: GET takes
+; the key off the FIFO itself, so ISCNTC would never see it and a GET loop
+; without an exit could only be left with a reset. It enters STOP's tail at
+; CONTROL_C_TYPED, skipping the TXTPTR save: TXTPTR points into GET's input
+; buffer here, and OLDTEXT still holds the statement start NEWSTT saved, so
+; CONT runs the GET again.
 MONRDKEY:
-        jmp KERN_CHRIN
+        jsr KERN_GETKEY_NB
+        bcc MONRDKEY
+        cmp #$03
+        beq @break
+        rts
+@break:
+        jsr seq_stop_all        ; as STOP does
+        sec                     ; BREAK IN <line>
+        jmp CONTROL_C_TYPED
 
 ; Non-blocking read; C=1 and A=char if available, else C=0.
 MONRDKEY_NB:
@@ -3962,8 +3978,37 @@ BASIC_SAVE:
 ; direct mode or from a running program (which stops there).
 ; A failed OPEN (bad filename, no such file) is caught before any of the
 ; current program is touched, so a failed LOAD leaves it intact.
+; MEMSIZ is left alone, so a memory top lowered with POKE 63/64 + CLEAR (and
+; whatever was BLOADed above it) survives the LOAD.
 ; ----------------------------------------------------------------------------
 BASIC_LOAD:
+        jsr     load_program_file
+        ; FIX_LINKS itself ends at L2351, the input loop past READY that a
+        ; typed program line returns to, so LOAD printed no READY. Run its
+        ; SETPTRS step here (load_program_file did the re-link) and end at
+        ; RESTART instead.
+        jsr     SETPTRS
+        jmp     RESTART
+
+; ----------------------------------------------------------------------------
+; RUN "path" : LOAD the file, then run it from its first line, as in GW-BASIC.
+; RUN (flow2.s) jumps here when anything but a line number follows it, so the
+; path can be any string expression. Works from direct mode and from inside a
+; running program, which is replaced. Like LOAD, it clears variables, arrays,
+; the string heap and the GOSUB/FOR stack, keeps MEMSIZ (so a lowered memory
+; top and code BLOADed above it survive), and leaves open files open.
+; Ends exactly like a plain RUN: SETPTRS points TXTPTR before the first line
+; and returns, through the stack it resets, to NEWSTT.
+; ----------------------------------------------------------------------------
+BASIC_RUN_FILE:
+        jsr     load_program_file
+        jmp     SETPTRS
+
+; load_program_file: evaluate the path expression at TXTPTR, open it and read
+; it into TXTTAB.., set VARTAB past it and re-link its lines. Returns to the
+; caller; it must not run SETPTRS itself, since STKINI there resets the stack
+; and keeps only the innermost return address.
+load_program_file:
         jsr     FRMEVL
         bit     VALTYP
         jpl     mia_typerr
@@ -4066,12 +4111,7 @@ BASIC_LOAD:
         sta     VARTAB
         lda     INDEX+1
         sta     VARTAB+1
-        ; FIX_LINKS itself ends at L2351, the input loop past READY that a
-        ; typed program line returns to, so LOAD printed no READY. Run its two
-        ; steps here and end at RESTART instead.
-        jsr     SETPTRS
-        jsr     LE33D                   ; re-link the loaded lines
-        jmp     RESTART
+        jmp     LE33D                   ; re-link the loaded lines, and return
 
 ; ----------------------------------------------------------------------------
 ; MIALOAD "path", addr : load a whole file straight into MIA RAM at a raw

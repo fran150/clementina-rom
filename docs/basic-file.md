@@ -42,6 +42,7 @@ repo, `docs/sd.md` and `docs/sd-programmer-guide.md`.
 | `MIASAVE "path", addr, len` | `addr`, `len` 0–16777215 | Save `len` bytes of MIA RAM starting at `addr` to a file. |
 | `LOAD "path"` | — | Replace the current program with a saved one and clear variables. Ends at the `READY.` prompt, also when a program runs it (that program stops there). |
 | `SAVE "path"` | — | Save the current program. |
+| `RUN "path"` | — | `LOAD` a saved program and run it from its first line. Works at the prompt and from inside a running program, which it replaces. `RUN` with no argument or a line number works as before. |
 | `BANK n` | `n` 0–31 | Pick the bank that `BLOAD`, `BRUN`, `BSAVE`, `PEEK`, `POKE` and `SYS` use at `$8000-$BFFF`. 0 at power-on and warm start. |
 | `BLOAD "path"[, addr]` | `addr` below `$C000` | Load a file straight into CPU RAM at the address in its header (or `addr`, if given), then return to BASIC. |
 | `BRUN "path"[, run]` | `run` 0–65535 | Load a file at the address in its header and jump to `run`, or to the first byte loaded when `run` is left out. It never returns. |
@@ -107,7 +108,35 @@ own statement (there is no returning to "after the `LOAD`"). A failed `LOAD`
 (bad filename, no such file) is caught before anything is touched, so the
 current program survives.
 
-`LOAD`/`SAVE` use file handle 16 internally to stream the program through the
+### Running a program from a file (RUN "path")
+
+```basic
+RUN "HELLO.BAS"
+```
+
+`RUN "path"` is `LOAD "path"` followed by `RUN`, as in GW-BASIC. Anything after
+`RUN` that isn't a line number is taken as a string expression for the path,
+so `RUN F$` works too. It clears variables, arrays, strings and the
+`GOSUB`/`FOR` stack like `LOAD`, then starts the loaded program at its first
+line instead of stopping at `READY.`. A failed `RUN "path"` raises the same
+`FILE I/O ERROR` as `LOAD` and leaves the current program in place.
+
+A running program can end with `RUN "path"` to chain to the next one. This is
+how a short loader starts a game: it lowers the memory top, loads code and
+assets, then runs the game's BASIC program, which starts by itself.
+
+```basic
+10 POKE 63,0:POKE 64,176:CLEAR
+20 BLOAD "ROUTINES.PRG"
+30 CHRLOAD "TILES.CHR", 0
+40 RUN "GAME.BAS"
+```
+
+Like `LOAD`, `RUN "path"` keeps `MEMSIZ`, so a memory top lowered with
+`POKE 63/64` and `CLEAR`, and the code `BLOAD`ed above it, are still there when
+the next program starts. Files the program opened stay open.
+
+`LOAD`/`SAVE`/`RUN "path"` use file handle 16 internally to stream the program through the
 same file I/O this whole page describes — close it first if a program has it
 open when calling either.
 

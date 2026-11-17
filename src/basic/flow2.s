@@ -6,6 +6,16 @@ RUN:
         bne     L27CF
         jmp     SETPTRS
 L27CF:
+.ifdef CLEMENTINA
+        ; RUN "path" (or any string expression): anything but a digit after
+        ; RUN names a program file to load and run - see BASIC_RUN_FILE.
+        cmp     #'0'
+        bcc     :+
+        cmp     #'9'+1
+        bcc     L27D0
+:       jmp     BASIC_RUN_FILE
+L27D0:
+.endif
         jsr     CLEARC
         jmp     L27E9
 
