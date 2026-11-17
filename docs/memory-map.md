@@ -221,14 +221,14 @@ machine code" below).
 | `$0400` | `KERN_COLDSTART` | — | — | Reset entry. MIA points RESET here. Sets up the machine, console, prints the banner, then enters BASIC. |
 | `$0403` | `KERN_WARMSTART` | — | — | Re-enter BASIC at the READY prompt, **preserving** the current program and variables. Resets the stack, puts the kernel's handler back in `IRQ_VEC`, sets the VIA up as reset does (§10), and re-enables interrupts first, so it is safe to reach mid-statement (used by WozMon's `Q` quit command; `BFD3R`-style manual re-entry still works). |
 | `$0406` | `KERN_CHROUT` | `A`=char | A/X/Y preserved | Write one character to the console at the cursor. Handles CR (`$0D`, newline), LF (`$0A`, ignored), BS (`$08`), FF (`$0C`, clear), the cursor moves (`$11`/`$91`/`$1D`/`$9D`) and HOME (`$13`), printable bytes. |
-| `$0409` | `KERN_CHRIN` | — | `A`=char | Blocking read of one raw text byte from the MIA FIFO (single key; used by BASIC `GET`). Shows the cursor while waiting and updates `LAST_KEY`. |
+| `$0409` | `KERN_CHRIN` | — | `A`=char | Blocking read of one raw text byte from the MIA FIFO (single key). Shows the cursor while waiting and updates `LAST_KEY`. |
 | `$040C` | `KERN_GETKEY_NB` | — | `C`=1 & `A`=char, or `C`=0 | Non-blocking read. |
 | `$040F` | `KERN_CLRSCR` | — | — | Clear the overlay (fill with spaces) and home the cursor. |
 | `$0412` | `KERN_PRHEX` | `A`=nibble | — | Print the low nibble of `A` as one hex digit via `CHROUT`. |
 | `$0415` | `KERN_PRBYTE` | `A`=byte | — | Print `A` as two hex digits. |
 | `$0418` | `KERN_PRSTR` | `KPTR`→str | — | Print the `$00`-terminated string at `KPTR` (max 255 bytes). |
 | `$041B` | `KERN_LOAD` | `A`=bank for `$8000-$BFFF`; `C`=0 return, 1 jump; `KPTR`=dest override or 0; `KTMP`=run addr, or 0 for the first byte loaded (jump only) | — (or does not return, with `C`=1) | Stream a PRG file (2-byte address header) straight into CPU RAM, entirely kernel-resident (see §8 and `docs/basic-file.md`) — the destination may overwrite BASIC's own resident code/heap, so it cannot call out to any BASIC-resident routine mid-copy. Any RAM below `$C000` is accepted; bytes at `$8000-$BFFF` go to bank `A`, and a load past `$BFFF` continues in the next bank. A returning load selects the bank that was mapped before; a jump maps bank `A` and enables IRQs. BASIC's `BLOAD`/`BRUN` stage the path (via MIA hardware state, not CPU RAM) and pass `DATA_BANK` in `A`. |
-| `$041E` | `KERN_EDITKEY` | — | `A`=char | Full-screen line editor. Runs the interactive editor (cursor moves, overtype, gap-closing backspace `$08` / delete `$7F`, insert `$94`) on the overlay, harvests the logical line under the cursor on RETURN, and returns it one byte at a time followed by a synthetic final CR. BASIC's `GETLN` uses this for line input and treats bytes returned while `EDIT_STATE` is nonzero as raw source data; `GET` stays on `KERN_CHRIN`. |
+| `$041E` | `KERN_EDITKEY` | — | `A`=char | Full-screen line editor. Runs the interactive editor (cursor moves, overtype, gap-closing backspace `$08` / delete `$7F`, insert `$94`) on the overlay, harvests the logical line under the cursor on RETURN, and returns it one byte at a time followed by a synthetic final CR. BASIC's `GETLN` uses this for line input and treats bytes returned while `EDIT_STATE` is nonzero as raw source data; `GET` polls `KERN_GETKEY_NB` instead, so it waits without showing the cursor, and a Ctrl-C it reads breaks the program (CONT runs the GET again). |
 | `$0421` | `KERN_CHROUT_GLYPH` | `A`=tile | A/X/Y preserved | Write `A` to the console as a raw glyph at the cursor, bypassing control-code handling (so high tiles that collide with codes like `$0D` still draw). |
 | `$0424` | `KERN_WOZMON` | — | (does not return) | Enter the WOZ monitor (`src/monitor/wozmon-clementina.s`). Examine/deposit memory and run code; quit back to BASIC with `Q` (runs `KERN_WARMSTART`). Invoke from BASIC with `MON`; the older `USR` vector method still works. |
 | `$0427` | `KERN_SET_BACKDROP` | `A`=selector | — | Write the backdrop selector to `MIA_VIDEO_INDEX_BACKDROP_COLOR` (IRQ-safe tail call). |
@@ -412,10 +412,10 @@ moves `TXTTAB` up. Run `make` to see the current split; it prints a line like
 the one for the current build:
 
 ```text
-Built build/kernel.bin (24546 bytes): kernel+wozmon $0400-0x15EF, basic 0x15F0-0x63E1, heap 0x63E2-$BFFF
+Built build/kernel.bin (24580 bytes): kernel+wozmon $0400-0x15EF, basic 0x15F0-0x6403, heap 0x6404-$BFFF
 ```
 
-That leaves the heap 23,582 bytes (`$63E2–$BFFF`).
+That leaves the heap 23,548 bytes (`$6404–$BFFF`).
 
 > **Known issue: avoid `TXTTAB` in about `$39FE–$3AC0`.** `INPUT` misreads its
 > buffer and prompts `??` again when the program text begins in that window.
